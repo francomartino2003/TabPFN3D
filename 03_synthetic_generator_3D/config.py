@@ -1,301 +1,215 @@
 """
-Configuration for 3D Synthetic Dataset Generator (Time Series Classification).
+Configuration for 3D Synthetic Dataset Generator with Temporal Dependencies.
 
-This module defines hyperparameters for generating synthetic time series 
-classification datasets. The key difference from 2D is:
-- Input: (n_samples, n_features, n_timesteps) 
-- Output: (n_samples,) classification labels
+This module defines:
+- PriorConfig3D: Distributions for sampling dataset configurations
+- DatasetConfig3D: Concrete configuration for a single 3D dataset
 
-The generation process:
-1. Create a base DAG (like 2D)
-2. Unroll it T times to create temporal structure
-3. Define temporal connections between time steps
-4. Select features and target across time
-5. Generate observations by propagating noise
+Key differences from 2D:
+- Temporal dimension with T timesteps
+- Three types of root inputs: noise, time-dependent, state (memory)
+- Sample generation modes: IID, sliding window, mixed
 """
 
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Dict, List, Tuple, Optional, Set
 import numpy as np
-
-
-def _safe_randint(rng: np.random.Generator, low: int, high: int) -> int:
-    """Sample integer from range, handling low >= high case."""
-    if low >= high:
-        return low
-    return rng.integers(low, high + 1)
-
-
-def _log_uniform(rng: np.random.Generator, low: float, high: float) -> float:
-    """Sample from log-uniform distribution."""
-    if low == high:
-        return low
-    return np.exp(rng.uniform(np.log(low), np.log(high)))
 
 
 @dataclass
 class PriorConfig3D:
     """
-    Prior configuration for 3D time series dataset generation.
+    Prior distributions for sampling 3D temporal dataset configurations.
     
-    These hyperparameters control the distribution from which datasets are sampled.
-    Designed to cover realistic time series classification scenarios.
+    Limits:
+    - max 10,000 samples (train + test)
+    - max 15 features
+    - max 1000 timesteps
+    - max 10 classes
     """
     
-    # === Size parameters ===
-    # Number of observations (samples)
-    n_samples_range: Tuple[int, int] = (50, 10000)
-    n_samples_log_uniform: bool = True
+    # === Size constraints ===
+    max_samples: int = 10000
+    max_features: int = 15
+    max_t_subseq: int = 1000      # Max t in n×m×t (subsequence length)
+    max_T_total: int = 5000       # Max T (total sequence before extraction)
+    max_classes: int = 10
     
-    # Number of features (channels/variables)
-    # In time series, often just 1 feature (univariate), sometimes up to 15
-    n_features_range: Tuple[int, int] = (1, 15)
-    # Probability of univariate (1 feature) - very common in time series
-    prob_univariate: float = 0.4
-    # If not univariate, use this distribution
-    n_features_log_uniform: bool = False  # Linear is fine for small range
+    # === Sample size ===
+    n_samples_range: Tuple[int, int] = (100, 5000)
     
-    # Number of timesteps (increased min for more realistic series)
-    n_timesteps_range: Tuple[int, int] = (100, 1000)
-    n_timesteps_log_uniform: bool = True
+    # === Feature count ===
+    # Probability of univariate series (1 feature only)
+    prob_univariate: float = 0.3
     
-    # === Base graph parameters (inherited from 2D concept) ===
-    # Number of nodes in the base DAG
-    # AUMENTADO: grafos más grandes = menos correlación espacial entre features
-    n_nodes_range: Tuple[int, int] = (20, 100)
+    # Beta distribution for feature count when multivariate, scaled to [2, max_features]
+    n_features_beta_a: float = 1.5
+    n_features_beta_b: float = 4.0
+    n_features_range: Tuple[int, int] = (2, 15)
+    
+    # === Temporal parameters ===
+    # Total sequence length T (before extracting subsequences)
+    # T_total > t_subseq to allow for target offsets and window extraction
+    T_total_range: Tuple[int, int] = (30, 5000)
+    T_total_log_uniform: bool = True
+    
+    # Subsequence length for features (the 't' in n×m×t)
+    # This is the effective temporal dimension of the dataset
+    t_subseq_range: Tuple[int, int] = (10, 1000)
+    t_subseq_log_uniform: bool = True
+    
+    # === Graph structure (similar to 2D) ===
+    n_nodes_range: Tuple[int, int] = (30, 300)
     n_nodes_log_uniform: bool = True
     
-    # Graph density (Gamma distribution)
-    # Con más nodos, podemos mantener density similar
-    density_gamma_shape: float = 2.0
-    density_gamma_scale: float = 1.0
+    # Redirection probability for DAG density
+    redirection_gamma_shape: float = 2.0
+    redirection_gamma_rate: float = 5.0
     
-    # Probability of disconnected subgraphs (for irrelevant features)
-    prob_disconnected_subgraph: float = 0.2
-    n_disconnected_subgraphs_range: Tuple[int, int] = (1, 3)
+    # Disconnected subgraphs for irrelevant features
+    prob_disconnected_subgraph: float = 0.3
+    n_disconnected_range: Tuple[int, int] = (1, 3)
     
-    # === Temporal connection parameters ===
-    # NUEVO: Primero se define un "tipo de proceso temporal" dominante
-    # Esto prioriza procesos simples y realistas (alta autocorrelación)
+    # === Root input type distribution ===
+    # Proportions are sampled per-dataset using Dirichlet
+    # These alphas control the Dirichlet distribution
+    # Higher alpha = more concentrated around equal split
+    input_dirichlet_alpha: float = 1.0  # Symmetric Dirichlet parameter
     
-    # Probabilidades para cada TIPO DE PROCESO (suma ~1.0)
-    # 1. pure_ar: Solo self-connections → genera series suaves tipo AR
-    prob_process_pure_ar: float = 0.35
+    # Minimum counts for each type
+    # REQUIREMENT: Can have 0 noise inputs, but must have:
+    #   - At least 1 time input (dependiente de t)
+    #   - At least 1 state input (memoria, se inicializa con ruido en t0)
+    min_noise_inputs: int = 0   # Noise can be zero
+    min_time_inputs: int = 1    # Must have at least 1 time input
+    min_state_inputs: int = 1   # Must have at least 1 state input
     
-    # 2. simple_lag: Self-connections con múltiples lags (AR de orden alto)
-    prob_process_simple_lag: float = 0.25
+    # === Time-dependent input activations ===
+    # Available time functions (NO constant - causes flat lines)
+    time_activations: List[str] = field(default_factory=lambda: [
+        'linear',        # u
+        'quadratic',     # u^2
+        'cubic',         # u^3
+        'tanh',          # tanh(β(2u-1))
+        'sin_1', 'sin_2', 'sin_3', 'sin_5',  # sin(2πku)
+        'cos_1', 'cos_2', 'cos_3', 'cos_5',  # cos(2πku)
+        'exp_decay'      # exp(-γu)
+    ])
     
-    # 3. cross_channel: Principalmente cross-connections entre canales
-    prob_process_cross_channel: float = 0.15
+    # Parameters for time activations
+    tanh_beta_range: Tuple[float, float] = (0.5, 3.0)  # LogUniform
+    exp_gamma_range: Tuple[float, float] = (0.5, 5.0)  # LogUniform
     
-    # 4. mixed_simple: Mezcla de self y cross, pero simple
-    prob_process_mixed_simple: float = 0.15
+    # === State input parameters ===
+    # α for tanh(α·s_{t-1}) to normalize state to [-1, 1]
+    state_alpha_range: Tuple[float, float] = (0.5, 2.0)  # LogUniform
     
-    # 5. complex: Todos los tipos de conexiones (casos raros/complejos)
-    prob_process_complex: float = 0.10
+    # === Edge transformations (similar to 2D) ===
+    prob_nn_transform: float = 0.50
+    prob_tree_transform: float = 0.20
+    prob_discretization: float = 0.15
+    prob_identity: float = 0.15
     
-    # === Parámetros dentro de cada tipo de proceso ===
+    # NN parameters
+    nn_hidden_range: Tuple[int, int] = (1, 3)
+    nn_width_range: Tuple[int, int] = (4, 32)
     
-    # Probabilidades de conexiones (usadas en procesos mixed/complex)
-    prob_temporal_self: float = 0.40       # Aumentado: self-connections dominantes
-    prob_temporal_cross: float = 0.25      # Cross entre nodos
-    prob_temporal_many_to_one: float = 0.10
-    prob_temporal_one_to_many: float = 0.10
-    prob_temporal_broadcast_multiskip: float = 0.10  # AR multi-lag
-    prob_temporal_conditional_lag: float = 0.03      # Reducido: muy raro
-    prob_temporal_conditional_dest: float = 0.02     # Reducido: muy raro
-    
-    # Temporal skip parameters - prioriza lags cortos
-    temporal_skip_range: Tuple[int, int] = (1, 15)
-    temporal_skip_geometric_p: float = 0.5  # Aumentado: lag=1 muy probable (~50%)
-    
-    # Multi-skip decay factor for broadcast patterns (AR decay)
-    multiskip_decay_range: Tuple[float, float] = (0.7, 0.98)  # Más alto = más memoria
-    
-    # Number of temporal connection patterns per dataset
-    n_temporal_patterns_range: Tuple[int, int] = (2, 10)  # Reducido: menos complejidad
-    
-    # Probability of partial time range (connection only active for subsequence)
-    prob_partial_time_range: float = 0.1  # Reducido: la mayoría son totales
-    
-    # For conditional connections
-    n_conditions_range: Tuple[int, int] = (2, 3)  # Simplificado
-    
-    # === Transformation parameters (same as 2D) ===
-    prob_nn_transform: float = 0.5
-    prob_tree_transform: float = 0.2
-    prob_discretization: float = 0.2
-    prob_identity: float = 0.1
-    
-    nn_hidden_range: Tuple[int, int] = (1, 4)
-    nn_width_range: Tuple[int, int] = (1, 8)
-    
+    # Activations for NN (must match 2D transformations.py)
     activations: List[str] = field(default_factory=lambda: [
-        'identity', 'log', 'sigmoid', 'tanh', 'sin', 'cos',
-        'abs', 'square', 'sqrt', 'relu', 'softplus',
-        'step', 'exp_neg', 'gaussian'
+        'relu', 'tanh', 'sigmoid', 'softplus', 'power', 'identity', 'sin'
     ])
     
-    n_categories_range: Tuple[int, int] = (2, 10)
-    tree_depth_range: Tuple[int, int] = (1, 4)
-    tree_n_splits_range: Tuple[int, int] = (1, 8)
+    # Discretization
+    n_categories_gamma_shape: float = 2.0
+    n_categories_gamma_scale: float = 2.0
+    n_categories_min: int = 2
+    n_categories_max: int = 10
     
-    # === Noise parameters (IGUAL QUE 2D) ===
-    # La autocorrelación viene de las CONEXIONES TEMPORALES, no del ruido
-    noise_types: List[str] = field(default_factory=lambda: [
-        'normal', 'uniform', 'laplace', 'mixture'
-    ])
-    noise_scale_range: Tuple[float, float] = (0.01, 1.0)  # Igual que 2D
+    # Tree parameters
+    tree_depth_range: Tuple[int, int] = (1, 5)
+    tree_n_splits_range: Tuple[int, int] = (1, 10)
+    
+    # === Noise parameters ===
+    noise_types: List[str] = field(default_factory=lambda: ['normal', 'uniform', 'mixed'])
+    init_sigma_range: Tuple[float, float] = (0.1, 2.0)  # For Normal
+    init_a_range: Tuple[float, float] = (0.5, 2.0)      # For Uniform
+    
+    # Edge noise
+    prob_edge_noise: float = 0.3
+    noise_scale_range: Tuple[float, float] = (0.01, 0.5)
     noise_scale_log_uniform: bool = True
-    prob_edge_noise: float = 0.8  # Igual que 2D
     
-    # === Ruido temporal (DESACTIVADO - correlación viene de conexiones) ===
-    # Mantenemos los parámetros por compatibilidad pero no se usan
-    prob_correlated_noise: float = 0.0  # SIN ruido AR - igual que 2D
-    noise_ar_coef_range: Tuple[float, float] = (0.0, 0.0)  # No se usa
+    # === Sample generation mode ===
+    # Probability of each mode
+    prob_iid_mode: float = 0.4           # All rows independent
+    prob_sliding_window_mode: float = 0.4  # From single long T
+    prob_mixed_mode: float = 0.2         # Multiple T sequences
     
-    # === Feature/Target selection parameters ===
-    # Where in the time series to extract feature window
-    # 0.0 = start, 1.0 = end
-    feature_window_start_range: Tuple[float, float] = (0.0, 0.7)
-    feature_window_length_range: Tuple[float, float] = (0.2, 1.0)  # Fraction of total T
+    # Sliding window parameters
+    window_stride_range: Tuple[int, int] = (1, 10)  # Stride between windows
     
-    # Target position relative to feature window
-    # Options: 'before', 'within', 'after'
-    # Probabilities for each
-    prob_target_before: float = 0.1   # Rare - target before features
-    prob_target_within: float = 0.4   # Common - target during features
-    prob_target_after: float = 0.5    # Most common - prediction task
+    # === Target configuration ===
+    prob_classification: float = 0.5
+    # Force task type: None = sample, True = always classification, False = always regression
+    force_classification: Optional[bool] = None
     
-    # How far after feature window to place target (if 'after')
-    target_offset_range: Tuple[int, int] = (1, 50)
+    # Target time offset distribution
+    # offset = 0 means within subsequence (classification)
+    # offset > 0 means future prediction
+    # offset < 0 means past (rare)
+    target_offset_probs: Dict[str, float] = field(default_factory=lambda: {
+        'within': 0.4,      # Target within the feature subsequence
+        'future_near': 0.35,  # 1-5 steps ahead
+        'future_far': 0.2,   # 6-20 steps ahead
+        'past': 0.05         # Before subsequence (rare)
+    })
     
     # === Post-processing ===
     prob_warping: float = 0.3
-    warping_intensity_range: Tuple[float, float] = (0.1, 1.0)
+    warping_intensity_range: Tuple[float, float] = (0.1, 0.5)
     
     prob_quantization: float = 0.2
-    n_quantization_bins_range: Tuple[int, int] = (2, 30)
+    n_quantization_bins_range: Tuple[int, int] = (5, 20)
     
     prob_missing_values: float = 0.2
     missing_rate_range: Tuple[float, float] = (0.01, 0.15)
     
-    # === Target parameters ===
-    max_classes: int = 10
-    prob_classification: float = 1.0  # Always classification for this generator
-    
-    # === Train/Test split ===
+    # === Train/test split ===
     train_ratio_range: Tuple[float, float] = (0.5, 0.8)
-    train_ratio_beta_a: float = 2.0
-    train_ratio_beta_b: float = 2.0
-    
-    def sample_hyperparams(self, rng: Optional[np.random.Generator] = None) -> 'DatasetConfig3D':
-        """Sample a specific dataset configuration from this prior."""
-        if rng is None:
-            rng = np.random.default_rng()
-        return DatasetConfig3D.sample_from_prior(self, rng)
 
 
-@dataclass
-class TemporalConnectionConfig:
-    """
-    Configuration for temporal connections between time steps.
-    
-    Supports rich connection patterns:
-    - 'self': node -> same node at different time
-    - 'cross': node -> different node at different time
-    - 'many_to_one': multiple nodes -> one hub
-    - 'one_to_many': one node -> multiple targets
-    - 'broadcast_multiskip': one node -> itself at multiple skips with decay
-    - 'conditional_lag': skip depends on value (lag switching)
-    - 'conditional_dest': target depends on value (destination switching)
-    """
-    
-    # Type of connection pattern
-    connection_type: str
-    
-    # Which nodes are connected (indices in base graph)
-    source_nodes: List[int]
-    target_nodes: List[int]
-    
-    # Temporal skip (how many timesteps forward) or list for multi-skip
-    skip: int
-    
-    # For multi-skip patterns: list of all skips
-    skip_values: Optional[List[int]] = None
-    
-    # For multi-skip: weights for each skip (decay effect)
-    skip_weights: Optional[List[float]] = None
-    
-    # For multi-skip: decay factor
-    decay_factor: float = 0.8
-    
-    # Transformation to apply
-    transform_type: str = 'nn'
-    
-    # Weight/strength of connection
-    weight: float = 1.0
-    
-    # Time range where this connection is active (fraction of T)
-    # (0.0, 1.0) = active for all time
-    time_range: Tuple[float, float] = (0.0, 1.0)
-    
-    # For conditional patterns: thresholds for switching
-    condition_thresholds: Optional[List[float]] = None
-    
-    # For conditional_lag: skip options for each condition
-    conditional_skips: Optional[List[int]] = None
-    
-    # For conditional_dest: target options for each condition
-    conditional_targets: Optional[List[List[int]]] = None
-    
-    # Unique pattern ID
-    pattern_id: str = ""
-    
-    def get_active_timesteps(self, n_timesteps: int) -> List[int]:
-        """Get timesteps where this connection is active as source."""
-        t_start = int(self.time_range[0] * n_timesteps)
-        t_end = int(self.time_range[1] * n_timesteps)
-        return list(range(t_start, t_end))
-    
-    def get_all_skips(self) -> List[int]:
-        """Get all skip values for this connection."""
-        if self.skip_values:
-            return self.skip_values
-        return [self.skip]
-    
-    def get_skip_weight(self, skip: int) -> float:
-        """Get weight for a specific skip value."""
-        if self.skip_weights and self.skip_values:
-            try:
-                idx = self.skip_values.index(skip)
-                return self.skip_weights[idx]
-            except ValueError:
-                pass
-        return self.weight
-
-
-@dataclass
+@dataclass  
 class DatasetConfig3D:
     """
-    Configuration for a specific 3D dataset instance.
+    Configuration for a specific 3D temporal dataset instance.
+    
+    Sampled from PriorConfig3D.
     """
     
-    # Size
+    # === Size ===
     n_samples: int
     n_features: int
-    n_timesteps: int
+    T_total: int          # Total sequence length
+    t_subseq: int         # Feature subsequence length
     
-    # Base graph structure
+    # === Graph structure ===
     n_nodes: int
-    density: float
+    redirection_prob: float
     n_disconnected_subgraphs: int
     
-    # Temporal structure
-    temporal_connections: List[TemporalConnectionConfig]
-    n_temporal_connections: int
+    # === Root input configuration ===
+    n_noise_inputs: int
+    n_time_inputs: int
+    n_state_inputs: int
     
-    # Transformation settings
+    # Time input activations (one per time input)
+    time_activations: List[str]
+    time_activation_params: Dict[str, float]  # β for tanh, γ for exp_decay
+    
+    # State normalization parameter
+    state_alpha: float
+    
+    # === Edge transformations ===
     edge_transform_probs: Dict[str, float]
     nn_hidden: int
     nn_width: int
@@ -304,20 +218,25 @@ class DatasetConfig3D:
     tree_depth: int
     tree_n_splits: int
     
-    # Noise settings
+    # === Noise settings ===
     noise_type: str
     noise_scale: float
     edge_noise_prob: float
-    has_correlated_noise: bool
-    noise_ar_coef: float
+    init_sigma: float
+    init_a: float
     
-    # Feature/Target selection
-    feature_window_start: int  # Timestep where feature window starts
-    feature_window_end: int    # Timestep where feature window ends
-    target_timestep: int       # Timestep for target
-    target_position: str       # 'before', 'within', 'after'
+    # === Sample generation mode ===
+    sample_mode: str  # 'iid', 'sliding_window', 'mixed'
+    window_stride: int  # For sliding window mode
+    n_sequences: int    # For mixed mode (how many T sequences)
     
-    # Post-processing
+    # === Target configuration ===
+    is_classification: bool
+    n_classes: int
+    target_offset_type: str  # 'within', 'future_near', 'future_far', 'past'
+    target_offset: int       # Actual offset value
+    
+    # === Post-processing ===
     apply_warping: bool
     warping_intensity: float
     apply_quantization: bool
@@ -325,76 +244,127 @@ class DatasetConfig3D:
     apply_missing: bool
     missing_rate: float
     
-    # Target
-    is_classification: bool
-    n_classes: int
-    
-    # Train/Test split
+    # === Train/test ===
     train_ratio: float
     
-    # Random seed
+    # === Random seed ===
     seed: Optional[int] = None
     
     @classmethod
     def sample_from_prior(cls, prior: PriorConfig3D, rng: np.random.Generator) -> 'DatasetConfig3D':
-        """Sample a dataset configuration from a prior."""
+        """Sample a 3D dataset configuration from the prior."""
         
-        # Use module-level helper functions
-        log_uniform = lambda low, high: _log_uniform(rng, low, high)
-        safe_randint = lambda low, high: _safe_randint(rng, low, high)
+        def log_uniform(low: float, high: float) -> float:
+            return np.exp(rng.uniform(np.log(low), np.log(high)))
         
-        # Features - sample first to determine minimum samples needed
+        # === Sample temporal parameters ===
+        # First sample t_subseq (the 't' in n×m×t), then ensure T_total > t_subseq
+        if prior.t_subseq_log_uniform:
+            t_subseq = int(log_uniform(*prior.t_subseq_range))
+        else:
+            t_subseq = rng.integers(*prior.t_subseq_range)
+        t_subseq = min(t_subseq, prior.max_t_subseq)
+        t_subseq = max(t_subseq, 5)  # At least 5 timesteps
+        
+        # T_total must be larger than t_subseq (to allow target offsets)
+        min_T = t_subseq + 10  # At least 10 extra for target offsets
+        if prior.T_total_log_uniform:
+            T_total = int(log_uniform(max(min_T, prior.T_total_range[0]), prior.T_total_range[1]))
+        else:
+            T_total = rng.integers(max(min_T, prior.T_total_range[0]), prior.T_total_range[1])
+        T_total = min(T_total, prior.max_T_total)
+        
+        # === Sample feature count ===
+        # Check if univariate
         if rng.random() < prior.prob_univariate:
             n_features = 1
-        elif prior.n_features_log_uniform:
-            n_features = int(log_uniform(*prior.n_features_range))
         else:
-            n_features = safe_randint(*prior.n_features_range)
+            # Multivariate: use Beta distribution
+            beta_sample = rng.beta(prior.n_features_beta_a, prior.n_features_beta_b)
+            n_features = int(beta_sample * (prior.n_features_range[1] - prior.n_features_range[0]) 
+                            + prior.n_features_range[0])
+            n_features = max(2, min(n_features, prior.max_features))
         
-        # Classes - sample early to determine minimum samples
-        n_classes = rng.integers(2, prior.max_classes + 1)
+        # === Sample sample count ===
+        n_samples = rng.integers(*prior.n_samples_range)
+        n_samples = min(n_samples, prior.max_samples)
         
-        # Sample sizes - ADJUST based on complexity (features * classes)
-        # Minimum samples = max(base_min, samples_per_class * n_classes, samples_per_dim * n_features)
-        # This ensures enough data for learning
-        samples_per_class = 20  # At least 20 samples per class
-        samples_per_dim = 10    # At least 10 samples per feature dimension
-        
-        min_samples_for_complexity = max(
-            prior.n_samples_range[0],
-            samples_per_class * n_classes,
-            samples_per_dim * n_features * n_classes
-        )
-        min_samples_for_complexity = min(min_samples_for_complexity, prior.n_samples_range[1])
-        
-        if prior.n_samples_log_uniform:
-            n_samples = int(log_uniform(min_samples_for_complexity, prior.n_samples_range[1]))
-        else:
-            n_samples = safe_randint(min_samples_for_complexity, prior.n_samples_range[1])
-        
-        if prior.n_timesteps_log_uniform:
-            n_timesteps = int(log_uniform(*prior.n_timesteps_range))
-        else:
-            n_timesteps = safe_randint(*prior.n_timesteps_range)
-        
-        # Base graph
+        # === Sample graph structure ===
         if prior.n_nodes_log_uniform:
             n_nodes = int(log_uniform(*prior.n_nodes_range))
         else:
-            n_nodes = safe_randint(*prior.n_nodes_range)
-        n_nodes = max(n_nodes, n_features + 2)
+            n_nodes = rng.integers(*prior.n_nodes_range)
+        # Ensure enough nodes for features + target + some latent
+        n_nodes = max(n_nodes, n_features + 5)
         
-        density = rng.gamma(prior.density_gamma_shape, prior.density_gamma_scale)
+        redirection_prob = rng.gamma(prior.redirection_gamma_shape, 
+                                      1.0 / prior.redirection_gamma_rate)
+        redirection_prob = min(1.0, redirection_prob)
         
-        has_disconnected = rng.random() < prior.prob_disconnected_subgraph
-        n_disconnected = safe_randint(*prior.n_disconnected_subgraphs_range) if has_disconnected else 0
+        # Disconnected subgraphs
+        n_disconnected = 0
+        if rng.random() < prior.prob_disconnected_subgraph:
+            n_disconnected = rng.integers(*prior.n_disconnected_range)
         
-        # Sample temporal connections
-        temporal_connections = cls._sample_temporal_connections(
-            n_nodes, n_timesteps, prior, rng
-        )
+        # === Sample root input types ===
+        # Determine how many root nodes we'll have
+        # Estimate: roughly 10-20% of nodes are roots in preferential attachment
+        estimated_roots = max(5, n_nodes // 10)
         
-        # Transformation probabilities
+        # Sample proportions using Dirichlet (per-dataset variability)
+        # Alpha = [noise, time, state]
+        alpha = np.array([1.0, 1.0, 1.0]) * prior.input_dirichlet_alpha
+        proportions = rng.dirichlet(alpha)
+        
+        # Calculate counts from proportions
+        # But enforce minimums: min_noise=0, min_time=1, min_state=1
+        # Available slots after minimums
+        min_required = prior.min_time_inputs + prior.min_state_inputs + prior.min_noise_inputs
+        available = max(0, estimated_roots - min_required)
+        
+        # Distribute available slots according to proportions
+        n_noise = prior.min_noise_inputs + int(available * proportions[0])
+        n_time = prior.min_time_inputs + int(available * proportions[1])
+        n_state = prior.min_state_inputs + int(available * proportions[2])
+        
+        # Ensure we don't exceed estimated_roots
+        total_inputs = n_noise + n_time + n_state
+        if total_inputs > estimated_roots:
+            # Scale down, preserving minimums
+            excess = total_inputs - estimated_roots
+            # Remove from noise first (since it has min=0)
+            if n_noise >= excess:
+                n_noise -= excess
+            else:
+                excess -= n_noise
+                n_noise = 0
+                # Then from time (keeping min 1)
+                if n_time - 1 >= excess:
+                    n_time -= excess
+                else:
+                    excess -= (n_time - 1)
+                    n_time = 1
+                    # Finally from state (keeping min 1)
+                    n_state = max(1, n_state - excess)
+        
+        # === Sample time activation functions ===
+        time_activations = []
+        time_activation_params = {}
+        
+        for i in range(n_time):
+            act = rng.choice(prior.time_activations)
+            time_activations.append(act)
+            
+            # Sample parameters for this activation
+            if act == 'tanh':
+                time_activation_params[f'tanh_beta_{i}'] = log_uniform(*prior.tanh_beta_range)
+            elif act == 'exp_decay':
+                time_activation_params[f'exp_gamma_{i}'] = log_uniform(*prior.exp_gamma_range)
+        
+        # === Sample state alpha ===
+        state_alpha = log_uniform(*prior.state_alpha_range)
+        
+        # === Sample edge transformation probabilities ===
         edge_transform_probs = {
             'nn': prior.prob_nn_transform,
             'tree': prior.prob_tree_transform,
@@ -402,88 +372,103 @@ class DatasetConfig3D:
             'identity': prior.prob_identity
         }
         
-        n_activations = rng.integers(3, len(prior.activations) + 1)
+        # NN parameters
+        nn_hidden = rng.integers(*prior.nn_hidden_range)
+        nn_width = rng.integers(*prior.nn_width_range)
+        
+        n_activations = rng.integers(2, min(6, len(prior.activations) + 1))
         allowed_activations = list(rng.choice(prior.activations, size=n_activations, replace=False))
         
-        nn_hidden = safe_randint(*prior.nn_hidden_range)
-        nn_width = safe_randint(*prior.nn_width_range)
-        n_categories = safe_randint(*prior.n_categories_range)
-        tree_depth = safe_randint(*prior.tree_depth_range)
-        tree_n_splits = safe_randint(*prior.tree_n_splits_range)
+        # Categories
+        n_categories = int(rng.gamma(prior.n_categories_gamma_shape, 
+                                      prior.n_categories_gamma_scale)) + prior.n_categories_min
+        n_categories = min(n_categories, prior.n_categories_max)
+        # Limit by samples
+        max_cats_for_samples = max(2, n_samples // 10)
+        n_categories = min(n_categories, max_cats_for_samples)
         
-        # Noise
+        # Tree
+        tree_depth = rng.integers(*prior.tree_depth_range)
+        tree_n_splits = rng.integers(*prior.tree_n_splits_range)
+        
+        # === Noise ===
         noise_type = rng.choice(prior.noise_types)
         if prior.noise_scale_log_uniform:
             noise_scale = log_uniform(*prior.noise_scale_range)
         else:
             noise_scale = rng.uniform(*prior.noise_scale_range)
         
-        has_correlated_noise = rng.random() < prior.prob_correlated_noise
-        noise_ar_coef = rng.uniform(*prior.noise_ar_coef_range) if has_correlated_noise else 0.0
+        init_sigma = rng.uniform(*prior.init_sigma_range)
+        init_a = rng.uniform(*prior.init_a_range)
         
-        # Feature window and target position
-        feature_start_frac = rng.uniform(*prior.feature_window_start_range)
-        feature_length_frac = rng.uniform(*prior.feature_window_length_range)
+        # === Sample generation mode ===
+        mode_probs = [prior.prob_iid_mode, prior.prob_sliding_window_mode, prior.prob_mixed_mode]
+        mode_probs = np.array(mode_probs) / sum(mode_probs)
+        sample_mode = rng.choice(['iid', 'sliding_window', 'mixed'], p=mode_probs)
         
-        # Ensure window fits
-        max_length = 1.0 - feature_start_frac
-        feature_length_frac = min(feature_length_frac, max_length)
+        window_stride = rng.integers(*prior.window_stride_range) if sample_mode != 'iid' else 1
+        n_sequences = rng.integers(2, 10) if sample_mode == 'mixed' else 1
         
-        feature_window_start = int(feature_start_frac * n_timesteps)
-        feature_window_end = int((feature_start_frac + feature_length_frac) * n_timesteps)
-        feature_window_end = max(feature_window_end, feature_window_start + 5)  # At least 5 timesteps
-        feature_window_end = min(feature_window_end, n_timesteps)
+        # === Target configuration ===
+        # Check if task type is forced
+        if prior.force_classification is not None:
+            is_classification = prior.force_classification
+        else:
+            is_classification = rng.random() < prior.prob_classification
         
-        # Target position
-        target_probs = [prior.prob_target_before, prior.prob_target_within, prior.prob_target_after]
-        target_probs = np.array(target_probs) / sum(target_probs)
-        target_position = rng.choice(['before', 'within', 'after'], p=target_probs)
+        if is_classification:
+            max_classes = min(prior.max_classes, n_samples // 10)
+            n_classes = rng.integers(2, max(3, max_classes + 1))
+        else:
+            n_classes = 0
         
-        if target_position == 'before':
-            target_timestep = rng.integers(0, max(1, feature_window_start))
-        elif target_position == 'within':
-            if feature_window_start < feature_window_end:
-                target_timestep = rng.integers(feature_window_start, feature_window_end)
+        # Target offset
+        offset_types = list(prior.target_offset_probs.keys())
+        offset_probs = list(prior.target_offset_probs.values())
+        offset_probs = np.array(offset_probs) / sum(offset_probs)
+        target_offset_type = rng.choice(offset_types, p=offset_probs)
+        
+        # Sample actual offset based on type
+        if target_offset_type == 'within':
+            target_offset = 0
+        elif target_offset_type == 'future_near':
+            target_offset = rng.integers(1, min(6, T_total - t_subseq))
+        elif target_offset_type == 'future_far':
+            max_far = min(20, T_total - t_subseq)
+            if max_far > 6:
+                target_offset = rng.integers(6, max_far)
             else:
-                target_timestep = feature_window_start
-        else:  # after
-            offset = safe_randint(*prior.target_offset_range)
-            offset = max(0, offset)  # Ensure non-negative
-            target_timestep = min(feature_window_end + offset, n_timesteps - 1)
-            # Ensure target is actually after feature window (but still valid)
-            target_timestep = max(target_timestep, min(feature_window_end, n_timesteps - 1))
+                target_offset = rng.integers(1, max(2, max_far))
+        else:  # past
+            target_offset = -rng.integers(1, min(5, t_subseq))
         
-        # Final safety check: ensure target_timestep is valid
-        target_timestep = min(target_timestep, n_timesteps - 1)
-        target_timestep = max(0, target_timestep)
-        
-        # Post-processing
+        # === Post-processing ===
         apply_warping = rng.random() < prior.prob_warping
         warping_intensity = rng.uniform(*prior.warping_intensity_range)
         
         apply_quantization = rng.random() < prior.prob_quantization
-        n_quantization_bins = safe_randint(*prior.n_quantization_bins_range)
+        n_quantization_bins = rng.integers(*prior.n_quantization_bins_range)
         
         apply_missing = rng.random() < prior.prob_missing_values
         missing_rate = rng.uniform(*prior.missing_rate_range)
         
-        # Target: n_classes already sampled at the beginning
-        
-        # Train/test split
-        beta_sample = rng.beta(prior.train_ratio_beta_a, prior.train_ratio_beta_b)
-        train_ratio = prior.train_ratio_range[0] + beta_sample * (
-            prior.train_ratio_range[1] - prior.train_ratio_range[0]
-        )
+        # === Train ratio ===
+        train_ratio = rng.uniform(*prior.train_ratio_range)
         
         return cls(
             n_samples=n_samples,
             n_features=n_features,
-            n_timesteps=n_timesteps,
+            T_total=T_total,
+            t_subseq=t_subseq,
             n_nodes=n_nodes,
-            density=density,
+            redirection_prob=redirection_prob,
             n_disconnected_subgraphs=n_disconnected,
-            temporal_connections=temporal_connections,
-            n_temporal_connections=len(temporal_connections),
+            n_noise_inputs=n_noise,
+            n_time_inputs=n_time,
+            n_state_inputs=n_state,
+            time_activations=time_activations,
+            time_activation_params=time_activation_params,
+            state_alpha=state_alpha,
             edge_transform_probs=edge_transform_probs,
             nn_hidden=nn_hidden,
             nn_width=nn_width,
@@ -494,422 +479,43 @@ class DatasetConfig3D:
             noise_type=noise_type,
             noise_scale=noise_scale,
             edge_noise_prob=prior.prob_edge_noise,
-            has_correlated_noise=has_correlated_noise,
-            noise_ar_coef=noise_ar_coef,
-            feature_window_start=feature_window_start,
-            feature_window_end=feature_window_end,
-            target_timestep=target_timestep,
-            target_position=target_position,
+            init_sigma=init_sigma,
+            init_a=init_a,
+            sample_mode=sample_mode,
+            window_stride=window_stride,
+            n_sequences=n_sequences,
+            is_classification=is_classification,
+            n_classes=n_classes,
+            target_offset_type=target_offset_type,
+            target_offset=target_offset,
             apply_warping=apply_warping,
             warping_intensity=warping_intensity,
             apply_quantization=apply_quantization,
             n_quantization_bins=n_quantization_bins,
             apply_missing=apply_missing,
             missing_rate=missing_rate,
-            is_classification=True,
-            n_classes=n_classes,
             train_ratio=train_ratio,
             seed=int(rng.integers(0, 2**31))
         )
     
-    @staticmethod
-    def _sample_temporal_connections(
-        n_nodes: int, 
-        n_timesteps: int,
-        prior: PriorConfig3D,
-        rng: np.random.Generator
-    ) -> List[TemporalConnectionConfig]:
-        """
-        Sample temporal connections between nodes across time.
-        
-        NUEVO ENFOQUE: Primero se elige un "tipo de proceso" dominante,
-        luego se generan conexiones apropiadas para ese tipo.
-        Esto prioriza procesos simples y realistas.
-        
-        Tipos de proceso:
-        - pure_ar: Solo self-connections (genera alta ACF)
-        - simple_lag: Self con múltiples lags
-        - cross_channel: Cross-connections entre canales
-        - mixed_simple: Mezcla simple de self y cross
-        - complex: Todos los tipos (raro)
-        """
-        connections = []
-        
-        # Use module-level helper
-        safe_randint = lambda low, high: _safe_randint(rng, low, high)
-        
-        # PASO 1: Elegir tipo de proceso
-        process_types = ['pure_ar', 'simple_lag', 'cross_channel', 'mixed_simple', 'complex']
-        process_probs = [
-            prior.prob_process_pure_ar,
-            prior.prob_process_simple_lag,
-            prior.prob_process_cross_channel,
-            prior.prob_process_mixed_simple,
-            prior.prob_process_complex
-        ]
-        process_probs = np.array(process_probs) / sum(process_probs)
-        process_type = rng.choice(process_types, p=process_probs)
-        
-        # PASO 2: Generar conexiones según el tipo de proceso
-        n_patterns = safe_randint(*prior.n_temporal_patterns_range)
-        n_patterns = min(n_patterns, n_nodes * 2)
-        
-        # Transformaciones simples para preservar señal (más identity)
-        simple_transform_types = ['identity', 'nn']
-        simple_transform_probs = [0.6, 0.4]  # Mayoría identity
-        
-        complex_transform_types = ['nn', 'tree', 'identity']
-        complex_transform_probs = [0.4, 0.3, 0.3]
-        
-        def sample_skip() -> int:
-            """Sample lag priorizando valores pequeños."""
-            skip = rng.geometric(prior.temporal_skip_geometric_p)
-            return max(1, min(skip, min(prior.temporal_skip_range[1], n_timesteps // 3)))
-        
-        def sample_time_range() -> Tuple[float, float]:
-            """Sample time range (mayoría completa)."""
-            if rng.random() < prior.prob_partial_time_range:
-                start = rng.uniform(0, 0.5)
-                length = rng.uniform(0.3, 1.0 - start)
-                return (start, start + length)
-            return (0.0, 1.0)
-        
-        if process_type == 'pure_ar':
-            # === PURE AR: Solo self-connections, genera series muy suaves ===
-            # Cada nodo se conecta consigo mismo con lag=1 (como AR(1))
-            for node in range(min(n_nodes, 10)):  # Conectar los primeros nodos
-                connections.append(TemporalConnectionConfig(
-                    connection_type='self',
-                    source_nodes=[node],
-                    target_nodes=[node],
-                    skip=1,  # Siempre lag=1 para AR(1)
-                    transform_type='identity',  # Preserva señal
-                    weight=rng.uniform(0.8, 1.0),  # Peso alto
-                    time_range=(0.0, 1.0),
-                    pattern_id=f"ar_{node}"
-                ))
-            # Opcionalmente añadir algunos lags extras
-            for i in range(min(3, n_patterns - n_nodes)):
-                node = rng.integers(0, n_nodes)
-                skip = rng.integers(2, 4)  # Lags 2-3
-                connections.append(TemporalConnectionConfig(
-                    connection_type='self',
-                    source_nodes=[node],
-                    target_nodes=[node],
-                    skip=skip,
-                    transform_type='identity',
-                    weight=rng.uniform(0.3, 0.6),  # Peso menor para lags mayores
-                    time_range=(0.0, 1.0),
-                    pattern_id=f"ar_lag{skip}_{i}"
-                ))
-        
-        elif process_type == 'simple_lag':
-            # === SIMPLE LAG: Self-connections con múltiples lags (AR de orden alto) ===
-            for i in range(n_patterns):
-                node = rng.integers(0, n_nodes)
-                skip = sample_skip()
-                # Usar broadcast multiskip para algunos
-                if i < n_patterns // 2:
-                    # AR multi-lag con decay
-                    max_skip = min(6, n_timesteps // 5)
-                    n_skips = rng.integers(2, max_skip + 1)
-                    skip_values = list(range(1, n_skips + 1))
-                    decay = rng.uniform(*prior.multiskip_decay_range)
-                    skip_weights = [decay ** (s - 1) for s in skip_values]
-                    total_w = sum(skip_weights)
-                    skip_weights = [w / total_w for w in skip_weights]
-                    
-                    connections.append(TemporalConnectionConfig(
-                        connection_type='broadcast_multiskip',
-                        source_nodes=[node],
-                        target_nodes=[node],
-                        skip=1,
-                        skip_values=skip_values,
-                        skip_weights=skip_weights,
-                        decay_factor=decay,
-                        transform_type=rng.choice(simple_transform_types, p=simple_transform_probs),
-                        weight=rng.uniform(0.6, 1.0),
-                        time_range=(0.0, 1.0),
-                        pattern_id=f"multilag_{i}"
-                    ))
-                else:
-                    # Self simple
-                    connections.append(TemporalConnectionConfig(
-                        connection_type='self',
-                        source_nodes=[node],
-                        target_nodes=[node],
-                        skip=skip,
-                        transform_type=rng.choice(simple_transform_types, p=simple_transform_probs),
-                        weight=rng.uniform(0.5, 1.0),
-                        time_range=sample_time_range(),
-                        pattern_id=f"self_{i}"
-                    ))
-        
-        elif process_type == 'cross_channel':
-            # === CROSS CHANNEL: Principalmente cross-connections ===
-            # Primero algunas self para mantener continuidad
-            for node in range(min(3, n_nodes)):
-                connections.append(TemporalConnectionConfig(
-                    connection_type='self',
-                    source_nodes=[node],
-                    target_nodes=[node],
-                    skip=1,
-                    transform_type='identity',
-                    weight=0.9,
-                    time_range=(0.0, 1.0),
-                    pattern_id=f"self_base_{node}"
-                ))
-            
-            # Luego cross-connections
-            for i in range(n_patterns):
-                if n_nodes >= 2:
-                    source = rng.integers(0, n_nodes)
-                    target = rng.integers(0, n_nodes)
-                    while target == source:
-                        target = rng.integers(0, n_nodes)
-                    connections.append(TemporalConnectionConfig(
-                        connection_type='cross',
-                        source_nodes=[source],
-                        target_nodes=[target],
-                        skip=sample_skip(),
-                        transform_type=rng.choice(simple_transform_types, p=simple_transform_probs),
-                        weight=rng.uniform(0.4, 0.8),
-                        time_range=sample_time_range(),
-                        pattern_id=f"cross_{i}"
-                    ))
-        
-        elif process_type == 'mixed_simple':
-            # === MIXED SIMPLE: Mezcla de self y cross, pero simple ===
-            for i in range(n_patterns):
-                if rng.random() < 0.6:  # 60% self
-                    node = rng.integers(0, n_nodes)
-                    connections.append(TemporalConnectionConfig(
-                        connection_type='self',
-                        source_nodes=[node],
-                        target_nodes=[node],
-                        skip=sample_skip(),
-                        transform_type=rng.choice(simple_transform_types, p=simple_transform_probs),
-                        weight=rng.uniform(0.5, 1.0),
-                        time_range=sample_time_range(),
-                        pattern_id=f"self_{i}"
-                    ))
-                elif n_nodes >= 2:  # 40% cross
-                    source = rng.integers(0, n_nodes)
-                    target = rng.integers(0, n_nodes)
-                    while target == source:
-                        target = rng.integers(0, n_nodes)
-                    connections.append(TemporalConnectionConfig(
-                        connection_type='cross',
-                        source_nodes=[source],
-                        target_nodes=[target],
-                        skip=sample_skip(),
-                        transform_type=rng.choice(simple_transform_types, p=simple_transform_probs),
-                        weight=rng.uniform(0.4, 0.8),
-                        time_range=sample_time_range(),
-                        pattern_id=f"cross_{i}"
-                    ))
-        
-        else:  # complex
-            # === COMPLEX: Todos los tipos de conexiones ===
-            conn_types = [
-                'self', 'cross', 'many_to_one', 'one_to_many',
-                'broadcast_multiskip', 'conditional_lag', 'conditional_dest'
-            ]
-            conn_probs = [
-                prior.prob_temporal_self,
-                prior.prob_temporal_cross,
-                prior.prob_temporal_many_to_one,
-                prior.prob_temporal_one_to_many,
-                prior.prob_temporal_broadcast_multiskip,
-                prior.prob_temporal_conditional_lag,
-                prior.prob_temporal_conditional_dest
-            ]
-            conn_probs = np.array(conn_probs) / sum(conn_probs)
-            
-            for i in range(n_patterns):
-                conn_type = rng.choice(conn_types, p=conn_probs)
-                time_range = sample_time_range()
-                base_skip = sample_skip()
-                transform_type = rng.choice(complex_transform_types, p=complex_transform_probs)
-                weight = rng.uniform(0.5, 1.5)
-                
-                if conn_type == 'self':
-                    node = rng.integers(0, n_nodes)
-                    connections.append(TemporalConnectionConfig(
-                        connection_type=conn_type,
-                        source_nodes=[node],
-                        target_nodes=[node],
-                        skip=base_skip,
-                        transform_type=transform_type,
-                        weight=weight,
-                        time_range=time_range,
-                        pattern_id=f"self_{i}"
-                    ))
-                
-                elif conn_type == 'cross' and n_nodes >= 2:
-                    source = rng.integers(0, n_nodes)
-                    target = rng.integers(0, n_nodes)
-                    while target == source:
-                        target = rng.integers(0, n_nodes)
-                    connections.append(TemporalConnectionConfig(
-                        connection_type=conn_type,
-                        source_nodes=[source],
-                        target_nodes=[target],
-                        skip=base_skip,
-                        transform_type=transform_type,
-                        weight=weight,
-                        time_range=time_range,
-                        pattern_id=f"cross_{i}"
-                    ))
-                
-                elif conn_type == 'many_to_one':
-                    n_sources = min(rng.integers(2, 5), n_nodes)
-                    sources = list(rng.choice(n_nodes, size=n_sources, replace=False))
-                    target = rng.integers(0, n_nodes)
-                    connections.append(TemporalConnectionConfig(
-                        connection_type=conn_type,
-                        source_nodes=sources,
-                        target_nodes=[target],
-                        skip=base_skip,
-                        transform_type=transform_type,
-                        weight=weight,
-                        time_range=time_range,
-                        pattern_id=f"many2one_{i}"
-                    ))
-                
-                elif conn_type == 'one_to_many':
-                    source = rng.integers(0, n_nodes)
-                    n_targets = min(rng.integers(2, 5), n_nodes)
-                    targets = list(rng.choice(n_nodes, size=n_targets, replace=False))
-                    connections.append(TemporalConnectionConfig(
-                        connection_type=conn_type,
-                        source_nodes=[source],
-                        target_nodes=targets,
-                        skip=base_skip,
-                        transform_type=transform_type,
-                        weight=weight,
-                        time_range=time_range,
-                        pattern_id=f"one2many_{i}"
-                    ))
-                
-                elif conn_type == 'broadcast_multiskip':
-                    node = rng.integers(0, n_nodes)
-                    max_skip = min(8, n_timesteps // 4)
-                    n_skips = rng.integers(2, min(5, max_skip + 1))
-                    skip_values = list(range(1, n_skips + 1))
-                    decay = rng.uniform(*prior.multiskip_decay_range)
-                    skip_weights = [decay ** (s - 1) for s in skip_values]
-                    total_w = sum(skip_weights)
-                    skip_weights = [w / total_w for w in skip_weights]
-                    
-                    connections.append(TemporalConnectionConfig(
-                        connection_type=conn_type,
-                        source_nodes=[node],
-                        target_nodes=[node],
-                        skip=1,
-                        skip_values=skip_values,
-                        skip_weights=skip_weights,
-                        decay_factor=decay,
-                        transform_type=transform_type,
-                        weight=weight,
-                        time_range=time_range,
-                        pattern_id=f"broadcast_{i}"
-                    ))
-                
-                elif conn_type == 'conditional_lag':
-                    source = rng.integers(0, n_nodes)
-                    target = rng.integers(0, n_nodes)
-                    n_conditions = safe_randint(*prior.n_conditions_range)
-                    thresholds = sorted(rng.uniform(-1, 1, size=n_conditions - 1).tolist())
-                    max_skip = min(10, n_timesteps // 4)
-                    conditional_skips = sorted(rng.integers(1, max_skip + 1, size=n_conditions).tolist())
-                    
-                    connections.append(TemporalConnectionConfig(
-                        connection_type=conn_type,
-                        source_nodes=[source],
-                        target_nodes=[target],
-                        skip=conditional_skips[0],
-                        condition_thresholds=thresholds,
-                        conditional_skips=conditional_skips,
-                        transform_type='tree',
-                        weight=weight,
-                        time_range=time_range,
-                        pattern_id=f"condlag_{i}"
-                    ))
-                
-                elif conn_type == 'conditional_dest':
-                    source = rng.integers(0, n_nodes)
-                    n_conditions = safe_randint(*prior.n_conditions_range)
-                    thresholds = sorted(rng.uniform(-1, 1, size=n_conditions - 1).tolist())
-                    conditional_targets = []
-                    for _ in range(n_conditions):
-                        n_t = rng.integers(1, min(3, n_nodes + 1))
-                        targets = list(rng.choice(n_nodes, size=n_t, replace=False))
-                        conditional_targets.append(targets)
-                    
-                    connections.append(TemporalConnectionConfig(
-                        connection_type=conn_type,
-                        source_nodes=[source],
-                        target_nodes=list(range(n_nodes)),
-                        skip=base_skip,
-                        condition_thresholds=thresholds,
-                        conditional_targets=conditional_targets,
-                        transform_type='tree',
-                        weight=weight,
-                        time_range=time_range,
-                        pattern_id=f"conddest_{i}"
-                    ))
-        
-        # Garantizar al menos algunas self-connections para continuidad temporal
-        if not any(c.connection_type == 'self' for c in connections):
-            for node in range(min(3, n_nodes)):
-                connections.append(TemporalConnectionConfig(
-                    connection_type='self',
-                    source_nodes=[node],
-                    target_nodes=[node],
-                    skip=1,
-                    transform_type='identity',
-                    weight=0.9,
-                    time_range=(0.0, 1.0),
-                    pattern_id=f"self_fallback_{node}"
-                ))
-        
-        return connections
-    
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict:
         """Convert to dictionary for serialization."""
         return {
             'n_samples': self.n_samples,
             'n_features': self.n_features,
-            'n_timesteps': self.n_timesteps,
+            'T_total': self.T_total,
+            't_subseq': self.t_subseq,
             'n_nodes': self.n_nodes,
-            'density': self.density,
-            'n_disconnected_subgraphs': self.n_disconnected_subgraphs,
-            'n_temporal_connections': self.n_temporal_connections,
-            'edge_transform_probs': self.edge_transform_probs,
-            'nn_hidden': self.nn_hidden,
-            'nn_width': self.nn_width,
-            'allowed_activations': self.allowed_activations,
-            'n_categories': self.n_categories,
-            'tree_depth': self.tree_depth,
-            'tree_n_splits': self.tree_n_splits,
-            'noise_type': self.noise_type,
-            'noise_scale': self.noise_scale,
-            'edge_noise_prob': self.edge_noise_prob,
-            'has_correlated_noise': self.has_correlated_noise,
-            'noise_ar_coef': self.noise_ar_coef,
-            'feature_window_start': self.feature_window_start,
-            'feature_window_end': self.feature_window_end,
-            'target_timestep': self.target_timestep,
-            'target_position': self.target_position,
-            'apply_warping': self.apply_warping,
-            'warping_intensity': self.warping_intensity,
-            'apply_quantization': self.apply_quantization,
-            'n_quantization_bins': self.n_quantization_bins,
-            'apply_missing': self.apply_missing,
-            'missing_rate': self.missing_rate,
+            'n_noise_inputs': self.n_noise_inputs,
+            'n_time_inputs': self.n_time_inputs,
+            'n_state_inputs': self.n_state_inputs,
+            'time_activations': self.time_activations,
+            'state_alpha': self.state_alpha,
+            'sample_mode': self.sample_mode,
             'is_classification': self.is_classification,
             'n_classes': self.n_classes,
+            'target_offset_type': self.target_offset_type,
+            'target_offset': self.target_offset,
             'train_ratio': self.train_ratio,
             'seed': self.seed
         }

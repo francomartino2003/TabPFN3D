@@ -110,7 +110,7 @@ class DAGBuilder:
         """
         n_nodes = self.config.n_nodes
         n_disconnected = self.config.n_disconnected_subgraphs
-        density = self.config.density
+        redirection_prob = self.config.redirection_prob
         
         # Allocate nodes to subgraphs
         # Main subgraph gets most nodes, disconnected subgraphs share the rest
@@ -136,8 +136,10 @@ class DAGBuilder:
         node_id_offset = 0
         
         for subgraph_id, size in enumerate(subgraph_sizes):
+            # redirection_prob is P from the paper
+            # Lower P = denser graphs (more edges)
             nodes, edges, roots = self._build_subgraph(
-                size, density, subgraph_id, node_id_offset
+                size, redirection_prob, subgraph_id, node_id_offset
             )
             all_nodes.update(nodes)
             all_edges.extend(edges)
@@ -162,16 +164,29 @@ class DAGBuilder:
     def _build_subgraph(
         self, 
         n_nodes: int, 
-        density: float, 
+        redirection_prob: float, 
         subgraph_id: int,
         node_id_offset: int
     ) -> Tuple[Dict[int, Node], List[Tuple[int, int]], List[int]]:
         """
-        Build a single connected subgraph using preferential attachment.
+        Build a single connected subgraph using Growing Network with Redirection.
+        
+        This implements the algorithm from the paper (ref 57):
+        "growing network with redirection sampling method, a preferential 
+        attachment process that generates random scale-free networks"
+        
+        The algorithm:
+        1. Start with one root node
+        2. For each new node:
+           - Select an existing node uniformly at random
+           - With probability P (redirection_prob), redirect to one of its parents
+           - Connect the new node to the (possibly redirected) target
+        
+        Smaller P leads to denser graphs with more edges on average.
         
         Args:
             n_nodes: Number of nodes in this subgraph
-            density: Controls edge density (higher = more edges)
+            redirection_prob: Probability of redirecting to parent (P in paper)
             subgraph_id: ID for this subgraph
             node_id_offset: Offset for node IDs
             
@@ -195,80 +210,56 @@ class DAGBuilder:
             topological_order=-1
         )
         
-        # Track node "attractiveness" for preferential attachment
-        # Attractiveness increases with number of connections
-        attractiveness = {first_id: 1.0}
-        
-        # Add remaining nodes one by one
+        # Add remaining nodes using Growing Network with Redirection
         for i in range(1, n_nodes):
             new_id = node_id_offset + i
-            
-            # Determine number of parents for this node
-            # Use density parameter to control expected number of edges
             existing_nodes = list(nodes.keys())
-            max_parents = min(len(existing_nodes), 5)  # Cap at 5 parents
             
-            # Sample number of parents based on density
-            n_parents = self.rng.poisson(density)
-            n_parents = np.clip(n_parents, 1, max_parents)
+            # Step 1: Select a random existing node uniformly
+            target_idx = self.rng.integers(0, len(existing_nodes))
+            target_id = existing_nodes[target_idx]
             
-            # Select parents using preferential attachment
-            probs = np.array([attractiveness[nid] for nid in existing_nodes])
-            probs = probs / probs.sum()
+            # Step 2: With probability P, redirect to one of its parents
+            while self.rng.random() < redirection_prob:
+                target_node = nodes[target_id]
+                if target_node.parents:
+                    # Redirect to a random parent
+                    target_id = self.rng.choice(target_node.parents)
+                else:
+                    # No parents, stay at current node (it's a root)
+                    break
             
-            parent_indices = self.rng.choice(
-                len(existing_nodes), 
-                size=min(n_parents, len(existing_nodes)),
-                replace=False,
-                p=probs
-            )
-            parents = [existing_nodes[idx] for idx in parent_indices]
-            
-            # Create new node
+            # Step 3: Connect new node to target
+            # The new node is a child of the target (edge: target -> new_id)
             nodes[new_id] = Node(
                 id=new_id,
-                parents=parents,
+                parents=[target_id],
                 children=[],
-                is_root=len(parents) == 0,
+                is_root=False,
                 subgraph_id=subgraph_id,
                 topological_order=-1
             )
             
-            # Add edges and update children lists
-            for parent_id in parents:
-                edges.append((parent_id, new_id))
-                nodes[parent_id].children.append(new_id)
-                # Increase attractiveness of parent
-                attractiveness[parent_id] += 0.5
+            edges.append((target_id, new_id))
+            nodes[target_id].children.append(new_id)
             
-            # Initialize attractiveness of new node
-            attractiveness[new_id] = 1.0 + len(parents) * 0.5
+            # Optionally add more parents for denser graphs (low redirection_prob)
+            # The paper says "smaller values of P lead to denser graphs"
+            # We add extra edges with probability inversely related to P
+            extra_edge_prob = max(0, 0.5 - redirection_prob)
+            while self.rng.random() < extra_edge_prob and len(nodes[new_id].parents) < 5:
+                # Select another potential parent from earlier nodes
+                potential_parents = [nid for nid in existing_nodes 
+                                    if nid not in nodes[new_id].parents]
+                if not potential_parents:
+                    break
+                extra_parent = self.rng.choice(potential_parents)
+                nodes[new_id].parents.append(extra_parent)
+                nodes[extra_parent].children.append(new_id)
+                edges.append((extra_parent, new_id))
+                extra_edge_prob *= 0.5  # Decrease probability for each additional edge
         
-        # Additional random edges (to increase connectivity if density is high)
-        n_additional = int(density * n_nodes * 0.3)
-        for _ in range(n_additional):
-            if len(nodes) < 2:
-                break
-                
-            # Sample two nodes
-            node_ids = list(nodes.keys())
-            idx1, idx2 = self.rng.choice(len(node_ids), size=2, replace=False)
-            n1, n2 = node_ids[idx1], node_ids[idx2]
-            
-            # Ensure n1 comes before n2 (for acyclicity)
-            # Use current position in nodes dict as proxy for order
-            if idx1 > idx2:
-                n1, n2 = n2, n1
-            
-            # Add edge if it doesn't exist
-            if n2 not in nodes[n1].children and n1 not in nodes[n2].parents:
-                edges.append((n1, n2))
-                nodes[n1].children.append(n2)
-                nodes[n2].parents.append(n1)
-                if nodes[n2].is_root:
-                    nodes[n2].is_root = False
-        
-        # Find root nodes
+        # Find root nodes (should only be the first node in this construction)
         roots = [nid for nid, node in nodes.items() if node.is_root]
         
         return nodes, edges, roots

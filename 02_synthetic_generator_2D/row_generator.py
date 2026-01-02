@@ -123,8 +123,12 @@ class RowGenerator:
         """
         Generate samples using prototypes (row dependencies).
         
-        Creates prototypes first, then generates samples as noisy
-        versions of these prototypes.
+        Per paper: "for each input vector xi to be sampled, we assign weights αij 
+        to the prototypes and linearly mix the final input as xi = Σj αij * xj*, 
+        where Σj αij = 1. The weights αij are sampled from a multinomial distribution, 
+        αi ~ Multinomial(β), where β is a temperature hyperparameter controlling the 
+        degree of non-independence: larger β yields more uniform weights, whereas 
+        smaller β concentrates the weights on fewer prototypes per sample."
         """
         n_prototypes = self.config.n_prototypes
         
@@ -141,25 +145,36 @@ class RowGenerator:
                     node_id, prototype_values, n_prototypes
                 )
         
-        # Assign each sample to a prototype
-        prototype_assignments = self.rng.integers(0, n_prototypes, size=n_samples)
+        # Sample mixing weights using Dirichlet (continuous relaxation of Multinomial)
+        # Temperature β controls concentration: 
+        # - Small β (< 1): weights concentrate on few prototypes
+        # - Large β (> 1): weights more uniform across prototypes
+        temperature = self.rng.uniform(0.1, 2.0)  # Sample temperature
         
-        # Generate samples as noisy versions of prototypes
+        # Dirichlet with uniform concentration parameter β
+        alpha = np.ones(n_prototypes) * temperature
+        weights = self.rng.dirichlet(alpha, size=n_samples)  # (n_samples, n_prototypes)
+        
+        # Generate samples as weighted mixtures of prototypes
         values: Dict[int, np.ndarray] = {}
         noise_scale = self.config.prototype_noise_scale
         
         for node_id in self.dag.nodes:
-            base_values = prototype_values[node_id][prototype_assignments]
+            # Linear combination: xi = Σj αij * xj*
+            proto_vals = prototype_values[node_id]  # (n_prototypes,)
+            mixed_values = weights @ proto_vals  # (n_samples,)
+            
+            # Add small noise for variation
             noise = self.rng.normal(0, noise_scale, size=n_samples)
-            values[node_id] = base_values + noise
+            values[node_id] = mixed_values + noise
         
         return PropagatedValues(
             values=values,
             metadata={
                 'n_samples': n_samples,
-                'generation_type': 'prototype',
+                'generation_type': 'prototype_mixture',
                 'n_prototypes': n_prototypes,
-                'prototype_assignments': prototype_assignments
+                'temperature': temperature
             }
         )
     

@@ -87,6 +87,13 @@ class Activation:
         return np.mod(x, 2.0)
     
     @staticmethod
+    def power(x: np.ndarray) -> np.ndarray:
+        # Power function with random exponent (per paper: "power functions")
+        # Using x^p where p is randomly chosen
+        p = np.random.uniform(0.5, 3.0)
+        return np.sign(x) * np.power(np.abs(x) + 1e-6, p)
+    
+    @staticmethod
     def rank(x: np.ndarray) -> np.ndarray:
         # Convert to ranks (normalized to [0, 1])
         if x.ndim == 1:
@@ -132,6 +139,7 @@ class Activation:
             'softplus': cls.softplus,
             'step': cls.step,
             'mod': cls.mod,
+            'power': cls.power,
             'rank': cls.rank,
             'exp_neg': cls.exp_neg,
             'gaussian': cls.gaussian,
@@ -488,17 +496,24 @@ class TransformationFactory:
         )
     
     def _create_discretization(self, n_parents: int, noise_scale: float) -> DiscretizationTransformation:
-        """Create a discretization transformation."""
+        """
+        Create a discretization transformation.
+        
+        Per paper: "we map the vector to the index of the nearest neighbour in a 
+        set of per node randomly sampled vectors {p1, …, pK}... We sample a second 
+        set of embedding vectors {p'1,...,p'K} for each class"
+        
+        Both prototype vectors and embedding vectors are fully random.
+        """
         n_categories = self.config.n_categories
         input_dim = max(1, n_parents)
         
-        # Sample prototypes (cluster centers)
+        # Sample prototypes (cluster centers) - fully random
         prototypes = self.rng.normal(0, 1, size=(n_categories, input_dim))
         
-        # Sample embeddings for each category
+        # Sample embeddings for each category - fully random (per paper)
+        # "We sample a second set of embedding vectors {p'1,...,p'K} for each class"
         category_embeddings = self.rng.normal(0, 1, size=(n_categories,))
-        # Space them out
-        category_embeddings = np.linspace(-2, 2, n_categories) + category_embeddings * 0.1
         
         return DiscretizationTransformation(
             prototypes=prototypes,
@@ -569,11 +584,20 @@ class RootNoiseGenerator:
     
     Root nodes have no parents, so they receive injected noise
     that is then propagated through the DAG.
+    
+    Per paper, there are 3 initialization mechanisms:
+    1. Normal: ε ~ N(0, σε²) where σε² is a hyperparameter
+    2. Uniform: ε ~ U(−a, a) where a is a hyperparameter  
+    3. Mixed: for each root node, randomly select normal or uniform
     """
     
     def __init__(self, config: DatasetConfig, rng: Optional[np.random.Generator] = None):
         self.config = config
         self.rng = rng if rng is not None else np.random.default_rng(config.seed)
+        
+        # Use σ and a from config (sampled as hyperparameters per paper)
+        self.sigma = config.init_sigma  # σε for normal
+        self.a = config.init_a          # a for uniform
     
     def generate(self, n_samples: int) -> np.ndarray:
         """
@@ -588,18 +612,19 @@ class RootNoiseGenerator:
         noise_type = self.config.noise_type
         
         if noise_type == 'normal':
-            return self.rng.normal(0, 1, size=n_samples)
+            # ε ~ N(0, σε²) per paper
+            return self.rng.normal(0, self.sigma, size=n_samples)
         elif noise_type == 'uniform':
-            return self.rng.uniform(-np.sqrt(3), np.sqrt(3), size=n_samples)
-        elif noise_type == 'laplace':
-            return self.rng.laplace(0, 1, size=n_samples)
-        elif noise_type == 'mixture':
-            # Mixture of gaussians
-            n_components = self.rng.integers(2, 5)
-            means = self.rng.normal(0, 2, size=n_components)
-            stds = self.rng.uniform(0.5, 1.5, size=n_components)
-            component = self.rng.integers(0, n_components, size=n_samples)
-            return means[component] + stds[component] * self.rng.normal(0, 1, size=n_samples)
+            # ε ~ U(−a, a) per paper
+            return self.rng.uniform(-self.a, self.a, size=n_samples)
+        elif noise_type == 'mixed':
+            # Per paper: "for each root node, we randomly select either 
+            # a normal or uniform distribution"
+            # This method is called once per root node, so we just pick one
+            if self.rng.random() < 0.5:
+                return self.rng.normal(0, self.sigma, size=n_samples)
+            else:
+                return self.rng.uniform(-self.a, self.a, size=n_samples)
         else:
-            return self.rng.normal(0, 1, size=n_samples)
+            return self.rng.normal(0, self.sigma, size=n_samples)
 

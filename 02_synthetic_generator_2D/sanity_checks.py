@@ -53,24 +53,25 @@ except ImportError:
 @dataclass
 class DatasetStats:
     """Statistics for a single generated dataset."""
+    # Required fields (no defaults)
     dataset_id: int
     n_samples: int
     n_features: int
     n_classes: int
     train_ratio: float
-    
-    # Feature statistics
-    n_categorical: int
-    n_continuous: int
-    n_relevant: int
-    n_irrelevant: int
-    missing_pct: float
-    
-    # Model performances (accuracy)
     baseline_acc: float
     logistic_acc: float
     rf_acc: float
     xgb_acc: float
+    
+    # Optional fields with defaults
+    n_train: int = 0
+    n_test: int = 0
+    n_categorical: int = 0
+    n_continuous: int = 0
+    n_relevant: int = 0
+    n_irrelevant: int = 0
+    missing_pct: float = 0.0
     
     # AUC scores (if binary/multiclass)
     baseline_auc: Optional[float] = None
@@ -121,8 +122,15 @@ def prepare_data(dataset: SyntheticDataset) -> Tuple[np.ndarray, np.ndarray, np.
     if n_samples < min_train + min_test:
         test_size = 0.3
     
+    # Check if stratification is possible (all classes have >= 2 samples)
+    use_stratify = False
+    if dataset.is_classification:
+        unique, counts = np.unique(y, return_counts=True)
+        if len(unique) >= 2 and np.all(counts >= 2):
+            use_stratify = True
+    
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=42, stratify=y if dataset.is_classification else None
+        X, y, test_size=test_size, random_state=42, stratify=y if use_stratify else None
     )
     
     # Scale features
@@ -241,76 +249,162 @@ def compute_feature_importance_stats(importances: np.ndarray) -> Dict[str, float
     return {'n_zero': n_zero, 'top_importance': top_imp, 'entropy': entropy}
 
 
+def print_distribution(values: List[float], name: str, is_int: bool = False, bins: int = 10):
+    """Print a text-based histogram of values."""
+    arr = np.array(values)
+    percentiles = [0, 10, 25, 50, 75, 90, 100]
+    pct_vals = np.percentile(arr, percentiles)
+    
+    if is_int:
+        print(f"  {name}: min={int(arr.min())}, p10={int(pct_vals[1])}, p25={int(pct_vals[2])}, "
+              f"median={int(pct_vals[3])}, p75={int(pct_vals[4])}, p90={int(pct_vals[5])}, max={int(arr.max())}")
+    else:
+        print(f"  {name}: min={arr.min():.3f}, p10={pct_vals[1]:.3f}, p25={pct_vals[2]:.3f}, "
+              f"median={pct_vals[3]:.3f}, p75={pct_vals[4]:.3f}, p90={pct_vals[5]:.3f}, max={arr.max():.3f}")
+    
+    # Text histogram
+    counts, bin_edges = np.histogram(arr, bins=bins)
+    max_count = max(counts) if max(counts) > 0 else 1
+    for i, count in enumerate(counts):
+        bar_len = int(40 * count / max_count)
+        bar = "#" * bar_len
+        if is_int:
+            print(f"    [{int(bin_edges[i]):6d}-{int(bin_edges[i+1]):6d}]: {count:3d} {bar}")
+        else:
+            print(f"    [{bin_edges[i]:.2f}-{bin_edges[i+1]:.2f}]: {count:3d} {bar}")
+
+
 def sanity_check_1_baseline_vs_models(stats_list: List[DatasetStats]) -> Dict[str, Any]:
     """
-    SANITY CHECK 1: Compare baseline vs ML models.
-    
-    Expected: Wide distribution of performances, no single dominant model.
+    SANITY CHECK 1: Show distributions of dataset characteristics and model performance.
     """
     print("\n" + "="*70)
-    print("SANITY CHECK 1: Baseline vs Models")
+    print("SANITY CHECK 1: Dataset & Performance Distributions")
     print("="*70)
     
-    # Categorize datasets by difficulty
-    categories = {
-        'very_easy': [],    # All models >> baseline
-        'easy': [],         # XGB/RF >> Logistic >> baseline
-        'medium': [],       # Spread between models
-        'hard': [],         # All models ≈ baseline
-    }
+    # Extract all metrics
+    n_samples_list = [s.n_samples for s in stats_list]
+    n_train_list = [s.n_train for s in stats_list]
+    n_test_list = [s.n_test for s in stats_list]
+    n_features_list = [s.n_features for s in stats_list]
+    n_classes_list = [s.n_classes for s in stats_list]
+    baselines = [s.baseline_acc for s in stats_list]
+    logistic_accs = [s.logistic_acc for s in stats_list]
+    xgb_accs = [s.xgb_acc for s in stats_list]
+    rf_accs = [s.rf_acc for s in stats_list]
+    max_accs = [max(s.logistic_acc, s.rf_acc, s.xgb_acc) for s in stats_list]
+    lifts = [max(s.logistic_acc, s.rf_acc, s.xgb_acc) - s.baseline_acc for s in stats_list]
     
-    for s in stats_list:
-        baseline = s.baseline_acc
-        best_model = max(s.logistic_acc, s.rf_acc, s.xgb_acc)
-        spread = best_model - baseline
-        
-        if spread > 0.3 and s.logistic_acc > baseline + 0.2:
-            categories['very_easy'].append(s)
-        elif spread > 0.15:
-            categories['easy'].append(s)
-        elif spread > 0.05:
-            categories['medium'].append(s)
-        else:
-            categories['hard'].append(s)
+    # === DATASET SIZE DISTRIBUTIONS ===
+    print("\n" + "-"*50)
+    print("N SAMPLES (total)")
+    print("-"*50)
+    print_distribution(n_samples_list, "n_samples", is_int=True)
+    
+    print("\n" + "-"*50)
+    print("N TRAIN")
+    print("-"*50)
+    print_distribution(n_train_list, "n_train", is_int=True)
+    
+    print("\n" + "-"*50)
+    print("N TEST")
+    print("-"*50)
+    print_distribution(n_test_list, "n_test", is_int=True)
+    
+    print("\n" + "-"*50)
+    print("N FEATURES")
+    print("-"*50)
+    print_distribution(n_features_list, "n_features", is_int=True)
+    
+    print("\n" + "-"*50)
+    print("N CLASSES")
+    print("-"*50)
+    n_class_bins = min(10, max(n_classes_list) - min(n_classes_list) + 1)
+    print_distribution(n_classes_list, "n_classes", is_int=True, bins=max(1, n_class_bins))
+    
+    # === ACCURACY DISTRIBUTIONS ===
+    print("\n" + "-"*50)
+    print("BASELINE ACCURACY (test set)")
+    print("-"*50)
+    print_distribution(baselines, "baseline")
+    
+    print("\n" + "-"*50)
+    print("LOGISTIC REGRESSION ACCURACY (test set)")
+    print("-"*50)
+    print_distribution(logistic_accs, "logistic")
+    
+    print("\n" + "-"*50)
+    print("XGBOOST ACCURACY (test set)")
+    print("-"*50)
+    print_distribution(xgb_accs, "xgb")
+    
+    print("\n" + "-"*50)
+    print("RANDOM FOREST ACCURACY (test set)")
+    print("-"*50)
+    print_distribution(rf_accs, "rf")
+    
+    print("\n" + "-"*50)
+    print("MAX MODEL ACCURACY (test set)")
+    print("-"*50)
+    print_distribution(max_accs, "max_acc")
+    
+    print("\n" + "-"*50)
+    print("LIFT OVER BASELINE (max_acc - baseline)")
+    print("-"*50)
+    print_distribution(lifts, "lift")
+    
+    # === SAMPLE OF ALL DATASETS (sorted by different criteria) ===
+    print("\n" + "-"*50)
+    print("SAMPLE: 10 datasets with LOWEST baseline")
+    print("-"*50)
+    sorted_by_baseline = sorted(stats_list, key=lambda s: s.baseline_acc)
+    print(f"  {'ID':>4} {'Train':>6} {'Test':>5} {'Feat':>5} {'Class':>5} {'Base':>6} {'XGB':>6} {'Lift':>6}")
+    for s in sorted_by_baseline[:10]:
+        lift = max(s.logistic_acc, s.rf_acc, s.xgb_acc) - s.baseline_acc
+        print(f"  {s.dataset_id:4d} {s.n_train:6d} {s.n_test:5d} {s.n_features:5d} {s.n_classes:5d} "
+              f"{s.baseline_acc:6.3f} {s.xgb_acc:6.3f} {lift:+6.3f}")
+    
+    print("\n" + "-"*50)
+    print("SAMPLE: 10 datasets with HIGHEST baseline")
+    print("-"*50)
+    print(f"  {'ID':>4} {'Train':>6} {'Test':>5} {'Feat':>5} {'Class':>5} {'Base':>6} {'XGB':>6} {'Lift':>6}")
+    for s in sorted_by_baseline[-10:]:
+        lift = max(s.logistic_acc, s.rf_acc, s.xgb_acc) - s.baseline_acc
+        print(f"  {s.dataset_id:4d} {s.n_train:6d} {s.n_test:5d} {s.n_features:5d} {s.n_classes:5d} "
+              f"{s.baseline_acc:6.3f} {s.xgb_acc:6.3f} {lift:+6.3f}")
+    
+    print("\n" + "-"*50)
+    print("SAMPLE: 10 datasets with HIGHEST XGB accuracy")
+    print("-"*50)
+    sorted_by_xgb = sorted(stats_list, key=lambda s: s.xgb_acc, reverse=True)
+    print(f"  {'ID':>4} {'Train':>6} {'Test':>5} {'Feat':>5} {'Class':>5} {'Base':>6} {'XGB':>6} {'Lift':>6}")
+    for s in sorted_by_xgb[:10]:
+        lift = max(s.logistic_acc, s.rf_acc, s.xgb_acc) - s.baseline_acc
+        print(f"  {s.dataset_id:4d} {s.n_train:6d} {s.n_test:5d} {s.n_features:5d} {s.n_classes:5d} "
+              f"{s.baseline_acc:6.3f} {s.xgb_acc:6.3f} {lift:+6.3f}")
+    
+    print("\n" + "-"*50)
+    print("SAMPLE: 10 datasets with LOWEST XGB accuracy")
+    print("-"*50)
+    print(f"  {'ID':>4} {'Train':>6} {'Test':>5} {'Feat':>5} {'Class':>5} {'Base':>6} {'XGB':>6} {'Lift':>6}")
+    for s in sorted_by_xgb[-10:]:
+        lift = max(s.logistic_acc, s.rf_acc, s.xgb_acc) - s.baseline_acc
+        print(f"  {s.dataset_id:4d} {s.n_train:6d} {s.n_test:5d} {s.n_features:5d} {s.n_classes:5d} "
+              f"{s.baseline_acc:6.3f} {s.xgb_acc:6.3f} {lift:+6.3f}")
     
     total = len(stats_list)
-    print(f"\nDataset difficulty distribution (n={total}):")
-    for cat, items in categories.items():
-        pct = 100 * len(items) / total
-        bar = "█" * int(pct / 2)
-        print(f"  {cat:12s}: {len(items):3d} ({pct:5.1f}%) {bar}")
     
-    # Red flags
-    red_flags = []
-    
-    # Check if Logistic always wins (everything is linear)
-    logistic_wins = sum(1 for s in stats_list if s.logistic_acc >= s.xgb_acc and s.logistic_acc >= s.rf_acc)
-    if logistic_wins / total > 0.7:
-        red_flags.append(f"⚠️ Logistic wins {100*logistic_wins/total:.0f}% of time → too linear!")
-    
-    # Check if XGB always perfect
-    xgb_perfect = sum(1 for s in stats_list if s.xgb_acc > 0.95)
-    if xgb_perfect / total > 0.5:
-        red_flags.append(f"⚠️ XGB perfect {100*xgb_perfect/total:.0f}% of time → target too direct!")
-    
-    # Check if all models fail
-    all_fail = sum(1 for s in stats_list if max(s.logistic_acc, s.rf_acc, s.xgb_acc) - s.baseline_acc < 0.02)
-    if all_fail / total > 0.5:
-        red_flags.append(f"⚠️ All models fail {100*all_fail/total:.0f}% of time → too much noise!")
-    
-    if red_flags:
-        print("\n🚨 RED FLAGS:")
-        for flag in red_flags:
-            print(f"  {flag}")
-    else:
-        print("\n✅ No red flags detected!")
-    
+    # Return summary statistics for JSON output
     return {
-        'categories': {k: len(v) for k, v in categories.items()},
-        'red_flags': red_flags,
-        'logistic_win_rate': logistic_wins / total,
-        'xgb_perfect_rate': xgb_perfect / total,
-        'all_fail_rate': all_fail / total
+        'n_datasets': total,
+        'n_samples': {'min': min(n_samples_list), 'median': float(np.median(n_samples_list)), 'max': max(n_samples_list)},
+        'n_features': {'min': min(n_features_list), 'median': float(np.median(n_features_list)), 'max': max(n_features_list)},
+        'n_classes': {'min': min(n_classes_list), 'median': float(np.median(n_classes_list)), 'max': max(n_classes_list)},
+        'baseline_acc': {'min': min(baselines), 'median': float(np.median(baselines)), 'max': max(baselines)},
+        'xgb_acc': {'min': min(xgb_accs), 'median': float(np.median(xgb_accs)), 'max': max(xgb_accs)},
+        'logistic_acc': {'min': min(logistic_accs), 'median': float(np.median(logistic_accs)), 'max': max(logistic_accs)},
+        'max_acc': {'min': min(max_accs), 'median': float(np.median(max_accs)), 'max': max(max_accs)},
+        'lift': {'min': min(lifts), 'median': float(np.median(lifts)), 'max': max(lifts)}
     }
 
 
@@ -347,7 +441,7 @@ def sanity_check_2_model_rankings(stats_list: List[DatasetStats]) -> Dict[str, A
     print(f"\nModel ranking distribution (n={total}):")
     for name, count in ranking_counts.items():
         pct = 100 * count / total
-        bar = "█" * int(pct / 2)
+        bar = "#" * int(pct / 2)
         print(f"  {name:15s}: {count:3d} ({pct:5.1f}%) {bar}")
     
     # Check for dominance
@@ -355,9 +449,9 @@ def sanity_check_2_model_rankings(stats_list: List[DatasetStats]) -> Dict[str, A
     dominance_rate = max_dominance / total
     
     if dominance_rate > 0.6:
-        print(f"\n⚠️ Warning: One model dominates {100*dominance_rate:.0f}% of datasets")
+        print(f"\n[WARNING] One model dominates {100*dominance_rate:.0f}% of datasets")
     else:
-        print(f"\n✅ Good variability: No model dominates > 60%")
+        print(f"\n[OK] Good variability: No model dominates > 60%")
     
     return {
         'rankings': ranking_counts,
@@ -406,7 +500,7 @@ def sanity_check_3_difficulty_spectrum(stats_list: List[DatasetStats]) -> Dict[s
     print(f"\nXGB Accuracy Histogram:")
     for i in range(len(bins)-1):
         pct = 100 * hist[i] / len(xgb_accs)
-        bar = "█" * int(pct / 2)
+        bar = "#" * int(pct / 2)
         print(f"  [{bins[i]:.1f}-{bins[i+1]:.1f}): {hist[i]:3d} ({pct:5.1f}%) {bar}")
     
     return {
@@ -446,11 +540,11 @@ def sanity_check_4_feature_relevance(stats_list: List[DatasetStats]) -> Dict[str
     
     # Red flags
     if np.mean(zero_importance_pcts) < 10:
-        print("\n⚠️ Warning: Almost all features are relevant → graph too dense?")
+        print("\n[WARNING] Almost all features are relevant -> graph too dense?")
     elif np.mean(top_importances) > 0.7:
-        print("\n⚠️ Warning: Single feature dominates → possible structural bug")
+        print("\n[WARNING] Single feature dominates -> possible structural bug")
     else:
-        print("\n✅ Feature relevance distribution looks reasonable")
+        print("\n[OK] Feature relevance distribution looks reasonable")
     
     return {
         'zero_importance_pct_mean': np.mean(zero_importance_pcts),
@@ -510,9 +604,9 @@ def sanity_check_5_label_permutation(datasets: List[SyntheticDataset], n_test: i
         print(f"\nAverage drop after permutation: {avg_drop:+.3f}")
         
         if avg_drop < 0.05:
-            print("⚠️ WARNING: Labels don't matter much → possible leakage!")
+            print("[WARNING] Labels don't matter much -> possible leakage!")
         else:
-            print("✅ Labels matter significantly → no obvious leakage")
+            print("[OK] Labels matter significantly -> no obvious leakage")
     
     return {'results': results, 'avg_drop': np.mean([r['drop'] for r in results]) if results else 0}
 
@@ -548,7 +642,7 @@ def sanity_check_6_data_size_robustness(datasets: List[SyntheticDataset], n_test
             
             all_curves.append(curve)
             improvement = curve[-1] - curve[0]
-            print(f"  Dataset {i}: 20%={curve[0]:.3f}, 50%={curve[1]:.3f}, 100%={curve[2]:.3f}, Δ={improvement:+.3f}")
+            print(f"  Dataset {i}: 20%={curve[0]:.3f}, 50%={curve[1]:.3f}, 100%={curve[2]:.3f}, Delta={improvement:+.3f}")
             
         except Exception as e:
             print(f"  Dataset {i}: Error - {e}")
@@ -561,11 +655,11 @@ def sanity_check_6_data_size_robustness(datasets: List[SyntheticDataset], n_test
         
         avg_improvement = avg_curve[-1] - avg_curve[0]
         if avg_improvement < 0.02:
-            print("\n⚠️ Warning: No improvement with more data → weak signal?")
+            print("\n[WARNING] No improvement with more data -> weak signal?")
         elif avg_improvement > 0.3:
-            print("\n⚠️ Warning: Too much improvement → target too direct?")
+            print("\n[WARNING] Too much improvement -> target too direct?")
         else:
-            print("\n✅ Reasonable learning curve")
+            print("\n[OK] Reasonable learning curve")
     
     return {'curves': all_curves, 'fractions': fractions}
 
@@ -625,9 +719,9 @@ def sanity_check_7_mutual_information(datasets: List[SyntheticDataset], n_test: 
         print(f"\nAverage: High MI features={avg_high:.1f}, Low MI features={avg_low:.1f}")
         
         if avg_low < 2:
-            print("⚠️ Warning: Almost no irrelevant features")
+            print("[WARNING] Almost no irrelevant features")
         else:
-            print("✅ Good mix of relevant and irrelevant features")
+            print("[OK] Good mix of relevant and irrelevant features")
     
     return {'stats': all_mi_stats}
 
@@ -703,9 +797,9 @@ def sanity_check_8_invariances(datasets: List[SyntheticDataset], n_test: int = 5
         print(f"  Rescaling: {np.mean(scale_diffs):.4f}")
         
         if max(np.mean(col_diffs), np.mean(row_diffs)) > 0.05:
-            print("\n⚠️ Warning: Results depend on ordering → possible artifacts")
+            print("\n[WARNING] Results depend on ordering -> possible artifacts")
         else:
-            print("\n✅ Results are invariant to permutations")
+            print("\n[OK] Results are invariant to permutations")
     
     return {'results': results}
 
@@ -730,8 +824,11 @@ def generate_dataset_stats(dataset: SyntheticDataset, dataset_id: int) -> Datase
     missing_pct = 100 * np.isnan(dataset.X).mean() if np.any(np.isnan(dataset.X)) else 0
     
     # Train models
+    n_train = n_test = 0
     try:
         X_train, X_test, y_train, y_test = prepare_data(dataset)
+        n_train = len(y_train)
+        n_test = len(y_test)
         model_results = train_models(X_train, X_test, y_train, y_test, n_classes)
         
         baseline_acc = model_results['baseline']['accuracy']
@@ -770,15 +867,17 @@ def generate_dataset_stats(dataset: SyntheticDataset, dataset_id: int) -> Datase
         n_features=n_features,
         n_classes=n_classes,
         train_ratio=train_ratio,
+        baseline_acc=baseline_acc,
+        logistic_acc=logistic_acc,
+        rf_acc=rf_acc,
+        xgb_acc=xgb_acc,
+        n_train=n_train,
+        n_test=n_test,
         n_categorical=n_categorical,
         n_continuous=n_continuous,
         n_relevant=n_relevant,
         n_irrelevant=n_irrelevant,
         missing_pct=missing_pct,
-        baseline_acc=baseline_acc,
-        logistic_acc=logistic_acc,
-        rf_acc=rf_acc,
-        xgb_acc=xgb_acc,
         baseline_auc=baseline_auc,
         logistic_auc=logistic_auc,
         rf_auc=rf_auc,
@@ -844,10 +943,13 @@ def run_all_checks(n_datasets: int = 100, seed: int = 42, save_results: bool = T
     print("="*70)
     
     # Configure prior for classification only
+    # Note: n_features now uses Beta distribution scaled to n_features_range
     prior = PriorConfig(
         prob_classification=1.0,  # Only classification
-        n_rows_range=(100, 5000),  # Reasonable sizes for testing
-        n_features_range=(5, 50),
+        n_rows_range=(100, 2048),  # Per paper: uniformly up to 2048
+        n_features_range=(5, 100),  # Beta will scale to this range
+        n_features_beta_a=0.95,  # Per paper
+        n_features_beta_b=8.0,   # Per paper
     )
     
     # Generate datasets
@@ -896,11 +998,11 @@ def run_all_checks(n_datasets: int = 100, seed: int = 42, save_results: bool = T
     all_red_flags = results['check_1_baseline'].get('red_flags', [])
     
     if all_red_flags:
-        print("\n🚨 RED FLAGS FOUND:")
+        print("\n[!] RED FLAGS FOUND:")
         for flag in all_red_flags:
             print(f"  {flag}")
     else:
-        print("\n✅ ALL SANITY CHECKS PASSED!")
+        print("\n[OK] ALL SANITY CHECKS PASSED!")
     
     print("\nKey metrics:")
     print(f"  - XGB accuracy range: [{results['check_3_difficulty']['xgb_percentiles'][10]:.2f}, "

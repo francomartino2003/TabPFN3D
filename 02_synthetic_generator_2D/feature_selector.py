@@ -118,7 +118,12 @@ class FeatureSelector:
         
         # Determine if classification and number of classes
         is_classification = self.config.is_classification
-        n_classes = self.config.n_classes if is_classification else 0
+        
+        # For classification, get n_classes from the actual categorical node
+        if is_classification:
+            n_classes = self._get_n_classes_for_target(target_node)
+        else:
+            n_classes = 0
         
         return FeatureSelection(
             feature_nodes=feature_nodes,
@@ -134,8 +139,13 @@ class FeatureSelector:
         """
         Select the target node.
         
-        Target should be from the main subgraph (subgraph 0) and
-        preferably a "downstream" node (many ancestors).
+        Per paper:
+        - "For classification labels, we select a random categorical feature 
+           that contains up to 10 classes"
+        - "To generate target labels for regression tasks, we select a randomly 
+           chosen continuous feature without post-processing"
+        
+        Target should be from the main subgraph (subgraph 0).
         """
         # Get nodes from main subgraph
         main_subgraph_nodes = self.dag.get_subgraph_nodes(0)
@@ -144,9 +154,40 @@ class FeatureSelector:
             # Fallback: use any node
             main_subgraph_nodes = list(self.dag.nodes.keys())
         
-        # Prefer nodes with many ancestors (they capture more complexity)
+        # Find categorical nodes (nodes with discretization transformation)
+        categorical_nodes = set()
+        for (parent_id, child_id), transform in self.transformations.items():
+            if isinstance(transform, DiscretizationTransformation):
+                if child_id in main_subgraph_nodes:
+                    categorical_nodes.add(child_id)
+        
+        # Find continuous nodes (nodes without discretization)
+        continuous_nodes = [nid for nid in main_subgraph_nodes 
+                           if nid not in categorical_nodes]
+        
+        if self.config.is_classification:
+            # For classification: select a categorical node (per paper)
+            # Prefer categorical nodes with many ancestors for complexity
+            if categorical_nodes:
+                candidates = list(categorical_nodes)
+                # Weight by number of ancestors (more ancestors = more complex)
+                weights = []
+                for nid in candidates:
+                    n_ancestors = len(self.dag.get_ancestors(nid))
+                    weights.append(n_ancestors + 1)  # +1 to avoid zero weights
+                weights = np.array(weights, dtype=float)
+                weights = weights / weights.sum()
+                return self.rng.choice(candidates, p=weights)
+            else:
+                # Fallback: will need to discretize a continuous node
+                # This shouldn't happen often if we have discretization transforms
+                pass
+        
+        # For regression OR fallback: prefer nodes with many ancestors
+        candidates = continuous_nodes if continuous_nodes else main_subgraph_nodes
+        
         nodes_with_ancestors = []
-        for node_id in main_subgraph_nodes:
+        for node_id in candidates:
             n_ancestors = len(self.dag.get_ancestors(node_id))
             nodes_with_ancestors.append((node_id, n_ancestors))
         
@@ -156,6 +197,9 @@ class FeatureSelector:
         # Sample from top candidates (with some randomness)
         n_candidates = min(5, len(nodes_with_ancestors))
         top_candidates = [n[0] for n in nodes_with_ancestors[:n_candidates]]
+        
+        if not top_candidates:
+            return main_subgraph_nodes[0]
         
         # Weight by ancestor count
         weights = np.array([nodes_with_ancestors[i][1] + 1 for i in range(n_candidates)])
@@ -205,9 +249,13 @@ class FeatureSelector:
         relevant_selected = set()
         irrelevant_selected = set()
         
-        # Exclude target from selection
-        relevant_candidates = [n for n in relevant_candidates if n != target_node]
-        irrelevant_candidates = [n for n in irrelevant_candidates if n != target_node]
+        # Exclude target AND its direct parents from selection
+        # (direct parents can leak target info via transformations)
+        target_parents = set(self.dag.nodes[target_node].parents)
+        excluded_nodes = {target_node} | target_parents
+        
+        relevant_candidates = [n for n in relevant_candidates if n not in excluded_nodes]
+        irrelevant_candidates = [n for n in irrelevant_candidates if n not in excluded_nodes]
         
         # Determine how many from each category
         n_irrelevant = min(
@@ -222,7 +270,7 @@ class FeatureSelector:
             same_subgraph = [
                 n for n in self.dag.nodes.keys()
                 if self.dag.nodes[n].subgraph_id == target_subgraph
-                and n != target_node
+                and n not in excluded_nodes
                 and n not in relevant_candidates
             ]
             relevant_candidates = relevant_candidates + same_subgraph
@@ -253,7 +301,7 @@ class FeatureSelector:
         if remaining_needed > 0:
             available = [
                 n for n in self.dag.nodes.keys()
-                if n != target_node and n not in selected_features
+                if n not in excluded_nodes and n not in selected_features
             ]
             if available:
                 additional = self.rng.choice(
@@ -295,6 +343,22 @@ class FeatureSelector:
                 feature_types[node_id] = 'continuous'
         
         return feature_types
+    
+    def _get_n_classes_for_target(self, target_node: int) -> int:
+        """
+        Get the number of classes for a classification target.
+        
+        If the target is a categorical node (has discretization transform),
+        return the number of categories. Otherwise, use config.n_classes.
+        """
+        # Find if target has a discretization transformation
+        for (parent_id, child_id), transform in self.transformations.items():
+            if child_id == target_node and isinstance(transform, DiscretizationTransformation):
+                # Return the number of prototypes (= number of categories)
+                return len(transform.prototypes)
+        
+        # Fallback to config (will need to discretize later)
+        return self.config.n_classes
 
 
 class TableBuilder:
@@ -357,27 +421,83 @@ class TableBuilder:
             X[:, i] = values
         
         # Build y (target)
-        y = propagated.get_node_value(self.selection.target_node)
+        target_node = self.selection.target_node
         
-        # For classification, discretize target into classes
+        # For classification, try to use categorical indices from discretization
         if self.selection.is_classification:
-            y = self._discretize_target(y)
+            y = self._get_classification_target(propagated, target_node)
+        else:
+            # For regression, use continuous values
+            y = propagated.get_node_value(target_node)
         
         return X, y
     
+    def _get_classification_target(
+        self, 
+        propagated: PropagatedValues, 
+        target_node: int
+    ) -> np.ndarray:
+        """
+        Get classification target labels.
+        
+        Per paper: "For classification labels, we select a random categorical 
+        feature that contains up to 10 classes"
+        
+        If the target is a categorical node, use its category indices.
+        Otherwise, fall back to quantile-based discretization.
+        
+        Always validates that classes are balanced enough for train/test split.
+        """
+        y = propagated.get_node_value(target_node)
+        n_samples = len(y)
+        min_samples_per_class = 2  # Minimum for stratified split
+        
+        # Check if target has a discretization transformation
+        for (parent_id, child_id), transform in self.transformations.items():
+            if child_id == target_node and isinstance(transform, DiscretizationTransformation):
+                # Get parent values and compute category indices
+                if parent_id in propagated.values:
+                    parent_vals = propagated.values[parent_id].reshape(-1, 1)
+                    y_cat = transform.get_category_indices(parent_vals).astype(float)
+                    
+                    # Verify all classes have enough samples
+                    unique, counts = np.unique(y_cat, return_counts=True)
+                    if len(unique) >= 2 and np.all(counts >= min_samples_per_class):
+                        return y_cat
+                    # Otherwise fall through to quantile-based
+        
+        # Fallback: quantile-based discretization (always balanced)
+        return self._discretize_target(y)
+    
     def _discretize_target(self, y: np.ndarray) -> np.ndarray:
         """
-        Convert continuous target to discrete classes.
+        Convert continuous target to discrete classes (fallback method).
         
-        Uses quantile-based discretization.
+        Uses quantile-based discretization for balanced classes.
         """
         n_classes = self.selection.n_classes
+        n_samples = len(y)
         
-        # Quantile-based discretization
+        # Ensure we don't have more classes than we can support (min 2 samples per class for stratification)
+        n_classes = min(n_classes, n_samples // 2)
+        n_classes = max(2, n_classes)
+        
+        # Quantile-based discretization for balanced classes
         quantiles = np.linspace(0, 100, n_classes + 1)
         thresholds = np.percentile(y, quantiles[1:-1])
         
+        # Remove duplicate thresholds (can happen with repeated values)
+        thresholds = np.unique(thresholds)
+        
         y_discrete = np.digitize(y, thresholds)
+        
+        # If we ended up with fewer classes than desired, that's OK
+        # But ensure we have at least 2 classes
+        unique_classes = np.unique(y_discrete)
+        if len(unique_classes) < 2:
+            # Fallback: just split in half
+            median = np.median(y)
+            y_discrete = (y > median).astype(int)
         
         return y_discrete
     

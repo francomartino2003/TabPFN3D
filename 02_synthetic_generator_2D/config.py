@@ -23,13 +23,19 @@ class PriorConfig:
     """
     
     # === Size parameters ===
-    # Number of rows (samples) range
-    n_rows_range: Tuple[int, int] = (50, 10000)
-    n_rows_log_uniform: bool = True  # If True, sample log-uniformly
+    # Number of rows (samples) range - sampled uniformly up to 2048 per paper
+    n_rows_range: Tuple[int, int] = (50, 2048)
+    n_rows_log_uniform: bool = False  # Paper samples uniformly, not log-uniform
     
-    # Number of features (columns) range
-    n_features_range: Tuple[int, int] = (2, 100)
-    n_features_log_uniform: bool = True
+    # Number of features - Beta(0.95, 8.0) scaled to [1, 160] per paper
+    # "We sample the number of features using a beta distribution (k=0.95, b=8.0) 
+    # that we linearly scale to the range 1-160"
+    n_features_beta_a: float = 0.95
+    n_features_beta_b: float = 8.0
+    n_features_range: Tuple[int, int] = (1, 160)
+    
+    # Maximum total cells per table (paper: 75,000)
+    max_cells: int = 75000
     
     # === Train/Test Split parameters ===
     # Based on real dataset distributions (UCR/UEA archive analysis)
@@ -41,13 +47,16 @@ class PriorConfig:
     
     # === Graph structure parameters ===
     # Number of nodes in the DAG (log-uniform as per paper)
-    n_nodes_range: Tuple[int, int] = (5, 200)
+    # Larger graphs = more layers of transformation = more complex relationships
+    # More nodes = more latent variables = deeper causal structure
+    n_nodes_range: Tuple[int, int] = (50, 600)
     n_nodes_log_uniform: bool = True
     
-    # Graph density parameter (Gamma distribution as per paper)
-    # Higher values = denser graphs
-    density_gamma_shape: float = 2.0
-    density_gamma_scale: float = 1.0
+    # Redirection probability P (Gamma distribution as per paper)
+    # "The redirection probability P is sampled from a gamma distribution, P ~ Γ(α, β)"
+    # Smaller P = denser graphs with more edges on average
+    redirection_gamma_shape: float = 2.0  # α parameter
+    redirection_gamma_rate: float = 5.0   # β parameter
     
     # Probability of creating disconnected subgraphs (for irrelevant features)
     prob_disconnected_subgraph: float = 0.3
@@ -64,24 +73,41 @@ class PriorConfig:
     nn_hidden_range: Tuple[int, int] = (1, 5)  # Number of hidden "layers"
     nn_width_range: Tuple[int, int] = (1, 10)  # Width of hidden layers
     
-    # Available activation functions (as per paper)
+    # Available activation functions (per paper):
+    # "identity, logarithm, sigmoid, absolute value, sine, hyperbolic tangent, 
+    # rank operation, squaring, power functions, smooth ReLU, step function 
+    # and modulo operation"
     activations: List[str] = field(default_factory=lambda: [
-        'identity', 'log', 'sigmoid', 'tanh', 'sin', 'cos',
-        'abs', 'square', 'cube', 'sqrt', 'relu', 'softplus',
-        'step', 'mod', 'rank', 'exp_neg', 'gaussian'
+        'identity', 'log', 'sigmoid', 'tanh', 'sin',
+        'abs', 'square', 'power', 'softplus', 'step', 'mod', 'rank'
     ])
     
     # Discretization parameters
-    n_categories_range: Tuple[int, int] = (2, 10)
+    # "We sample the number of categories K from a rounded gamma distribution 
+    # with an offset of 2 to yield a minimum number of classes of 2"
+    n_categories_gamma_shape: float = 2.0
+    n_categories_gamma_scale: float = 2.0
+    n_categories_min: int = 2
+    n_categories_max: int = 10  # Paper limits to 10 classes
     
     # Decision tree parameters
     tree_depth_range: Tuple[int, int] = (1, 5)
     tree_n_splits_range: Tuple[int, int] = (1, 10)
     
     # === Noise parameters ===
+    # Per paper: "1. Normal  2. Uniform  3. Mixed" (no laplace)
+    # "Mixed: for each root node, we randomly select either normal or uniform"
     noise_types: List[str] = field(default_factory=lambda: [
-        'normal', 'uniform', 'laplace', 'mixture'
+        'normal', 'uniform', 'mixed'
     ])
+    
+    # Initialization noise parameters (per paper these are hyperparameters)
+    # σε for Normal: ε ~ N(0, σε²)
+    init_sigma_range: Tuple[float, float] = (0.5, 2.0)
+    # a for Uniform: ε ~ U(−a, a)
+    init_a_range: Tuple[float, float] = (1.0, 3.0)
+    
+    # Edge noise scale (Gaussian noise added at each edge)
     noise_scale_range: Tuple[float, float] = (0.01, 1.0)
     noise_scale_log_uniform: bool = True
     
@@ -145,7 +171,7 @@ class DatasetConfig:
     
     # Graph structure
     n_nodes: int
-    density: float
+    redirection_prob: float  # P in the paper - smaller = denser graphs
     n_disconnected_subgraphs: int
     
     # Transformation settings
@@ -161,6 +187,8 @@ class DatasetConfig:
     noise_type: str
     noise_scale: float
     edge_noise_prob: float
+    init_sigma: float  # σε for initialization noise N(0, σε²)
+    init_a: float      # a for initialization noise U(-a, a)
     
     # Row dependency
     has_row_dependency: bool
@@ -202,16 +230,23 @@ class DatasetConfig:
             """Sample from log-uniform distribution."""
             return np.exp(rng.uniform(np.log(low), np.log(high)))
         
-        # Sample size
+        # Sample number of features using Beta distribution (per paper)
+        # Beta(0.95, 8.0) scaled to [1, 160]
+        beta_sample = rng.beta(prior.n_features_beta_a, prior.n_features_beta_b)
+        n_features = int(beta_sample * (prior.n_features_range[1] - prior.n_features_range[0]) 
+                        + prior.n_features_range[0])
+        n_features = max(1, n_features)
+        
+        # Sample number of rows uniformly (per paper)
         if prior.n_rows_log_uniform:
             n_rows = int(log_uniform(*prior.n_rows_range))
         else:
-            n_rows = rng.integers(*prior.n_rows_range)
-            
-        if prior.n_features_log_uniform:
-            n_features = int(log_uniform(*prior.n_features_range))
-        else:
-            n_features = rng.integers(*prior.n_features_range)
+            n_rows = rng.integers(prior.n_rows_range[0], prior.n_rows_range[1] + 1)
+        
+        # Enforce max_cells constraint (paper: 75,000 cells)
+        if n_rows * n_features > prior.max_cells:
+            n_rows = prior.max_cells // n_features
+            n_rows = max(prior.n_rows_range[0], n_rows)
         
         # Sample graph structure
         if prior.n_nodes_log_uniform:
@@ -222,7 +257,12 @@ class DatasetConfig:
         # Ensure we have at least n_features + 1 nodes (for features + target)
         n_nodes = max(n_nodes, n_features + 2)
         
-        density = rng.gamma(prior.density_gamma_shape, prior.density_gamma_scale)
+        # Redirection probability P ~ Gamma(α, β) where β is rate (not scale)
+        # Using scale = 1/rate for numpy's gamma (which uses scale)
+        redirection_prob = rng.gamma(prior.redirection_gamma_shape, 
+                                      1.0 / prior.redirection_gamma_rate)
+        # Clip to [0, 1] since it's a probability
+        redirection_prob = min(1.0, redirection_prob)
         
         # Disconnected subgraphs
         has_disconnected = rng.random() < prior.prob_disconnected_subgraph
@@ -244,8 +284,13 @@ class DatasetConfig:
         nn_hidden = rng.integers(*prior.nn_hidden_range)
         nn_width = rng.integers(*prior.nn_width_range)
         
-        # Discretization
-        n_categories = rng.integers(*prior.n_categories_range)
+        # Discretization - Gamma distribution with offset of 2 (per paper)
+        # But also limit based on n_rows to ensure at least 10 samples per category
+        n_categories = int(rng.gamma(prior.n_categories_gamma_shape, 
+                                      prior.n_categories_gamma_scale)) + prior.n_categories_min
+        n_categories = min(n_categories, prior.n_categories_max)
+        max_categories_for_samples = max(2, n_rows // 10)  # At least 10 samples per category
+        n_categories = min(n_categories, max_categories_for_samples)
         
         # Tree parameters
         tree_depth = rng.integers(*prior.tree_depth_range)
@@ -257,6 +302,10 @@ class DatasetConfig:
             noise_scale = log_uniform(*prior.noise_scale_range)
         else:
             noise_scale = rng.uniform(*prior.noise_scale_range)
+        
+        # Initialization noise hyperparameters (per paper)
+        init_sigma = rng.uniform(*prior.init_sigma_range)
+        init_a = rng.uniform(*prior.init_a_range)
         
         # Row dependency
         has_row_dependency = rng.random() < prior.prob_row_dependency
@@ -274,7 +323,13 @@ class DatasetConfig:
         
         # Target type
         is_classification = rng.random() < prior.prob_classification
-        n_classes = rng.integers(2, prior.max_classes + 1) if is_classification else 0
+        if is_classification:
+            # Limit n_classes to ensure at least 10 samples per class
+            max_classes_for_samples = max(2, n_rows // 10)
+            max_classes = min(prior.max_classes, max_classes_for_samples)
+            n_classes = rng.integers(2, max_classes + 1)
+        else:
+            n_classes = 0
         
         # Train/Test split ratio
         # Use Beta distribution scaled to train_ratio_range for realistic distribution
@@ -288,7 +343,7 @@ class DatasetConfig:
             n_rows=n_rows,
             n_features=n_features,
             n_nodes=n_nodes,
-            density=density,
+            redirection_prob=redirection_prob,
             n_disconnected_subgraphs=n_disconnected,
             edge_transform_probs=edge_transform_probs,
             nn_hidden=nn_hidden,
@@ -300,6 +355,8 @@ class DatasetConfig:
             noise_type=noise_type,
             noise_scale=noise_scale,
             edge_noise_prob=prior.prob_edge_noise,
+            init_sigma=init_sigma,
+            init_a=init_a,
             has_row_dependency=has_row_dependency,
             n_prototypes=n_prototypes,
             prototype_noise_scale=prior.prototype_noise_scale,
@@ -321,7 +378,7 @@ class DatasetConfig:
             'n_rows': self.n_rows,
             'n_features': self.n_features,
             'n_nodes': self.n_nodes,
-            'density': self.density,
+            'redirection_prob': self.redirection_prob,
             'n_disconnected_subgraphs': self.n_disconnected_subgraphs,
             'edge_transform_probs': self.edge_transform_probs,
             'nn_hidden': self.nn_hidden,
@@ -333,6 +390,8 @@ class DatasetConfig:
             'noise_type': self.noise_type,
             'noise_scale': self.noise_scale,
             'edge_noise_prob': self.edge_noise_prob,
+            'init_sigma': self.init_sigma,
+            'init_a': self.init_a,
             'has_row_dependency': self.has_row_dependency,
             'n_prototypes': self.n_prototypes,
             'prototype_noise_scale': self.prototype_noise_scale,

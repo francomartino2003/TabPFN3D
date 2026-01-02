@@ -39,10 +39,13 @@ class Warper:
     """
     Applies non-linear warping to break simple relationships.
     
+    Per paper: "For some datasets, we use the Kumaraswamy feature warping, 
+    introducing nonlinear distortions to features"
+    
     Warping functions:
+    - Kumaraswamy (primary method from paper)
     - Power transforms
     - Smooth monotonic distortions
-    - Periodic small perturbations
     """
     
     def __init__(self, intensity: float, rng: np.random.Generator):
@@ -56,6 +59,25 @@ class Warper:
         self.intensity = intensity
         self.rng = rng
     
+    def kumaraswamy_warp(self, x: np.ndarray, a: float, b: float) -> np.ndarray:
+        """
+        Apply Kumaraswamy CDF warping.
+        
+        The Kumaraswamy distribution CDF is: F(x; a, b) = 1 - (1 - x^a)^b
+        This is a flexible family of distributions on [0, 1].
+        
+        Args:
+            x: Values normalized to [0, 1]
+            a: First shape parameter (> 0)
+            b: Second shape parameter (> 0)
+            
+        Returns:
+            Warped values in [0, 1]
+        """
+        # Clip to avoid numerical issues
+        x = np.clip(x, 1e-10, 1 - 1e-10)
+        return 1 - np.power(1 - np.power(x, a), b)
+    
     def warp_column(self, x: np.ndarray) -> np.ndarray:
         """
         Apply warping to a single column.
@@ -66,9 +88,10 @@ class Warper:
         Returns:
             Warped values
         """
-        # Choose warping type
+        # Choose warping type - Kumaraswamy is primary (per paper)
         warp_type = self.rng.choice([
-            'power', 'sinh', 'periodic', 'rank_based', 'sigmoid_stretch'
+            'kumaraswamy', 'kumaraswamy', 'kumaraswamy',  # Higher probability
+            'power', 'sinh', 'rank_based'
         ])
         
         # Normalize to [0, 1] first
@@ -78,12 +101,19 @@ class Warper:
         else:
             return x
         
-        if warp_type == 'power':
+        if warp_type == 'kumaraswamy':
+            # Kumaraswamy warping (per paper)
+            # Sample shape parameters - intensity affects the deviation from identity
+            a = self.rng.uniform(0.5, 2.0 + self.intensity)
+            b = self.rng.uniform(0.5, 2.0 + self.intensity)
+            x_warped = self.kumaraswamy_warp(x_norm, a, b)
+            
+        elif warp_type == 'power':
             # Power transform
             power = self.rng.uniform(0.5, 2.0)
             if self.rng.random() < 0.5:
                 power = 1 / power
-            x_warped = np.power(x_norm, power)
+            x_warped = np.power(x_norm + 1e-10, power)
             
         elif warp_type == 'sinh':
             # Sinh-arcsinh transform (flexible skewness/kurtosis)
@@ -93,25 +123,13 @@ class Warper:
             x_warped = np.sinh(tail * np.arcsinh(x_centered) - skew)
             x_warped = (x_warped - x_warped.min()) / (x_warped.max() - x_warped.min() + 1e-10)
             
-        elif warp_type == 'periodic':
-            # Add periodic perturbation
-            freq = self.rng.uniform(1, 5)
-            amp = 0.1 * self.intensity
-            x_warped = x_norm + amp * np.sin(freq * np.pi * x_norm)
-            x_warped = np.clip(x_warped, 0, 1)
-            
-        elif warp_type == 'rank_based':
+        else:  # rank_based
             # Rank-based warping
             ranks = x.argsort().argsort()
             x_warped = ranks / (len(x) - 1 + 1e-10)
             # Add small noise to break ties
             x_warped += self.rng.normal(0, 0.01 * self.intensity, size=x_warped.shape)
-            
-        else:  # sigmoid_stretch
-            # Sigmoid-based stretch
-            k = self.rng.uniform(2, 10)
-            mid = self.rng.uniform(0.3, 0.7)
-            x_warped = 1 / (1 + np.exp(-k * (x_norm - mid)))
+            x_warped = np.clip(x_warped, 0, 1)
         
         # Scale back to original range (approximately)
         return x_warped * (x_max - x_min) + x_min

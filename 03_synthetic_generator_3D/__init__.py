@@ -1,50 +1,37 @@
 """
-Synthetic Generator 3D - Time Series Classification Datasets
+3D Synthetic Dataset Generator with Temporal Dependencies.
 
-This module generates synthetic time series classification datasets
-by extending the 2D TabPFN methodology to temporal data.
+Generates classification/regression datasets with shape (n_samples, n_features, t_timesteps).
 
-Key differences from 2D:
-- Input: (n_samples, n_features, n_timesteps) instead of (n_samples, n_features)
-- DAG is "unrolled" across time with temporal connections
-- Features are extracted as contiguous time windows
-- Target is from a specific timestep (before/within/after feature window)
+Key features:
+- Temporal dependencies through state (memory) inputs
+- Time-dependent inputs with various activation functions
+- Three sampling modes: IID, sliding window, mixed
+- Target at different time offsets (within sequence, future prediction, etc.)
 
-Main components:
-- config: PriorConfig3D, DatasetConfig3D
-- temporal_dag_builder: Constructs unrolled temporal DAG
-- row_generator_3d: Propagates noise through temporal DAG
-- feature_selector_3d: Selects features and target across time
-- generator: Main SyntheticDatasetGenerator3D class
+Usage:
+    from generator import SyntheticDatasetGenerator3D, generate_3d_dataset
+    
+    # Quick generation
+    dataset = generate_3d_dataset(seed=42)
+    X, y = dataset.X, dataset.y  # (n, m, t), (n,)
+    
+    # Custom configuration
+    from config import PriorConfig3D
+    prior = PriorConfig3D(max_features=10, prob_classification=1.0)
+    generator = SyntheticDatasetGenerator3D(prior=prior, seed=42)
+    dataset = generator.generate()
 """
 
-try:
-    from .config import PriorConfig3D, DatasetConfig3D, TemporalConnectionConfig
-    from .temporal_dag_builder import TemporalDAGBuilder, TemporalDAG, TemporalNode
-    from .row_generator_3d import RowGenerator3D, TemporalPropagatedValues
-    from .feature_selector_3d import FeatureSelector3D, TemporalFeatureSelection, TableBuilder3D
-    from .generator import SyntheticDatasetGenerator3D, SyntheticDataset3D
-except ImportError:
-    from config import PriorConfig3D, DatasetConfig3D, TemporalConnectionConfig
-    from temporal_dag_builder import TemporalDAGBuilder, TemporalDAG, TemporalNode
-    from row_generator_3d import RowGenerator3D, TemporalPropagatedValues
-    from feature_selector_3d import FeatureSelector3D, TemporalFeatureSelection, TableBuilder3D
-    from generator import SyntheticDatasetGenerator3D, SyntheticDataset3D
+from .config import PriorConfig3D, DatasetConfig3D
+from .generator import SyntheticDatasetGenerator3D, SyntheticDataset3D, generate_3d_dataset
 
 __all__ = [
     'PriorConfig3D',
-    'DatasetConfig3D',
-    'TemporalConnectionConfig',
-    'TemporalDAGBuilder',
-    'TemporalDAG',
-    'TemporalNode',
-    'RowGenerator3D',
-    'TemporalPropagatedValues',
-    'FeatureSelector3D',
-    'TemporalFeatureSelection',
-    'TableBuilder3D',
+    'DatasetConfig3D', 
     'SyntheticDatasetGenerator3D',
     'SyntheticDataset3D',
+    'generate_3d_dataset'
 ]
 
-__version__ = '0.1.0'
+
