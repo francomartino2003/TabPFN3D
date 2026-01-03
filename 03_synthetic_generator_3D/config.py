@@ -60,7 +60,7 @@ class PriorConfig3D:
     t_subseq_log_uniform: bool = True
     
     # === Graph structure (similar to 2D) ===
-    n_nodes_range: Tuple[int, int] = (12, 90)
+    n_nodes_range: Tuple[int, int] = (12, 80)
     n_nodes_log_uniform: bool = True
     
     # Edge density (0.0 = minimal tree, 1.0 = complete DAG)
@@ -70,37 +70,43 @@ class PriorConfig3D:
     # Number of root/input nodes (nodes without parents)
     # For 3D, this is the total across noise + time + state inputs
     n_roots_range: Tuple[int, int] = (3, 30)
-    max_roots_fraction: float = 0.30  # Root nodes can't exceed this fraction of total nodes
+    max_roots_fraction: float = 0.50  # Root nodes can't exceed this fraction of total nodes
     
     # Disconnected subgraphs for irrelevant features
     prob_disconnected_subgraph: float = 0.3
     n_disconnected_subgraphs_range: Tuple[int, int] = (1, 5)
     
     # === Root input type distribution ===
-    # Proportions are sampled per-dataset using Dirichlet
-    # These alphas control the Dirichlet distribution
-    # Higher alpha = more concentrated around equal split
-    input_dirichlet_alpha: float = 1.0  # Symmetric Dirichlet parameter
-    
     # Minimum counts for each type
-    # REQUIREMENT: Can have 0 noise inputs, but must have:
-    #   - At least 1 time input (dependiente de t)
-    #   - At least 1 state input (memoria, se inicializa con ruido en t0)
-    #   - At least 1 noise input (ensures sample-to-sample variability)
-    min_noise_inputs: int = 1   # Must have at least 1 noise input
-    min_time_inputs: int = 1    # Must have at least 1 time input
-    min_state_inputs: int = 1   # Must have at least 1 state input
+    # - Time inputs: provide temporal structure
+    # - State inputs: provide memory and autocorrelation
+    # - Noise inputs: provide sample-to-sample variability (low count preferred)
+    min_noise_inputs: int = 0   # Noise is optional (state provides variability via t0 init)
+    min_time_inputs: int = 1    # At least 1 time input (linear always included)
+    min_state_inputs: int = 2   # States provide memory and autocorrelation
+    
+    # Probability of adding noise inputs (keep low for temporal coherence)
+    prob_noise_input: float = 0.3  # Low probability of adding noise roots
+    max_noise_inputs: int = 2      # Cap on noise inputs
+    
+    # === Noise behavior ===
+    # If true, noise only enters at t=0 and propagates as state
+    # This increases autocorrelation in generated series
+    noise_only_at_t0: bool = True
+    prob_noise_only_at_t0: float = 0.7  # 70% of datasets use t0-only noise
     
     # === Time-dependent input activations ===
-    # Available time functions (NO constant - causes flat lines)
+    # 'linear' is ALWAYS included as the first time input
+    # Additional time inputs sample from other activations WITHOUT repetition
     time_activations: List[str] = field(default_factory=lambda: [
-        'linear',        # u
+        'linear',        # u (ALWAYS first)
         'quadratic',     # u^2
         'cubic',         # u^3
         'tanh',          # tanh(β(2u-1))
         'sin_1', 'sin_2', 'sin_3', 'sin_5',  # sin(2πku)
         'cos_1', 'cos_2', 'cos_3', 'cos_5',  # cos(2πku)
-        'exp_decay'      # exp(-γu)
+        'exp_decay',     # exp(-γu)
+        'log'            # log(u + 0.1)
     ])
     
     # Parameters for time activations
@@ -151,7 +157,7 @@ class PriorConfig3D:
     
     # Edge noise
     prob_edge_noise: float = 0.3
-    noise_scale_range: Tuple[float, float] = (0.01, 0.5)
+    noise_scale_range: Tuple[float, float] = (0.01, 0.3)
     noise_scale_log_uniform: bool = True
     
     # === Sample generation mode ===
@@ -179,8 +185,8 @@ class PriorConfig3D:
     # offset < 0 means past (rare)
     target_offset_probs: Dict[str, float] = field(default_factory=lambda: {
         'within': 0.4,      # Target within the feature subsequence
-        'future_near': 0.35,  # 1-5 steps ahead
-        'future_far': 0.2,   # 6-20 steps ahead
+        'future_near': 0.4,  # 1-5 steps ahead
+        'future_far': 0.15,   # 6-20 steps ahead
         'past': 0.05         # Before subsequence (rare)
     })
     
@@ -191,7 +197,7 @@ class PriorConfig3D:
     prob_quantization: float = 0.2
     n_quantization_bins_range: Tuple[int, int] = (5, 20)
     
-    prob_missing_values: float = 0.2
+    prob_missing_values: float = 0.1
     missing_rate_range: Tuple[float, float] = (0.01, 0.15)
     
     # === Train/test split ===
@@ -240,6 +246,7 @@ class DatasetConfig3D:
     noise_type: str
     noise_scale: float
     edge_noise_prob: float
+    noise_only_at_t0: bool  # If True, noise only enters at t=0, then propagates as state
     init_sigma: float
     init_a: float
     
@@ -342,51 +349,61 @@ class DatasetConfig3D:
         max_roots_by_fraction = max(3, int(n_nodes * prior.max_roots_fraction))
         estimated_roots = min(estimated_roots, max_roots_by_fraction)
         
-        # Sample proportions using Dirichlet (per-dataset variability)
-        # Alpha = [noise, time, state]
-        alpha = np.array([1.0, 1.0, 1.0]) * prior.input_dirichlet_alpha
-        proportions = rng.dirichlet(alpha)
+        # === Distribute roots among time, state, and noise ===
+        # Strategy: time and state are primary, noise is optional with low probability
         
-        # Calculate counts from proportions
-        # But enforce minimums: min_noise=0, min_time=1, min_state=1
-        # Available slots after minimums
-        min_required = prior.min_time_inputs + prior.min_state_inputs + prior.min_noise_inputs
-        available = max(0, estimated_roots - min_required)
+        # Minimum slots for time and state
+        min_time = prior.min_time_inputs
+        min_state = prior.min_state_inputs
         
-        # Distribute available slots according to proportions
-        n_noise = prior.min_noise_inputs + int(available * proportions[0])
-        n_time = prior.min_time_inputs + int(available * proportions[1])
-        n_state = prior.min_state_inputs + int(available * proportions[2])
+        # Remaining slots after minimums
+        remaining = max(0, estimated_roots - min_time - min_state)
         
-        # Ensure we don't exceed estimated_roots
+        # Distribute remaining between time and state (mostly state for autocorrelation)
+        # Use ratio ~30% time, ~70% state for remaining slots
+        extra_time = int(remaining * 0.3)
+        extra_state = remaining - extra_time
+        
+        n_time = min_time + extra_time
+        n_state = min_state + extra_state
+        
+        # Add noise inputs with low probability (capped)
+        n_noise = 0
+        if rng.random() < prior.prob_noise_input:
+            n_noise = rng.integers(1, prior.max_noise_inputs + 1)
+        
+        # Ensure total doesn't exceed estimated_roots
         total_inputs = n_noise + n_time + n_state
         if total_inputs > estimated_roots:
-            # Scale down, preserving minimums
+            # Remove from noise first
             excess = total_inputs - estimated_roots
-            # Remove from noise first (since it has min=0)
             if n_noise >= excess:
                 n_noise -= excess
             else:
                 excess -= n_noise
                 n_noise = 0
-                # Then from time (keeping min 1)
-                if n_time - 1 >= excess:
-                    n_time -= excess
-                else:
-                    excess -= (n_time - 1)
-                    n_time = 1
-                    # Finally from state (keeping min 1)
-                    n_state = max(1, n_state - excess)
+                # Then from extra state
+                n_state = max(min_state, n_state - excess)
         
-        # === Sample time activation functions ===
+        # === Decide if noise only at t=0 ===
+        noise_only_at_t0 = (rng.random() < prior.prob_noise_only_at_t0)
+        
+        # === Sample time activation functions (NO REPETITION) ===
         time_activations = []
         time_activation_params = {}
         
-        for i in range(n_time):
-            act = rng.choice(prior.time_activations)
-            time_activations.append(act)
-            
-            # Sample parameters for this activation
+        # First time input is ALWAYS 'linear'
+        available_time_acts = [a for a in prior.time_activations if a != 'linear']
+        time_activations.append('linear')
+        
+        # Additional time inputs sample from remaining activations WITHOUT repetition
+        if n_time > 1:
+            n_additional = min(n_time - 1, len(available_time_acts))
+            additional_acts = list(rng.choice(available_time_acts, size=n_additional, replace=False))
+            time_activations.extend(additional_acts)
+        
+        # Sample parameters for activations that need them
+        for i, act in enumerate(time_activations):
             if act == 'tanh':
                 time_activation_params[f'tanh_beta_{i}'] = log_uniform(*prior.tanh_beta_range)
             elif act == 'exp_decay':
@@ -514,6 +531,7 @@ class DatasetConfig3D:
             noise_type=noise_type,
             noise_scale=noise_scale,
             edge_noise_prob=prior.prob_edge_noise,
+            noise_only_at_t0=noise_only_at_t0,
             init_sigma=init_sigma,
             init_a=init_a,
             sample_mode=sample_mode,

@@ -229,6 +229,10 @@ class TemporalInputManager:
     Manages all three types of temporal inputs.
     
     Coordinates noise, time, and state inputs for each timestep.
+    
+    Supports noise_only_at_t0 mode where noise is generated once at t=0
+    and then held constant (or propagated as state) for all timesteps.
+    This increases autocorrelation in generated series.
     """
     
     noise_generator: NoiseInputGenerator
@@ -240,6 +244,10 @@ class TemporalInputManager:
     time_node_ids: List[int] = None
     state_node_ids: List[int] = None
     
+    # noise_only_at_t0 mode
+    noise_only_at_t0: bool = False
+    _cached_noise: Optional[np.ndarray] = None  # Cached noise from t=0
+    
     @classmethod
     def from_config(cls, config: DatasetConfig3D, rng: np.random.Generator) -> 'TemporalInputManager':
         """Create from dataset config."""
@@ -249,7 +257,9 @@ class TemporalInputManager:
             state_generator=StateInputGenerator(config, rng),
             noise_node_ids=[],
             time_node_ids=[],
-            state_node_ids=[]
+            state_node_ids=[],
+            noise_only_at_t0=getattr(config, 'noise_only_at_t0', False),
+            _cached_noise=None
         )
     
     def assign_root_nodes(self, root_node_ids: List[int]):
@@ -344,7 +354,21 @@ class TemporalInputManager:
         
         # Noise inputs
         if self.noise_node_ids:
-            noise_values = self.noise_generator.generate(n_samples, len(self.noise_node_ids))
+            if self.noise_only_at_t0:
+                # In noise_only_at_t0 mode: generate once at t=0, reuse thereafter
+                if t == 0 or self._cached_noise is None:
+                    noise_values = self.noise_generator.generate(n_samples, len(self.noise_node_ids))
+                    self._cached_noise = noise_values
+                else:
+                    # Reuse cached noise (same noise at each timestep = more autocorrelation)
+                    noise_values = self._cached_noise
+                    # Handle n_samples mismatch
+                    if noise_values.shape[0] != n_samples:
+                        noise_values = self.noise_generator.generate(n_samples, len(self.noise_node_ids))
+            else:
+                # Standard mode: fresh noise each timestep
+                noise_values = self.noise_generator.generate(n_samples, len(self.noise_node_ids))
+            
             for i, node_id in enumerate(self.noise_node_ids):
                 inputs[node_id] = noise_values[:, i]
         
