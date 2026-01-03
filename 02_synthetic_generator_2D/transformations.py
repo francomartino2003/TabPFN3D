@@ -409,6 +409,57 @@ class DiscretizationTransformation(EdgeTransformation):
         }
 
 
+class PassthroughTransformation(EdgeTransformation):
+    """
+    Pass-through transformation: just copies one parent's value.
+    
+    Useful for preserving temporal correlation in 3D series.
+    Selects one parent randomly and copies its value (with optional small noise).
+    """
+    
+    def __init__(
+        self,
+        parent_index: int,
+        noise_scale: float = 0.0,
+        rng: Optional[np.random.Generator] = None
+    ):
+        super().__init__()
+        self.parent_index = parent_index
+        self.noise_scale = noise_scale
+        self.rng = rng if rng is not None else np.random.default_rng()
+    
+    def forward(self, inputs: np.ndarray) -> np.ndarray:
+        """
+        Copy one parent's value.
+        
+        Args:
+            inputs: Array of shape (n_samples, n_parents) or (n_parents,)
+        """
+        if inputs.ndim == 1:
+            inputs = inputs.reshape(1, -1)
+        
+        # Select the designated parent
+        parent_idx = min(self.parent_index, inputs.shape[1] - 1)
+        output = inputs[:, parent_idx].copy()
+        
+        # Add small noise if specified
+        if self.noise_scale > 0:
+            output += self.rng.normal(0, self.noise_scale, size=output.shape)
+        
+        # Clip and handle NaN
+        output = np.clip(output, -1e10, 1e10)
+        output = np.nan_to_num(output, nan=0.0, posinf=1e10, neginf=-1e10)
+        
+        return output.squeeze()
+    
+    def get_params(self) -> Dict[str, Any]:
+        return {
+            'type': 'passthrough',
+            'parent_index': self.parent_index,
+            'noise_scale': self.noise_scale
+        }
+
+
 class TransformationFactory:
     """
     Factory for creating random edge transformations.
@@ -452,6 +503,8 @@ class TransformationFactory:
             return self._create_nn(n_parents, noise_scale)
         elif transform_type == 'tree':
             return self._create_tree(n_parents, noise_scale)
+        elif transform_type == 'passthrough':
+            return self._create_passthrough(n_parents, noise_scale)
         else:  # discretization
             return self._create_discretization(n_parents, noise_scale)
     
@@ -559,6 +612,24 @@ class TransformationFactory:
             prototypes=prototypes,
             n_categories=n_categories,
             noise_scale=noise_scale,
+            rng=self.rng
+        )
+    
+    def _create_passthrough(self, n_parents: int, noise_scale: float) -> PassthroughTransformation:
+        """
+        Create a pass-through transformation.
+        
+        Just copies one parent's value. Useful for preserving temporal structure.
+        """
+        # Select random parent to copy
+        parent_index = self.rng.integers(0, max(1, n_parents))
+        
+        # Very small noise (or none) to preserve correlation
+        small_noise = noise_scale * 0.1  # 10% of normal noise
+        
+        return PassthroughTransformation(
+            parent_index=parent_index,
+            noise_scale=small_noise,
             rng=self.rng
         )
 

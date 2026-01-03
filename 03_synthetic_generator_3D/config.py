@@ -119,9 +119,10 @@ class PriorConfig3D:
     
     # === Edge transformations (similar to 2D) ===
     # Probabilities for each node transformation type (applied per child node)
-    prob_nn_transform: float = 0.5  # Neural network-like transformation
-    prob_tree_transform: float = 0.2  # Decision tree-like transformation
-    prob_discretization: float = 0.3  # Discretization (categorical)
+    prob_nn_transform: float = 0.40  # Neural network-like transformation
+    prob_tree_transform: float = 0.10  # Decision tree-like transformation
+    prob_discretization: float = 0.20  # Discretization (categorical)
+    prob_passthrough: float = 0.30  # Pass-through: just copy one parent (preserves correlation)
     
     # Probability of using identity activation in NN (preserves temporal structure)
     # Higher than 2D because temporal series need more linear propagation
@@ -363,9 +364,10 @@ class DatasetConfig3D:
         # Remaining slots after minimums
         remaining = max(0, estimated_roots - min_time - min_state)
         
-        # Distribute remaining between time and state (mostly state for autocorrelation)
-        # Use ratio ~30% time, ~70% state for remaining slots
-        extra_time = int(remaining * 0.3)
+        # Distribute remaining between time and state
+        # Sample time fraction from range (not fixed) for variability
+        time_fraction = rng.uniform(0.15, 0.4)  # 15-40% time, rest state
+        extra_time = int(remaining * time_fraction)
         extra_state = remaining - extra_time
         
         n_time = min_time + extra_time
@@ -418,10 +420,12 @@ class DatasetConfig3D:
         
         # === Sample edge transformation probabilities ===
         # Note: identity is now included as an activation in NN transform
+        # passthrough = just copy one parent (preserves temporal correlation)
         transform_probs = {
             'nn': prior.prob_nn_transform,
             'tree': prior.prob_tree_transform,
-            'discretization': prior.prob_discretization
+            'discretization': prior.prob_discretization,
+            'passthrough': prior.prob_passthrough
         }
         
         # Sample subset of activations to use for this dataset

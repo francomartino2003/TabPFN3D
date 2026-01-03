@@ -68,6 +68,7 @@ class PriorConfig:
     prob_nn_transform: float = 0.5  # Neural network-like transformation
     prob_tree_transform: float = 0.2  # Decision tree-like transformation
     prob_discretization: float = 0.3  # Discretization (categorical)
+    prob_passthrough: float = 0.0  # Pass-through (0 for 2D, >0 for 3D temporal)
     
     # Probability of using identity activation in NN (preserves input structure)
     prob_identity_activation: float = 0.3
@@ -276,7 +277,8 @@ class DatasetConfig:
         transform_probs = {
             'nn': prior.prob_nn_transform,
             'tree': prior.prob_tree_transform,
-            'discretization': prior.prob_discretization
+            'discretization': prior.prob_discretization,
+            'passthrough': prior.prob_passthrough
         }
         
         # Sample subset of activations to use for this dataset

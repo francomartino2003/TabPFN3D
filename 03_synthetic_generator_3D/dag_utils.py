@@ -33,7 +33,7 @@ sys.path = [_2d_path] + [p for p in sys.path if '03_synthetic_generator_3D' not 
 try:
     # Import 2D modules
     from dag_builder import DAG, Node, DAGBuilder as DAGBuilder2D
-    from transformations import EdgeTransformation, TransformationFactory, DiscretizationTransformation
+    from transformations import EdgeTransformation, TransformationFactory, DiscretizationTransformation, PassthroughTransformation
     from post_processing import Warper, MissingValueInjector
     
     # Alias for compatibility
