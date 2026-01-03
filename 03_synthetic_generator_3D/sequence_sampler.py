@@ -142,6 +142,8 @@ class SequenceSampler:
         Each row in the propagated batch is an independent sequence.
         We extract one window per row.
         
+        Optimized to pre-fetch timeseries and use vectorized operations.
+        
         Args:
             propagated: Single propagated values object with n_samples rows
             n_samples: Number of samples to generate
@@ -149,27 +151,46 @@ class SequenceSampler:
         Returns:
             List of Sample3D objects
         """
-        samples = []
         actual_samples = min(n_samples, propagated.n_samples)
+        n_features = len(self.selection.feature_nodes)
         
+        # Pre-fetch all feature timeseries (cached in propagated)
+        feature_series = {}
+        for node_id in self.selection.feature_nodes:
+            feature_series[node_id] = propagated.get_node_timeseries(node_id)
+        
+        # Pre-fetch target timeseries
+        target_series = propagated.get_node_timeseries(self.selection.target_node)
+        
+        # Compute window positions for all samples at once
+        max_start = propagated.T - self.t_subseq - abs(self.target_offset) - 1
+        max_start = max(0, max_start)
+        t_starts = self.rng.integers(0, max(1, max_start + 1), size=actual_samples)
+        
+        samples = []
         for sample_idx in range(actual_samples):
-            # Random window start for this sample
-            max_start = propagated.T - self.t_subseq - abs(self.target_offset) - 1
-            if max_start < 0:
-                max_start = 0
-            
-            t_start = self.rng.integers(0, max(1, max_start + 1))
+            t_start = t_starts[sample_idx]
             t_end = t_start + self.t_subseq
             
-            # Target timestep
-            t_target = self._compute_target_timestep(t_start, t_end, propagated.T)
+            # Extract features using pre-fetched arrays
+            X = np.zeros((n_features, self.t_subseq), dtype=np.float32)
+            for i, node_id in enumerate(self.selection.feature_nodes):
+                X[i, :] = feature_series[node_id][sample_idx, t_start:t_end]
             
-            # Extract features and target for this sample
-            sample = self._extract_sample(
-                propagated, t_start, t_end, t_target, 
-                sample_idx=sample_idx, sequence_id=sample_idx
-            )
-            samples.append(sample)
+            # Target timestep and value
+            t_target = self._compute_target_timestep(t_start, t_end, propagated.T)
+            y = target_series[sample_idx, t_target]
+            
+            samples.append(Sample3D(
+                X=X,
+                y=y,
+                feature_nodes=self.selection.feature_nodes,
+                target_node=self.selection.target_node,
+                t_start=t_start,
+                t_end=t_end,
+                t_target=t_target,
+                sequence_id=sample_idx
+            ))
         
         return samples
     
@@ -325,13 +346,13 @@ class SequenceSampler:
         n_features = len(self.selection.feature_nodes)
         t_len = t_end - t_start
         
-        # Extract features: (n_features, t_len)
-        X = np.zeros((n_features, t_len))
+        # Extract features using vectorized operations
+        X = np.zeros((n_features, t_len), dtype=np.float32)
         for i, node_id in enumerate(self.selection.feature_nodes):
-            for t_idx, t in enumerate(range(t_start, t_end)):
-                value = propagated.get_value(t, node_id)
-                if len(value) > sample_idx:
-                    X[i, t_idx] = value[sample_idx]
+            # Get full timeseries for this node (cached if available)
+            node_series = propagated.get_node_timeseries(node_id)
+            if sample_idx < node_series.shape[0]:
+                X[i, :] = node_series[sample_idx, t_start:t_end]
         
         # Extract target
         target_value = propagated.get_value(t_target, self.selection.target_node)
@@ -418,8 +439,8 @@ def samples_to_arrays(
     n_features = samples[0].X.shape[0]
     t_subseq = samples[0].X.shape[1]
     
-    X = np.zeros((n_samples, n_features, t_subseq))
-    y = np.zeros(n_samples)
+    X = np.zeros((n_samples, n_features, t_subseq), dtype=np.float32)
+    y = np.zeros(n_samples, dtype=np.float32)
     
     for i, sample in enumerate(samples):
         X[i] = sample.X

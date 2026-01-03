@@ -59,8 +59,16 @@ class FeatureSelector3D:
         self.input_manager = input_manager
         self.rng = rng
         
-        # Get excluded nodes (root inputs + state nodes)
+        # Get excluded nodes (root inputs)
         self.excluded_nodes = set(input_manager.get_all_root_node_ids())
+        
+        # Identify nodes that depend ONLY on time inputs (deterministic)
+        # These lack sample-to-sample variability and can't be features/targets
+        self.time_only_nodes = self._identify_time_only_nodes()
+        self.excluded_nodes.update(self.time_only_nodes)
+        
+        # Identify equivalent nodes (e.g., before/after discretization)
+        self.equivalence_groups = self._identify_equivalent_nodes()
     
     def select(self) -> FeatureTargetSelection:
         """
@@ -109,12 +117,14 @@ class FeatureSelector3D:
         Select the target node.
         
         Prefers nodes with many ancestors (complex dependencies).
-        Excludes input nodes and state nodes.
+        Excludes:
+        - Input nodes (noise, time, state)
+        - Time-only nodes (constant across samples)
         """
         candidates = []
         
         for node_id, node in self.dag.nodes.items():
-            # Skip excluded nodes
+            # Skip excluded nodes (includes time-only nodes)
             if node_id in self.excluded_nodes:
                 continue
             
@@ -162,6 +172,122 @@ class FeatureSelector3D:
                 queue.extend(self.dag.nodes[current].parents)
         
         return ancestors
+    
+    def _identify_time_only_nodes(self) -> Set[int]:
+        """
+        Identify nodes that depend ONLY on time inputs.
+        
+        These nodes are deterministic (same value for all samples at each timestep)
+        and should NEVER be selected as features or targets.
+        
+        Nodes that depend on noise OR state inputs are OK because:
+        - Noise inputs: fresh random values each timestep, vary between samples
+        - State inputs: initialized with noise at t=0, so have sample variability
+        
+        Only nodes with EXCLUSIVELY time input ancestors are excluded.
+        """
+        time_input_ids = set(self.input_manager.time_node_ids or [])
+        noise_input_ids = set(self.input_manager.noise_node_ids or [])
+        state_input_ids = set(self.input_manager.state_node_ids or [])
+        all_root_ids = time_input_ids | noise_input_ids | state_input_ids
+        
+        # Inputs that provide sample variability
+        variable_inputs = noise_input_ids | state_input_ids
+        
+        time_only_nodes = set()
+        
+        for node_id in self.dag.nodes:
+            # Skip root nodes themselves
+            if node_id in all_root_ids:
+                continue
+            
+            # Get all ancestors
+            ancestors = self._get_ancestors(node_id)
+            
+            # Get which root types are in ancestry
+            root_ancestors = ancestors & all_root_ids
+            
+            if not root_ancestors:
+                # No root ancestors (shouldn't happen in valid DAG)
+                continue
+            
+            # Check if there's at least one variable input (noise or state) in ancestry
+            has_variable_ancestor = bool(root_ancestors & variable_inputs)
+            
+            if not has_variable_ancestor:
+                # Only time inputs in ancestry - deterministic node
+                time_only_nodes.add(node_id)
+        
+        return time_only_nodes
+    
+    def _identify_equivalent_nodes(self) -> List[Set[int]]:
+        """
+        Identify groups of equivalent nodes.
+        
+        Two nodes are equivalent if:
+        1. One is the input to a discretization transformation and the other is output
+           (they carry the same information, just different representations)
+        2. One is a copy of another (identity transformation with same input)
+        
+        Returns:
+            List of sets, each set contains equivalent node IDs
+        """
+        equivalence = []
+        seen = set()
+        
+        # transformations is now keyed by child_id, not (parent_id, child_id)
+        for child_id, transform in self.transformations.items():
+            # Discretization: child node is a categorical version of its parents
+            if isinstance(transform, DiscretizationTransformation):
+                node = self.dag.nodes[child_id]
+                for parent_id in node.parents:
+                    if parent_id not in seen and child_id not in seen:
+                        equivalence.append({parent_id, child_id})
+                        seen.add(parent_id)
+                        seen.add(child_id)
+                    elif parent_id in seen:
+                        # Add child to existing group
+                        for group in equivalence:
+                            if parent_id in group:
+                                group.add(child_id)
+                                seen.add(child_id)
+                                break
+                    elif child_id in seen:
+                        for group in equivalence:
+                            if child_id in group:
+                                group.add(parent_id)
+                                seen.add(parent_id)
+                                break
+        
+        return equivalence
+    
+    def _get_equivalent_representative(self, selected: List[int]) -> List[int]:
+        """
+        Given selected nodes, remove duplicates from equivalence groups.
+        
+        Keeps only one representative from each equivalence group.
+        """
+        result = []
+        groups_used = set()
+        
+        for node_id in selected:
+            # Check if this node is in an equivalence group
+            group_idx = None
+            for i, group in enumerate(self.equivalence_groups):
+                if node_id in group:
+                    group_idx = i
+                    break
+            
+            if group_idx is None:
+                # Not in any equivalence group, keep it
+                result.append(node_id)
+            elif group_idx not in groups_used:
+                # First node from this group, keep it
+                result.append(node_id)
+                groups_used.add(group_idx)
+            # else: skip, already have a node from this group
+        
+        return result
     
     def _get_relevant_candidates(
         self, 
@@ -257,6 +383,9 @@ class FeatureSelector3D:
                 additional = self.rng.choice(available, size=n_select, replace=False)
                 selected.extend(additional)
         
+        # Remove duplicates from equivalence groups
+        selected = self._get_equivalent_representative(selected)
+        
         # Shuffle
         self.rng.shuffle(selected)
         
@@ -280,10 +409,11 @@ def determine_node_types(
     node_types = {}
     
     # Find nodes with discretization transformations
+    # transformations is now keyed by node_id, not (parent_id, child_id)
     categorical_nodes = set()
-    for (parent_id, child_id), transform in transformations.items():
+    for node_id, transform in transformations.items():
         if isinstance(transform, DiscretizationTransformation):
-            categorical_nodes.add(child_id)
+            categorical_nodes.add(node_id)
     
     for node_id in dag.nodes:
         if node_id in categorical_nodes:

@@ -34,13 +34,14 @@ class PriorConfig3D:
     max_t_subseq: int = 1000      # Max t in n×m×t (subsequence length)
     max_T_total: int = 5000       # Max T (total sequence before extraction)
     max_classes: int = 10
+    max_complexity: int = 10_000_000  # Max n_samples × T_total × n_nodes
     
     # === Sample size ===
-    n_samples_range: Tuple[int, int] = (100, 5000)
+    n_samples_range: Tuple[int, int] = (100, 10000)
     
     # === Feature count ===
     # Probability of univariate series (1 feature only)
-    prob_univariate: float = 0.3
+    prob_univariate: float = 0.4
     
     # Beta distribution for feature count when multivariate, scaled to [2, max_features]
     n_features_beta_a: float = 1.5
@@ -50,7 +51,7 @@ class PriorConfig3D:
     # === Temporal parameters ===
     # Total sequence length T (before extracting subsequences)
     # T_total > t_subseq to allow for target offsets and window extraction
-    T_total_range: Tuple[int, int] = (30, 5000)
+    T_total_range: Tuple[int, int] = (30, 2000)
     T_total_log_uniform: bool = True
     
     # Subsequence length for features (the 't' in n×m×t)
@@ -59,16 +60,21 @@ class PriorConfig3D:
     t_subseq_log_uniform: bool = True
     
     # === Graph structure (similar to 2D) ===
-    n_nodes_range: Tuple[int, int] = (30, 300)
+    n_nodes_range: Tuple[int, int] = (12, 90)
     n_nodes_log_uniform: bool = True
     
-    # Redirection probability for DAG density
-    redirection_gamma_shape: float = 2.0
-    redirection_gamma_rate: float = 5.0
+    # Edge density (0.0 = minimal tree, 1.0 = complete DAG)
+    # Controls how many edges beyond the minimum (n-1) are added
+    density_range: Tuple[float, float] = (0.01, 0.8)
+    
+    # Number of root/input nodes (nodes without parents)
+    # For 3D, this is the total across noise + time + state inputs
+    n_roots_range: Tuple[int, int] = (3, 30)
+    max_roots_fraction: float = 0.30  # Root nodes can't exceed this fraction of total nodes
     
     # Disconnected subgraphs for irrelevant features
     prob_disconnected_subgraph: float = 0.3
-    n_disconnected_range: Tuple[int, int] = (1, 3)
+    n_disconnected_subgraphs_range: Tuple[int, int] = (1, 5)
     
     # === Root input type distribution ===
     # Proportions are sampled per-dataset using Dirichlet
@@ -80,7 +86,8 @@ class PriorConfig3D:
     # REQUIREMENT: Can have 0 noise inputs, but must have:
     #   - At least 1 time input (dependiente de t)
     #   - At least 1 state input (memoria, se inicializa con ruido en t0)
-    min_noise_inputs: int = 0   # Noise can be zero
+    #   - At least 1 noise input (ensures sample-to-sample variability)
+    min_noise_inputs: int = 1   # Must have at least 1 noise input
     min_time_inputs: int = 1    # Must have at least 1 time input
     min_state_inputs: int = 1   # Must have at least 1 state input
     
@@ -105,29 +112,37 @@ class PriorConfig3D:
     state_alpha_range: Tuple[float, float] = (0.5, 2.0)  # LogUniform
     
     # === Edge transformations (similar to 2D) ===
-    prob_nn_transform: float = 0.50
-    prob_tree_transform: float = 0.20
-    prob_discretization: float = 0.15
-    prob_identity: float = 0.15
+    # Probabilities for each node transformation type (applied per child node)
+    prob_nn_transform: float = 0.5  # Neural network-like transformation
+    prob_tree_transform: float = 0.2  # Decision tree-like transformation
+    prob_discretization: float = 0.3  # Discretization (categorical)
+    # Note: identity is now included as an activation in NN transform
     
-    # NN parameters
-    nn_hidden_range: Tuple[int, int] = (1, 3)
-    nn_width_range: Tuple[int, int] = (4, 32)
-    
-    # Activations for NN (must match 2D transformations.py)
+    # Available activation functions for NN transformation
+    # Per paper: "identity, logarithm, sigmoid, absolute value, sine, 
+    # hyperbolic tangent, rank operation, squaring, power functions, 
+    # smooth ReLU, step function and modulo operation"
     activations: List[str] = field(default_factory=lambda: [
-        'relu', 'tanh', 'sigmoid', 'softplus', 'power', 'identity', 'sin'
+        'identity',    # Linear (no activation)
+        'log',         # Logarithm: log(|x| + eps)
+        'sigmoid',     # Sigmoid: 1/(1+exp(-x))
+        'abs',         # Absolute value: |x|
+        'sin',         # Sine: sin(x)
+        'tanh',        # Hyperbolic tangent: tanh(x)
+        'rank',        # Rank operation: convert to percentile ranks
+        'square',      # Squaring: x^2
+        'power',       # Power function: sign(x)*|x|^p with random p
+        'softplus',    # Smooth ReLU: log(1+exp(x))
+        'step',        # Step function: 1 if x>0 else 0
+        'mod',         # Modulo operation: x mod period
     ])
     
-    # Discretization
-    n_categories_gamma_shape: float = 2.0
-    n_categories_gamma_scale: float = 2.0
-    n_categories_min: int = 2
-    n_categories_max: int = 10
+    # Discretization parameters
+    n_categories_range: Tuple[int, int] = (2, 10)
     
-    # Tree parameters
+    # Decision tree parameters
     tree_depth_range: Tuple[int, int] = (1, 5)
-    tree_n_splits_range: Tuple[int, int] = (1, 10)
+    tree_max_features_fraction: float = 0.7  # Max fraction of parents to use as features
     
     # === Noise parameters ===
     noise_types: List[str] = field(default_factory=lambda: ['normal', 'uniform', 'mixed'])
@@ -141,9 +156,12 @@ class PriorConfig3D:
     
     # === Sample generation mode ===
     # Probability of each mode
-    prob_iid_mode: float = 0.4           # All rows independent
-    prob_sliding_window_mode: float = 0.4  # From single long T
-    prob_mixed_mode: float = 0.2         # Multiple T sequences
+    # IID: each sample is independent, state resets (T_total ≈ t_subseq + burn-in)
+    # Sliding window: extract windows from single long sequence (T_total can be long)
+    # Mixed: multiple independent sequences
+    prob_iid_mode: float = 0.35
+    prob_sliding_window_mode: float = 0.45
+    prob_mixed_mode: float = 0.20
     
     # Sliding window parameters
     window_stride_range: Tuple[int, int] = (1, 10)  # Stride between windows
@@ -152,6 +170,8 @@ class PriorConfig3D:
     prob_classification: float = 0.5
     # Force task type: None = sample, True = always classification, False = always regression
     force_classification: Optional[bool] = None
+    # Minimum samples per class (to ensure balanced enough datasets)
+    min_samples_per_class: int = 10
     
     # Target time offset distribution
     # offset = 0 means within subsequence (classification)
@@ -194,7 +214,7 @@ class DatasetConfig3D:
     
     # === Graph structure ===
     n_nodes: int
-    redirection_prob: float
+    density: float  # Edge density (0.0 = tree, 1.0 = complete DAG)
     n_disconnected_subgraphs: int
     
     # === Root input configuration ===
@@ -210,13 +230,11 @@ class DatasetConfig3D:
     state_alpha: float
     
     # === Edge transformations ===
-    edge_transform_probs: Dict[str, float]
-    nn_hidden: int
-    nn_width: int
+    transform_probs: Dict[str, float]
     allowed_activations: List[str]
     n_categories: int
     tree_depth: int
-    tree_n_splits: int
+    tree_max_features_fraction: float
     
     # === Noise settings ===
     noise_type: str
@@ -297,19 +315,32 @@ class DatasetConfig3D:
         # Ensure enough nodes for features + target + some latent
         n_nodes = max(n_nodes, n_features + 5)
         
-        redirection_prob = rng.gamma(prior.redirection_gamma_shape, 
-                                      1.0 / prior.redirection_gamma_rate)
-        redirection_prob = min(1.0, redirection_prob)
+        # === Enforce complexity limit ===
+        # Iteratively reduce n_samples, T_total, n_nodes if complexity too high
+        for _ in range(10):  # Max 10 iterations
+            complexity = n_samples * T_total * n_nodes
+            if complexity <= prior.max_complexity:
+                break
+            # Scale down proportionally
+            scale = (prior.max_complexity / complexity) ** (1/3)
+            n_samples = max(100, int(n_samples * scale))
+            T_total = max(t_subseq + 10, int(T_total * scale))
+            n_nodes = max(n_features + 5, int(n_nodes * scale))
+        
+        # Edge density (uniform in range)
+        density = rng.uniform(*prior.density_range)
         
         # Disconnected subgraphs
         n_disconnected = 0
         if rng.random() < prior.prob_disconnected_subgraph:
-            n_disconnected = rng.integers(*prior.n_disconnected_range)
+            n_disconnected = rng.integers(*prior.n_disconnected_subgraphs_range)
         
         # === Sample root input types ===
         # Determine how many root nodes we'll have
-        # Estimate: roughly 10-20% of nodes are roots in preferential attachment
-        estimated_roots = max(5, n_nodes // 10)
+        # Sample from n_roots_range but cap at max_roots_fraction of total nodes
+        estimated_roots = rng.integers(*prior.n_roots_range)
+        max_roots_by_fraction = max(3, int(n_nodes * prior.max_roots_fraction))
+        estimated_roots = min(estimated_roots, max_roots_by_fraction)
         
         # Sample proportions using Dirichlet (per-dataset variability)
         # Alpha = [noise, time, state]
@@ -365,31 +396,29 @@ class DatasetConfig3D:
         state_alpha = log_uniform(*prior.state_alpha_range)
         
         # === Sample edge transformation probabilities ===
-        edge_transform_probs = {
+        # Note: identity is now included as an activation in NN transform
+        transform_probs = {
             'nn': prior.prob_nn_transform,
             'tree': prior.prob_tree_transform,
-            'discretization': prior.prob_discretization,
-            'identity': prior.prob_identity
+            'discretization': prior.prob_discretization
         }
         
-        # NN parameters
-        nn_hidden = rng.integers(*prior.nn_hidden_range)
-        nn_width = rng.integers(*prior.nn_width_range)
-        
-        n_activations = rng.integers(2, min(6, len(prior.activations) + 1))
+        # Sample subset of activations to use for this dataset
+        n_activations = rng.integers(3, len(prior.activations) + 1)
         allowed_activations = list(rng.choice(prior.activations, size=n_activations, replace=False))
+        # Always include identity for potential linear transformations
+        if 'identity' not in allowed_activations:
+            allowed_activations.append('identity')
         
-        # Categories
-        n_categories = int(rng.gamma(prior.n_categories_gamma_shape, 
-                                      prior.n_categories_gamma_scale)) + prior.n_categories_min
-        n_categories = min(n_categories, prior.n_categories_max)
+        # Discretization - number of categories
+        n_categories = rng.integers(*prior.n_categories_range)
         # Limit by samples
-        max_cats_for_samples = max(2, n_samples // 10)
+        max_cats_for_samples = max(2, n_samples // prior.min_samples_per_class)
         n_categories = min(n_categories, max_cats_for_samples)
         
-        # Tree
+        # Tree parameters
         tree_depth = rng.integers(*prior.tree_depth_range)
-        tree_n_splits = rng.integers(*prior.tree_n_splits_range)
+        tree_max_features_fraction = prior.tree_max_features_fraction
         
         # === Noise ===
         noise_type = rng.choice(prior.noise_types)
@@ -406,6 +435,12 @@ class DatasetConfig3D:
         mode_probs = np.array(mode_probs) / sum(mode_probs)
         sample_mode = rng.choice(['iid', 'sliding_window', 'mixed'], p=mode_probs)
         
+        # For IID and mixed modes: T_total should be close to t_subseq
+        # Because we reset state for each sample, we only need burn-in (10-50 steps)
+        if sample_mode in ['iid', 'mixed']:
+            burn_in = rng.integers(10, 50)
+            T_total = t_subseq + burn_in
+        
         window_stride = rng.integers(*prior.window_stride_range) if sample_mode != 'iid' else 1
         n_sequences = rng.integers(2, 10) if sample_mode == 'mixed' else 1
         
@@ -417,7 +452,9 @@ class DatasetConfig3D:
             is_classification = rng.random() < prior.prob_classification
         
         if is_classification:
-            max_classes = min(prior.max_classes, n_samples // 10)
+            # Limit n_classes to ensure min_samples_per_class
+            max_classes_for_samples = max(2, n_samples // prior.min_samples_per_class)
+            max_classes = min(prior.max_classes, max_classes_for_samples)
             n_classes = rng.integers(2, max(3, max_classes + 1))
         else:
             n_classes = 0
@@ -461,7 +498,7 @@ class DatasetConfig3D:
             T_total=T_total,
             t_subseq=t_subseq,
             n_nodes=n_nodes,
-            redirection_prob=redirection_prob,
+            density=density,
             n_disconnected_subgraphs=n_disconnected,
             n_noise_inputs=n_noise,
             n_time_inputs=n_time,
@@ -469,13 +506,11 @@ class DatasetConfig3D:
             time_activations=time_activations,
             time_activation_params=time_activation_params,
             state_alpha=state_alpha,
-            edge_transform_probs=edge_transform_probs,
-            nn_hidden=nn_hidden,
-            nn_width=nn_width,
+            transform_probs=transform_probs,
             allowed_activations=allowed_activations,
             n_categories=n_categories,
             tree_depth=tree_depth,
-            tree_n_splits=tree_n_splits,
+            tree_max_features_fraction=tree_max_features_fraction,
             noise_type=noise_type,
             noise_scale=noise_scale,
             edge_noise_prob=prior.prob_edge_noise,

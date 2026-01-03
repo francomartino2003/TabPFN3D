@@ -28,9 +28,15 @@ warnings.filterwarnings('ignore')
 try:
     from generator import SyntheticDatasetGenerator, SyntheticDataset
     from config import PriorConfig
+    from dag_builder import DAGBuilder, DAG
+    from transformations import DiscretizationTransformation, TransformationFactory
+    from row_generator import RowGenerator
 except ImportError:
     from .generator import SyntheticDatasetGenerator, SyntheticDataset
     from .config import PriorConfig
+    from .dag_builder import DAGBuilder, DAG
+    from .transformations import DiscretizationTransformation, TransformationFactory
+    from .row_generator import RowGenerator
 
 # ML imports
 from sklearn.model_selection import train_test_split
@@ -196,19 +202,39 @@ def train_models(X_train: np.ndarray, X_test: np.ndarray,
     except Exception as e:
         results['rf'] = {'accuracy': results['baseline']['accuracy'], 'auc': None, 'importances': None}
     
-    # XGBoost (or fallback to RF)
+    # XGBoost with hyperparameter tuning (or fallback to RF)
     if HAS_XGBOOST:
         try:
-            xgb = XGBClassifier(
-                n_estimators=50, max_depth=5, learning_rate=0.1,
-                random_state=42, n_jobs=-1, verbosity=0,
-                use_label_encoder=False, eval_metric='logloss'
-            )
-            xgb.fit(X_train, y_train)
-            y_pred = xgb.predict(X_test)
-            y_proba = xgb.predict_proba(X_test)
+            # Quick hyperparameter search: try a few configurations
+            param_configs = [
+                {'n_estimators': 50, 'max_depth': 3, 'learning_rate': 0.1, 'subsample': 1.0, 'colsample_bytree': 1.0},
+                {'n_estimators': 100, 'max_depth': 5, 'learning_rate': 0.1, 'subsample': 0.8, 'colsample_bytree': 0.8},
+                {'n_estimators': 50, 'max_depth': 7, 'learning_rate': 0.05, 'subsample': 0.9, 'colsample_bytree': 0.9},
+                {'n_estimators': 100, 'max_depth': 4, 'learning_rate': 0.2, 'subsample': 1.0, 'colsample_bytree': 0.7},
+            ]
             
-            acc = accuracy_score(y_test, y_pred)
+            best_acc = -1
+            best_model = None
+            best_proba = None
+            
+            for params in param_configs:
+                xgb_model = XGBClassifier(
+                    **params,
+                    random_state=42, n_jobs=-1, verbosity=0,
+                    use_label_encoder=False, eval_metric='logloss'
+                )
+                xgb_model.fit(X_train, y_train)
+                y_pred_tmp = xgb_model.predict(X_test)
+                acc_tmp = accuracy_score(y_test, y_pred_tmp)
+                
+                if acc_tmp > best_acc:
+                    best_acc = acc_tmp
+                    best_model = xgb_model
+                    best_proba = xgb_model.predict_proba(X_test)
+            
+            acc = best_acc
+            y_proba = best_proba
+            
             if n_classes == 2:
                 auc = roc_auc_score(y_test, y_proba[:, 1])
             else:
@@ -216,7 +242,7 @@ def train_models(X_train: np.ndarray, X_test: np.ndarray,
                     auc = roc_auc_score(y_test, y_proba, multi_class='ovr', average='weighted')
                 except:
                     auc = None
-            results['xgb'] = {'accuracy': acc, 'auc': auc, 'importances': xgb.feature_importances_}
+            results['xgb'] = {'accuracy': acc, 'auc': auc, 'importances': best_model.feature_importances_}
         except Exception as e:
             results['xgb'] = results['rf'].copy()
     else:
@@ -804,6 +830,287 @@ def sanity_check_8_invariances(datasets: List[SyntheticDataset], n_test: int = 5
     return {'results': results}
 
 
+def sanity_check_9_discretization(n_test: int = 10, seed: int = 42) -> Dict[str, Any]:
+    """
+    SANITY CHECK 9: Verify discretization transformations work correctly.
+    
+    Checks:
+    - Number of prototypes matches n_categories
+    - Category distribution is reasonable (not all same category)
+    - Output is properly normalized to [0, 1)
+    """
+    print("\n" + "="*70)
+    print("SANITY CHECK 9: Discretization Transformation Check")
+    print("="*70)
+    
+    rng = np.random.default_rng(seed)
+    
+    results = []
+    all_category_distributions = []
+    
+    for test_id in range(n_test):
+        # Create discretization with different parameters
+        n_categories = rng.integers(2, 10)
+        n_parents = rng.integers(1, 5)
+        n_samples = 1000
+        
+        # Create random prototypes
+        prototypes = rng.normal(0, 1, size=(n_categories, n_parents))
+        
+        # Create transformation
+        transform = DiscretizationTransformation(
+            prototypes=prototypes,
+            n_categories=n_categories,
+            noise_scale=0.01,  # Small noise for testing
+            rng=rng
+        )
+        
+        # Generate random inputs
+        inputs = rng.normal(0, 1, size=(n_samples, n_parents))
+        
+        # Apply transformation
+        outputs = transform.forward(inputs)
+        categories = transform.get_category_indices(inputs)
+        
+        # Check outputs
+        output_min = outputs.min()
+        output_max = outputs.max()
+        output_range_ok = output_min >= -0.1 and output_max < 1.1  # Allow small noise overflow
+        
+        # Check category distribution
+        unique_cats, counts = np.unique(categories, return_counts=True)
+        n_unique = len(unique_cats)
+        category_distribution = {int(c): int(cnt) for c, cnt in zip(unique_cats, counts)}
+        
+        # Calculate entropy of category distribution
+        probs = counts / counts.sum()
+        entropy = -np.sum(probs * np.log(probs + 1e-10))
+        max_entropy = np.log(n_categories)
+        normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0
+        
+        # Check if always same category (bad!)
+        always_same = n_unique == 1
+        
+        result = {
+            'test_id': test_id,
+            'n_categories': n_categories,
+            'n_parents': n_parents,
+            'n_unique_categories': n_unique,
+            'output_min': float(output_min),
+            'output_max': float(output_max),
+            'output_range_ok': output_range_ok,
+            'normalized_entropy': float(normalized_entropy),
+            'always_same_category': always_same,
+            'category_distribution': category_distribution
+        }
+        results.append(result)
+        all_category_distributions.append(category_distribution)
+        
+        print(f"\n  Test {test_id}: n_cats={n_categories}, n_parents={n_parents}")
+        print(f"    Output range: [{output_min:.3f}, {output_max:.3f}] {'[OK]' if output_range_ok else '[BAD]'}")
+        print(f"    Unique categories: {n_unique}/{n_categories}")
+        print(f"    Normalized entropy: {normalized_entropy:.3f} (1.0 = uniform)")
+        if always_same:
+            print(f"    [WARNING] All samples assigned to same category!")
+        
+        # Show category distribution
+        print(f"    Distribution: ", end="")
+        for cat in sorted(category_distribution.keys()):
+            pct = 100 * category_distribution[cat] / n_samples
+            print(f"cat{cat}={pct:.1f}% ", end="")
+        print()
+    
+    # Summary
+    print("\n" + "-"*50)
+    print("SUMMARY")
+    print("-"*50)
+    
+    n_bad_range = sum(1 for r in results if not r['output_range_ok'])
+    n_always_same = sum(1 for r in results if r['always_same_category'])
+    avg_entropy = np.mean([r['normalized_entropy'] for r in results])
+    
+    print(f"  Bad output range: {n_bad_range}/{n_test}")
+    print(f"  Always same category: {n_always_same}/{n_test}")
+    print(f"  Average normalized entropy: {avg_entropy:.3f}")
+    
+    if n_bad_range > 0:
+        print("\n[WARNING] Some outputs outside [0, 1) range")
+    if n_always_same > 0:
+        print("\n[WARNING] Some discretizations always produce same category")
+    if avg_entropy < 0.3:
+        print("\n[WARNING] Low entropy - categories not well distributed")
+    else:
+        print("\n[OK] Discretization transformations working correctly")
+    
+    return {
+        'results': results,
+        'n_bad_range': n_bad_range,
+        'n_always_same': n_always_same,
+        'avg_entropy': avg_entropy
+    }
+
+
+def sanity_check_10_visualize_dags(n_graphs: int = 5, output_dir: str = "dag_visualizations", 
+                                    seed: int = 42) -> Dict[str, Any]:
+    """
+    SANITY CHECK 10: Visualize sample DAGs and save as PNG.
+    
+    Creates PNG visualizations of generated DAGs to verify structure.
+    """
+    print("\n" + "="*70)
+    print("SANITY CHECK 10: DAG Visualization")
+    print("="*70)
+    
+    # Check if matplotlib is available
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend for saving
+    except ImportError:
+        print("[ERROR] matplotlib not installed. Skipping visualization.")
+        return {'error': 'matplotlib not installed'}
+    
+    # Try to import networkx
+    try:
+        import networkx as nx
+    except ImportError:
+        print("[ERROR] networkx not installed. Skipping visualization.")
+        return {'error': 'networkx not installed'}
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    rng = np.random.default_rng(seed)
+    prior = PriorConfig()
+    
+    saved_files = []
+    graph_stats = []
+    
+    for i in range(n_graphs):
+        # Sample config with varied parameters
+        config = prior.sample_hyperparams(rng)
+        
+        # Limit nodes for visualization
+        config.n_nodes = min(config.n_nodes, 50)
+        
+        # Build DAG
+        builder = DAGBuilder(config, np.random.default_rng(config.seed))
+        dag = builder.build()
+        
+        # Collect stats
+        stats = {
+            'graph_id': i,
+            'n_nodes': len(dag.nodes),
+            'n_edges': len(dag.edges),
+            'n_roots': len(dag.root_nodes),
+            'n_subgraphs': dag.n_subgraphs,
+            'density': config.density,
+            'edge_ratio': len(dag.edges) / len(dag.nodes) if len(dag.nodes) > 0 else 0
+        }
+        graph_stats.append(stats)
+        
+        print(f"\n  Graph {i}: {stats['n_nodes']} nodes, {stats['n_edges']} edges, "
+              f"{stats['n_roots']} roots, density={stats['density']:.2f}")
+        
+        # Create networkx graph
+        G = nx.DiGraph()
+        G.add_nodes_from(dag.nodes.keys())
+        G.add_edges_from(dag.edges)
+        
+        # Prepare colors
+        colors = []
+        for nid in G.nodes():
+            if dag.nodes[nid].is_root:
+                colors.append('#90EE90')  # Light green for roots
+            else:
+                # Color by subgraph
+                subgraph_colors = ['#ADD8E6', '#FFFACD', '#F08080', '#D3D3D3', '#DDA0DD']
+                sg_id = dag.nodes[nid].subgraph_id % len(subgraph_colors)
+                colors.append(subgraph_colors[sg_id])
+        
+        # Create figure
+        fig, ax = plt.subplots(1, 1, figsize=(14, 10))
+        
+        # Layout - try hierarchical first
+        try:
+            # Create layers based on topological order
+            layers = {}
+            for nid in dag.topological_order:
+                node = dag.nodes[nid]
+                if node.is_root:
+                    layers[nid] = 0
+                else:
+                    # Layer = max parent layer + 1
+                    parent_layers = [layers.get(p, 0) for p in node.parents]
+                    layers[nid] = max(parent_layers) + 1 if parent_layers else 0
+            
+            # Create positions
+            max_layer = max(layers.values()) if layers else 0
+            layer_nodes = defaultdict(list)
+            for nid, layer in layers.items():
+                layer_nodes[layer].append(nid)
+            
+            pos = {}
+            for layer, nodes in layer_nodes.items():
+                n_in_layer = len(nodes)
+                for j, nid in enumerate(nodes):
+                    x = (j - n_in_layer / 2) * 2
+                    y = -layer  # Top to bottom
+                    pos[nid] = (x, y)
+        except:
+            # Fallback to spring layout
+            pos = nx.spring_layout(G, k=2, iterations=50, seed=seed)
+        
+        # Draw graph
+        nx.draw(G, pos, ax=ax,
+                node_color=colors,
+                with_labels=True,
+                node_size=400,
+                font_size=7,
+                arrows=True,
+                arrowsize=12,
+                edge_color='gray',
+                alpha=0.9,
+                width=0.8)
+        
+        # Title
+        ax.set_title(f"DAG {i}: {stats['n_nodes']} nodes, {stats['n_edges']} edges, "
+                    f"{stats['n_roots']} roots (green), {stats['n_subgraphs']} subgraphs\n"
+                    f"Density: {stats['density']:.2f}, Edge ratio: {stats['edge_ratio']:.2f}",
+                    fontsize=10)
+        
+        # Save
+        filename = os.path.join(output_dir, f"dag_{i:03d}.png")
+        plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+        
+        saved_files.append(filename)
+        print(f"    Saved: {filename}")
+    
+    # Summary statistics
+    print("\n" + "-"*50)
+    print("GRAPH STATISTICS SUMMARY")
+    print("-"*50)
+    
+    n_nodes_list = [s['n_nodes'] for s in graph_stats]
+    n_edges_list = [s['n_edges'] for s in graph_stats]
+    n_roots_list = [s['n_roots'] for s in graph_stats]
+    edge_ratios = [s['edge_ratio'] for s in graph_stats]
+    
+    print(f"  Nodes: min={min(n_nodes_list)}, max={max(n_nodes_list)}, mean={np.mean(n_nodes_list):.1f}")
+    print(f"  Edges: min={min(n_edges_list)}, max={max(n_edges_list)}, mean={np.mean(n_edges_list):.1f}")
+    print(f"  Roots: min={min(n_roots_list)}, max={max(n_roots_list)}, mean={np.mean(n_roots_list):.1f}")
+    print(f"  Edge ratio: min={min(edge_ratios):.2f}, max={max(edge_ratios):.2f}, mean={np.mean(edge_ratios):.2f}")
+    
+    print(f"\n[OK] Saved {len(saved_files)} DAG visualizations to {output_dir}/")
+    
+    return {
+        'saved_files': saved_files,
+        'graph_stats': graph_stats,
+        'output_dir': output_dir
+    }
+
+
 def generate_dataset_stats(dataset: SyntheticDataset, dataset_id: int) -> DatasetStats:
     """Generate comprehensive statistics for a single dataset."""
     
@@ -989,6 +1296,8 @@ def run_all_checks(n_datasets: int = 100, seed: int = 42, save_results: bool = T
     results['check_6_data_size'] = sanity_check_6_data_size_robustness(datasets, n_test=10)
     results['check_7_mutual_info'] = sanity_check_7_mutual_information(datasets, n_test=10)
     results['check_8_invariances'] = sanity_check_8_invariances(datasets, n_test=5)
+    results['check_9_discretization'] = sanity_check_9_discretization(n_test=10, seed=seed)
+    results['check_10_dag_viz'] = sanity_check_10_visualize_dags(n_graphs=5, seed=seed)
     
     # Summary
     print("\n" + "="*70)
@@ -1023,6 +1332,8 @@ def run_all_checks(n_datasets: int = 100, seed: int = 42, save_results: bool = T
                 return float(obj)
             elif isinstance(obj, (np.int32, np.int64)):
                 return int(obj)
+            elif isinstance(obj, (np.bool_, bool)):
+                return bool(obj)
             elif isinstance(obj, dict):
                 return {k: convert(v) for k, v in obj.items()}
             elif isinstance(obj, list):

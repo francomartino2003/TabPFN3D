@@ -21,7 +21,6 @@ from temporal_inputs import TemporalInputManager
 from dag_utils import DAG, DAGNode, EdgeTransformation
 
 
-@dataclass
 class TemporalPropagatedValues:
     """
     Container for values propagated through the DAG across all timesteps.
@@ -31,9 +30,12 @@ class TemporalPropagatedValues:
         T: Total number of timesteps
         n_samples: Number of samples
     """
-    values: Dict[Tuple[int, int], np.ndarray]
-    T: int
-    n_samples: int
+    
+    def __init__(self, values: Dict[Tuple[int, int], np.ndarray], T: int, n_samples: int):
+        self.values = values
+        self.T = T
+        self.n_samples = n_samples
+        self._timeseries_cache: Dict[int, np.ndarray] = {}
     
     def get_value(self, t: int, node_id: int) -> np.ndarray:
         """Get values for a specific timestep and node."""
@@ -41,15 +43,21 @@ class TemporalPropagatedValues:
     
     def get_node_timeseries(self, node_id: int) -> np.ndarray:
         """
-        Get the full timeseries for a node.
+        Get the full timeseries for a node (cached).
         
         Returns:
             Array of shape (n_samples, T)
         """
-        timeseries = np.zeros((self.n_samples, self.T))
+        if node_id in self._timeseries_cache:
+            return self._timeseries_cache[node_id]
+        
+        timeseries = np.zeros((self.n_samples, self.T), dtype=np.float32)
         for t in range(self.T):
-            if (t, node_id) in self.values:
-                timeseries[:, t] = self.values[(t, node_id)]
+            key = (t, node_id)
+            if key in self.values:
+                timeseries[:, t] = self.values[key]
+        
+        self._timeseries_cache[node_id] = timeseries
         return timeseries
     
     def get_timestep_values(self, t: int) -> Dict[int, np.ndarray]:
@@ -220,12 +228,9 @@ class TemporalPropagator:
         # Stack parent values
         parent_array = np.column_stack(parent_values)
         
-        # Apply transformation from first parent (simplified - could combine)
-        first_parent = node.parents[0]
-        transform_key = (first_parent, node_id)
-        
-        if transform_key in self.transformations:
-            transform = self.transformations[transform_key]
+        # Apply transformation for this node (one per non-root node)
+        if node_id in self.transformations:
+            transform = self.transformations[node_id]
             result = transform.forward(parent_array)
             
             # Handle multi-dimensional output
@@ -234,7 +239,7 @@ class TemporalPropagator:
             
             return result
         else:
-            # No transformation - weighted sum with noise
+            # No transformation found - weighted sum with noise (fallback)
             weights = self.rng.normal(0, 1, size=len(parent_values))
             weights = weights / (np.linalg.norm(weights) + 1e-8)
             
@@ -274,59 +279,148 @@ class BatchTemporalPropagator:
     - IID mode: Generate many independent sequences
     - Sliding window: Generate one long sequence, extract windows
     - Mixed mode: Generate several long sequences
+    
+    Optimizations:
+    - Pre-allocates large arrays instead of dicts
+    - Caches node info for fast lookup
+    - Uses numpy operations where possible
     """
     
     def __init__(
         self,
         config: DatasetConfig3D,
         dag: DAG,
-        transformations: Dict[Tuple[int, int], EdgeTransformation],
+        transformations: Dict[int, EdgeTransformation],
         input_manager: TemporalInputManager,
         rng: np.random.Generator
     ):
         self.config = config
+        self.dag = dag
+        self.transformations = transformations
+        self.input_manager = input_manager
+        self.rng = rng
+        
+        # Pre-compute node info for fast access
+        self.topo_order = self._compute_topological_order()
+        self.n_nodes = len(dag.nodes)
+        
+        # Create node_id to index mapping
+        self.node_to_idx = {nid: i for i, nid in enumerate(self.topo_order)}
+        self.idx_to_node = {i: nid for i, nid in enumerate(self.topo_order)}
+        
+        # Pre-compute parent indices for each node
+        self.parent_indices = {}
+        for node_id in self.topo_order:
+            node = dag.nodes[node_id]
+            if node.parents:
+                self.parent_indices[node_id] = [self.node_to_idx[p] for p in node.parents]
+        
+        # Identify root nodes
+        self.root_node_ids = set(nid for nid, n in dag.nodes.items() if not n.parents)
+        
+        # Legacy propagator for compatibility
         self.propagator = TemporalPropagator(
             config, dag, transformations, input_manager, rng
         )
-        self.rng = rng
+    
+    def _compute_topological_order(self) -> List[int]:
+        """Compute topological ordering of DAG nodes."""
+        visited = set()
+        order = []
+        
+        def dfs(node_id: int):
+            if node_id in visited:
+                return
+            visited.add(node_id)
+            node = self.dag.nodes[node_id]
+            for parent_id in node.parents:
+                dfs(parent_id)
+            order.append(node_id)
+        
+        for node_id in self.dag.nodes:
+            dfs(node_id)
+        return order
+    
+    def _fast_propagate(self, n_samples: int, T: int) -> np.ndarray:
+        """
+        Fast propagation using pre-allocated arrays.
+        
+        Returns:
+            Array of shape (n_nodes, n_samples, T)
+        """
+        # Pre-allocate output array
+        values = np.zeros((self.n_nodes, n_samples, T), dtype=np.float32)
+        
+        # State for temporal dependencies
+        previous_state = None
+        
+        for t in range(T):
+            # Generate root inputs
+            root_inputs = self.input_manager.generate_inputs_for_timestep(
+                t=t, T=T, n_samples=n_samples, previous_state=previous_state
+            )
+            
+            # Process each node in topological order
+            for node_id in self.topo_order:
+                idx = self.node_to_idx[node_id]
+                
+                if node_id in self.root_node_ids:
+                    # Root node
+                    if node_id in root_inputs:
+                        values[idx, :, t] = root_inputs[node_id]
+                    else:
+                        values[idx, :, t] = self.rng.normal(0, 1, size=n_samples)
+                else:
+                    # Non-root: compute from parents
+                    parent_idxs = self.parent_indices[node_id]
+                    parent_vals = values[parent_idxs, :, t].T  # (n_samples, n_parents)
+                    
+                    if node_id in self.transformations:
+                        result = self.transformations[node_id].forward(parent_vals)
+                        if result.ndim > 1:
+                            result = result[:, 0] if result.shape[1] > 0 else result.flatten()
+                        values[idx, :, t] = result
+                    else:
+                        # Fallback: weighted sum
+                        weights = self.rng.normal(0, 1, size=len(parent_idxs))
+                        weights = weights / (np.linalg.norm(weights) + 1e-8)
+                        values[idx, :, t] = parent_vals @ weights
+            
+            # Extract state for next timestep
+            if self.input_manager.state_node_ids:
+                state_dict = {nid: values[self.node_to_idx[nid], :, t] 
+                             for nid in self.topo_order if nid not in self.root_node_ids}
+                previous_state = self.input_manager.state_generator.extract_state_values(state_dict)
+        
+        return values
+    
+    def _array_to_propagated_values(self, arr: np.ndarray) -> TemporalPropagatedValues:
+        """Convert numpy array to TemporalPropagatedValues for compatibility."""
+        T = arr.shape[2]
+        n_samples = arr.shape[1]
+        values_dict = {}
+        for idx, node_id in self.idx_to_node.items():
+            for t in range(T):
+                values_dict[(t, node_id)] = arr[idx, :, t]
+        return TemporalPropagatedValues(values=values_dict, T=T, n_samples=n_samples)
     
     def generate_iid_sequences(
         self, 
         n_sequences: int, 
         T: int
     ) -> TemporalPropagatedValues:
-        """
-        Generate independent sequences (IID mode).
-        
-        Each sequence (row) has different noise but same structure.
-        All sequences are generated in parallel as a batch.
-        
-        Args:
-            n_sequences: Number of sequences (batch size)
-            T: Timesteps per sequence
-            
-        Returns:
-            Single TemporalPropagatedValues with n_sequences samples
-        """
-        # Generate all sequences in parallel (much more efficient)
-        return self.propagator.propagate(n_samples=n_sequences, T=T)
+        """Generate independent sequences (IID mode)."""
+        arr = self._fast_propagate(n_samples=n_sequences, T=T)
+        return self._array_to_propagated_values(arr)
     
     def generate_single_long_sequence(
         self, 
         n_samples: int,
         T: int
     ) -> TemporalPropagatedValues:
-        """
-        Generate a single long sequence for sliding window extraction.
-        
-        Args:
-            n_samples: Batch size for parallel generation
-            T: Total timesteps
-            
-        Returns:
-            Propagated values for the long sequence
-        """
-        return self.propagator.propagate(n_samples=n_samples, T=T)
+        """Generate a single long sequence for sliding window extraction."""
+        arr = self._fast_propagate(n_samples=n_samples, T=T)
+        return self._array_to_propagated_values(arr)
     
     def generate_mixed_sequences(
         self, 
@@ -334,20 +428,10 @@ class BatchTemporalPropagator:
         samples_per_sequence: int,
         T: int
     ) -> List[TemporalPropagatedValues]:
-        """
-        Generate multiple long sequences (mixed mode).
-        
-        Args:
-            n_long_sequences: Number of long sequences
-            samples_per_sequence: Samples per long sequence
-            T: Timesteps per sequence
-            
-        Returns:
-            List of propagated values
-        """
+        """Generate multiple long sequences (mixed mode)."""
         sequences = []
         for _ in range(n_long_sequences):
-            seq = self.propagator.propagate(n_samples=samples_per_sequence, T=T)
-            sequences.append(seq)
+            arr = self._fast_propagate(n_samples=samples_per_sequence, T=T)
+            sequences.append(self._array_to_propagated_values(arr))
         return sequences
 

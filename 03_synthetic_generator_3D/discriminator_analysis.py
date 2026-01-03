@@ -10,6 +10,7 @@ This script:
 """
 
 import numpy as np
+import math
 import pickle
 import os
 import sys
@@ -25,7 +26,9 @@ warnings.filterwarnings('ignore')
 # Timeout for dataset generation (seconds)
 GENERATION_TIMEOUT = 90  # 1.5 minutes
 
-# Visualization
+# Visualization - use non-interactive backend to avoid tkinter errors
+import matplotlib
+matplotlib.use('Agg')  # Must be before pyplot import
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
@@ -99,24 +102,40 @@ def generate_synthetic_datasets(n_datasets: int = 20, seed: int = 42, output_dir
         if thread.is_alive():
             # Timeout occurred
             print(f"[{i+1:2d}/{n_datasets}] TIMEOUT ({GENERATION_TIMEOUT}s exceeded)")
-            print(f"    Config that caused timeout:")
             # Try to get config from generator's last sampled config
             try:
                 from config import DatasetConfig3D
                 temp_config = DatasetConfig3D.sample_from_prior(prior, np.random.default_rng(seed + i))
-                print(f"      n_samples={temp_config.n_samples}, T_total={temp_config.T_total}, "
-                      f"t_subseq={temp_config.t_subseq}, n_nodes={temp_config.n_nodes}")
-                print(f"      sample_mode={temp_config.sample_mode}")
-            except:
-                pass
+                total_cells = temp_config.n_samples * temp_config.n_features * temp_config.t_subseq
+                n_propagations = temp_config.T_total * temp_config.n_samples if temp_config.sample_mode == 'iid' else temp_config.T_total
+                print(f"    n_samples={temp_config.n_samples}, T_total={temp_config.T_total}, "
+                      f"t_subseq={temp_config.t_subseq}, n_features={temp_config.n_features}")
+                print(f"    n_nodes={temp_config.n_nodes}, mode={temp_config.sample_mode}")
+                print(f"    n_noise={temp_config.n_noise_inputs}, n_time={temp_config.n_time_inputs}, "
+                      f"n_state={temp_config.n_state_inputs}")
+                print(f"    total_cells={total_cells:,}, n_propagations~={n_propagations:,}")
+            except Exception as e:
+                print(f"    (Could not get config: {e})")
             sys.stdout.flush()
             # Thread will eventually finish, but we move on
             continue
         
         if result.error:
             print(f"[{i+1:2d}/{n_datasets}] ERROR: {result.error}")
-            if result.config:
-                print(f"    Config: n_samples={result.config.n_samples}, T_total={result.config.T_total}")
+            # Try to get config info
+            try:
+                from config import DatasetConfig3D
+                temp_config = DatasetConfig3D.sample_from_prior(prior, np.random.default_rng(seed + i))
+                total_cells = temp_config.n_samples * temp_config.n_features * temp_config.t_subseq
+                n_propagations = temp_config.T_total * temp_config.n_samples if temp_config.sample_mode == 'iid' else temp_config.T_total
+                print(f"    Config: n_samples={temp_config.n_samples}, T_total={temp_config.T_total}, "
+                      f"t_subseq={temp_config.t_subseq}, n_features={temp_config.n_features}")
+                print(f"    n_nodes={temp_config.n_nodes}, mode={temp_config.sample_mode}")
+                print(f"    n_noise={temp_config.n_noise_inputs}, n_time={temp_config.n_time_inputs}, "
+                      f"n_state={temp_config.n_state_inputs}")
+                print(f"    total_cells={total_cells:,}, n_propagations~={n_propagations:,}")
+            except Exception as e:
+                print(f"    (Could not get config: {e})")
             sys.stdout.flush()
             continue
         
@@ -126,6 +145,7 @@ def generate_synthetic_datasets(n_datasets: int = 20, seed: int = 42, output_dir
             continue
         
         dataset = result.dataset
+        cfg = dataset.config
         datasets.append(dataset)
         
         # Create and save visualization IMMEDIATELY
@@ -135,10 +155,28 @@ def generate_synthetic_datasets(n_datasets: int = 20, seed: int = 42, output_dir
             fig.savefig(png_path, dpi=150, bbox_inches='tight')
             plt.close(fig)
             
-            print(f"[{i+1:2d}/{n_datasets}] Saved: synthetic_{i+1:02d}.png | "
-                  f"Shape: {dataset.shape} | Classes: {dataset.n_classes} | {elapsed:.1f}s")
+            # Detailed metrics - same format as timeout/error for comparison
+            total_cells = cfg.n_samples * cfg.n_features * cfg.t_subseq
+            n_propagations = cfg.T_total * cfg.n_samples if cfg.sample_mode == 'iid' else cfg.T_total
+            
+            print(f"[{i+1:2d}/{n_datasets}] OK {elapsed:.1f}s | Shape: {dataset.shape} | Classes: {dataset.n_classes}")
+            print(f"    n_samples={cfg.n_samples}, T_total={cfg.T_total}, "
+                  f"t_subseq={cfg.t_subseq}, n_features={cfg.n_features}")
+            print(f"    n_nodes={cfg.n_nodes}, mode={cfg.sample_mode}")
+            print(f"    n_noise={cfg.n_noise_inputs}, n_time={cfg.n_time_inputs}, "
+                  f"n_state={cfg.n_state_inputs}")
+            print(f"    total_cells={total_cells:,}, n_propagations~={n_propagations:,}")
         except Exception as e:
             print(f"[{i+1:2d}/{n_datasets}] Generated but viz failed: {e}")
+            # Still print config
+            total_cells = cfg.n_samples * cfg.n_features * cfg.t_subseq
+            n_propagations = cfg.T_total * cfg.n_samples if cfg.sample_mode == 'iid' else cfg.T_total
+            print(f"    n_samples={cfg.n_samples}, T_total={cfg.T_total}, "
+                  f"t_subseq={cfg.t_subseq}, n_features={cfg.n_features}")
+            print(f"    n_nodes={cfg.n_nodes}, mode={cfg.sample_mode}")
+            print(f"    n_noise={cfg.n_noise_inputs}, n_time={cfg.n_time_inputs}, "
+                  f"n_state={cfg.n_state_inputs}")
+            print(f"    total_cells={total_cells:,}, n_propagations~={n_propagations:,}")
         
         sys.stdout.flush()
     
@@ -219,18 +257,48 @@ def load_real_datasets(pkl_path: str = None) -> List[Tuple[np.ndarray, np.ndarra
     
     print(f"Loading real datasets from {pkl_path}...")
     
+    # Add src to path so pickle can find the module references
+    real_data_path = os.path.join(os.path.dirname(__file__), '..', '01_real_data')
+    if real_data_path not in sys.path:
+        sys.path.insert(0, real_data_path)
+    
     with open(pkl_path, 'rb') as f:
         data = pickle.load(f)
     
     datasets = []
     
-    for name, content in data.items():
+    # Handle both dict and list formats
+    if isinstance(data, dict):
+        items = data.items()
+    elif isinstance(data, list):
+        # List of dicts with 'name' key, or list of tuples
+        items = []
+        for i, item in enumerate(data):
+            if isinstance(item, dict):
+                name = item.get('name', item.get('dataset_name', f'dataset_{i}'))
+                items.append((name, item))
+            elif isinstance(item, (tuple, list)) and len(item) >= 2:
+                items.append((item[0], item[1]))
+            else:
+                items.append((f'dataset_{i}', item))
+    else:
+        print(f"Unknown data format: {type(data)}")
+        return []
+    
+    for name, content in items:
         try:
-            # Combine train and test
-            X_train = content.get('X_train')
-            X_test = content.get('X_test')
-            y_train = content.get('y_train')
-            y_test = content.get('y_test')
+            # Handle different content formats
+            if isinstance(content, dict):
+                X_train = content.get('X_train')
+                X_test = content.get('X_test')
+                y_train = content.get('y_train')
+                y_test = content.get('y_test')
+            else:
+                # Try to extract from object attributes
+                X_train = getattr(content, 'X_train', None)
+                X_test = getattr(content, 'X_test', None)
+                y_train = getattr(content, 'y_train', None)
+                y_test = getattr(content, 'y_test', None)
             
             if X_train is None or X_test is None:
                 continue
@@ -525,7 +593,7 @@ def compute_complexity_features(X: np.ndarray) -> Dict[str, float]:
                 
                 if patterns:
                     unique_patterns = len(set(patterns))
-                    max_patterns = np.math.factorial(m)
+                    max_patterns = math.factorial(m)
                     perm_entropy = np.log(unique_patterns) / np.log(max_patterns)
                     perm_entropies.append(perm_entropy)
             

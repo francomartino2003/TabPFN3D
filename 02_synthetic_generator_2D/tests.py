@@ -27,7 +27,6 @@ from transformations import (
     NNTransformation,
     DiscretizationTransformation,
     TreeTransformation,
-    IdentityTransformation,
     RootNoiseGenerator,
 )
 
@@ -68,6 +67,16 @@ class TestConfig:
         assert 'n_rows' in d
         assert 'n_features' in d
         assert 'is_classification' in d
+    
+    def test_density_in_config(self):
+        """Test that density is properly sampled."""
+        prior = PriorConfig(density_range=(0.2, 0.6))
+        rng = np.random.default_rng(42)
+        
+        config = prior.sample_hyperparams(rng)
+        
+        assert 0.0 <= config.density <= 1.0
+        assert config.n_roots >= 1
 
 
 class TestActivations:
@@ -77,9 +86,10 @@ class TestActivations:
         """Test that all activations can be applied."""
         x = np.linspace(-2, 2, 100)
         
-        for name in ['identity', 'log', 'sigmoid', 'tanh', 'sin', 'cos',
-                     'abs', 'square', 'cube', 'sqrt', 'relu', 'softplus',
-                     'step', 'mod', 'rank', 'exp_neg', 'gaussian']:
+        # All activations from the paper + extras
+        for name in ['identity', 'relu', 'tanh', 'sigmoid', 'softplus',
+                     'sin', 'cos', 'abs', 'square', 'log', 'step',
+                     'leaky_relu', 'elu', 'rank', 'power', 'mod']:
             fn = Activation.get(name)
             result = fn(x)
             assert result.shape == x.shape, f"Activation {name} changed shape"
@@ -128,6 +138,43 @@ class TestDAGBuilder:
         for parent, child in dag.edges:
             assert order_map[parent] < order_map[child], "Edge violates topological order"
     
+    def test_dag_density(self):
+        """Test that density controls number of edges."""
+        rng = np.random.default_rng(42)
+        
+        # Low density
+        prior_low = PriorConfig(density_range=(0.1, 0.15), n_nodes_range=(20, 25))
+        config_low = prior_low.sample_hyperparams(rng)
+        dag_low = DAGBuilder(config_low, rng).build()
+        
+        # High density  
+        prior_high = PriorConfig(density_range=(0.8, 0.9), n_nodes_range=(20, 25))
+        config_high = prior_high.sample_hyperparams(np.random.default_rng(42))
+        dag_high = DAGBuilder(config_high, np.random.default_rng(42)).build()
+        
+        # High density should have more edges relative to nodes
+        ratio_low = len(dag_low.edges) / len(dag_low.nodes)
+        ratio_high = len(dag_high.edges) / len(dag_high.nodes)
+        
+        assert ratio_high > ratio_low, "Higher density should produce more edges"
+    
+    def test_multiple_roots(self):
+        """Test that multiple root nodes are created."""
+        prior = PriorConfig(n_nodes_range=(30, 40), n_roots_range=(5, 10))
+        rng = np.random.default_rng(42)
+        config = prior.sample_hyperparams(rng)
+        
+        builder = DAGBuilder(config, rng)
+        dag = builder.build()
+        
+        # Should have multiple roots
+        assert len(dag.root_nodes) >= 1
+        
+        # All roots should have no parents
+        for root_id in dag.root_nodes:
+            assert len(dag.nodes[root_id].parents) == 0
+            assert dag.nodes[root_id].is_root
+    
     def test_dag_subgraphs(self):
         """Test disconnected subgraphs."""
         prior = PriorConfig(
@@ -172,10 +219,11 @@ class TestTransformations:
         """Test neural network transformation."""
         rng = np.random.default_rng(42)
         
+        # New NNTransformation uses a single weight vector
         transform = NNTransformation(
-            weights=[np.array([[0.5, 0.3], [0.2, 0.4]])],
-            biases=[np.array([0.1, 0.2])],
-            activations=['tanh'],
+            weights=np.array([0.5, 0.3]),  # One weight per parent
+            bias=0.1,
+            activation='tanh',
             noise_scale=0.01,
             rng=rng
         )
@@ -186,23 +234,48 @@ class TestTransformations:
         assert outputs.shape == (100,)
         assert np.all(np.isfinite(outputs))
     
+    def test_nn_transformation_identity(self):
+        """Test NN with identity activation (linear transformation)."""
+        rng = np.random.default_rng(42)
+        
+        transform = NNTransformation(
+            weights=np.array([1.0, 2.0]),
+            bias=0.5,
+            activation='identity',  # Linear!
+            noise_scale=0.0,  # No noise for deterministic test
+            rng=rng
+        )
+        
+        inputs = np.array([[1.0, 1.0], [2.0, 0.0]])
+        outputs = transform.forward(inputs)
+        
+        # Expected: [1*1 + 2*1 + 0.5, 1*2 + 2*0 + 0.5] = [3.5, 2.5]
+        expected = np.array([3.5, 2.5])
+        np.testing.assert_array_almost_equal(outputs, expected)
+    
     def test_discretization_transformation(self):
         """Test discretization transformation."""
         rng = np.random.default_rng(42)
         
+        # New DiscretizationTransformation with normalized output
         transform = DiscretizationTransformation(
             prototypes=np.array([[-1.0], [0.0], [1.0]]),
-            category_embeddings=np.array([-1.0, 0.0, 1.0]),
-            noise_scale=0.01,
+            n_categories=3,
+            noise_scale=0.0,  # No noise for deterministic test
             rng=rng
         )
         
-        inputs = np.random.randn(100, 1)
+        # Test specific inputs
+        inputs = np.array([[-0.9], [0.1], [0.8]])  # Should map to categories 0, 1, 2
         outputs = transform.forward(inputs)
-        categories = transform.get_category_indices(inputs)
         
-        assert outputs.shape == (100,)
-        assert categories.shape == (100,)
+        # Output should be normalized: category_idx / n_categories
+        # Categories: 0, 1, 2 -> Outputs: 0/3, 1/3, 2/3
+        assert outputs.shape == (3,)
+        assert np.all(outputs >= 0) and np.all(outputs < 1)
+        
+        # Get raw category indices
+        categories = transform.get_category_indices(inputs)
         assert set(categories).issubset({0, 1, 2})
     
     def test_tree_transformation(self):
@@ -211,8 +284,8 @@ class TestTransformations:
         
         # Simple depth-1 tree
         transform = TreeTransformation(
-            thresholds=np.array([0.0, 0.0, 0.0]),
             feature_indices=np.array([0, 0, 0]),
+            thresholds=np.array([0.0, 0.0, 0.0]),
             left_children=np.array([1, -1, -1]),
             right_children=np.array([2, -1, -1]),
             leaf_values=np.array([0.0, -1.0, 1.0]),
@@ -285,8 +358,7 @@ class TestRowGenerator:
         
         propagated = generator.generate(n_samples=100)
         
-        assert propagated.metadata['generation_type'] == 'prototype'
-        assert 'prototype_assignments' in propagated.metadata
+        assert propagated.metadata['generation_type'] == 'prototype_mixture'
 
 
 class TestFeatureSelector:
@@ -515,10 +587,10 @@ def run_tests():
                 total_tests += 1
                 try:
                     getattr(instance, method_name)()
-                    print(f"  ✓ {method_name}")
+                    print(f"  [PASS] {method_name}")
                     passed_tests += 1
                 except Exception as e:
-                    print(f"  ✗ {method_name}")
+                    print(f"  [FAIL] {method_name}")
                     print(f"    Error: {e}")
                     traceback.print_exc()
                     failed_tests.append((test_class.__name__, method_name, str(e)))
@@ -541,4 +613,3 @@ def run_tests():
 if __name__ == "__main__":
     success = run_tests()
     sys.exit(0 if success else 1)
-

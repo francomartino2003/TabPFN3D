@@ -7,23 +7,47 @@ Validates that generated datasets:
 3. Have appropriate difficulty distribution
 4. Don't have data leakage
 5. Work with different sampling modes
+6. Have realistic temporal characteristics
+7. Match distributions of real time series datasets
 
 Adapted from 2D sanity checks for temporal data.
 """
 
 import numpy as np
+import pandas as pd
 import json
+import pickle
+import os
+from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
+from collections import defaultdict
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, mean_squared_error
+from sklearn.metrics import accuracy_score, mean_squared_error, roc_auc_score
+from sklearn.dummy import DummyClassifier
+from sklearn.preprocessing import StandardScaler
+from scipy import stats
+from scipy.signal import correlate
 import warnings
+
+warnings.filterwarnings('ignore')
 
 from config import PriorConfig3D
 from generator import SyntheticDatasetGenerator3D, SyntheticDataset3D
 
+try:
+    from xgboost import XGBClassifier
+    HAS_XGBOOST = True
+except ImportError:
+    HAS_XGBOOST = False
+    print("Warning: XGBoost not installed. Using RandomForest as replacement.")
+
+
+# =============================================================================
+# Data Classes
+# =============================================================================
 
 @dataclass
 class DatasetStats3D:
@@ -41,12 +65,46 @@ class DatasetStats3D:
     n_noise_inputs: int
     n_time_inputs: int
     n_state_inputs: int
+    
+    # Model performance
     baseline_acc: float
+    logistic_acc: float
     rf_acc: float
+    xgb_acc: float
     lift: float
+    
+    # Data quality
     has_nan: bool
     nan_rate: float
+    
+    # Temporal statistics
+    mean_autocorr_lag1: float = 0.0
+    mean_autocorr_lag5: float = 0.0
+    trend_strength: float = 0.0
+    seasonality_score: float = 0.0
+    
+    # Feature stats
+    mean_feature_std: float = 0.0
+    mean_feature_range: float = 0.0
 
+
+@dataclass
+class TemporalStats:
+    """Temporal statistics for a time series."""
+    autocorr_lag1: float
+    autocorr_lag5: float
+    autocorr_lag10: float
+    trend_strength: float
+    stationarity_pvalue: float
+    mean: float
+    std: float
+    range: float
+    zero_crossing_rate: float
+
+
+# =============================================================================
+# Utility Functions
+# =============================================================================
 
 def flatten_temporal(X: np.ndarray) -> np.ndarray:
     """
@@ -60,6 +118,64 @@ def flatten_temporal(X: np.ndarray) -> np.ndarray:
     """
     n_samples = X.shape[0]
     return X.reshape(n_samples, -1)
+
+
+def compute_autocorr(x: np.ndarray, lag: int) -> float:
+    """Compute autocorrelation at given lag."""
+    if len(x) <= lag:
+        return 0.0
+    x = x - np.nanmean(x)
+    x = np.nan_to_num(x, nan=0.0)
+    if np.std(x) < 1e-10:
+        return 0.0
+    autocorr = np.correlate(x, x, mode='full')
+    autocorr = autocorr[len(autocorr)//2:]
+    if autocorr[0] > 0:
+        return autocorr[lag] / autocorr[0]
+    return 0.0
+
+
+def compute_temporal_stats(series: np.ndarray) -> TemporalStats:
+    """Compute temporal statistics for a single time series."""
+    series = np.nan_to_num(series, nan=0.0)
+    
+    # Autocorrelation
+    ac1 = compute_autocorr(series, 1)
+    ac5 = compute_autocorr(series, min(5, len(series)-1))
+    ac10 = compute_autocorr(series, min(10, len(series)-1))
+    
+    # Trend strength (linear regression R²)
+    t = np.arange(len(series))
+    if np.std(series) > 1e-10:
+        slope, intercept, r_value, _, _ = stats.linregress(t, series)
+        trend = r_value ** 2
+    else:
+        trend = 0.0
+    
+    # Stationarity (simplified - just check variance stability)
+    mid = len(series) // 2
+    if mid > 5:
+        var1 = np.var(series[:mid])
+        var2 = np.var(series[mid:])
+        stat_pvalue = 1.0 if abs(var1 - var2) < 0.5 * (var1 + var2 + 1e-10) else 0.0
+    else:
+        stat_pvalue = 0.5
+    
+    # Zero crossing rate
+    zero_crossings = np.sum(np.abs(np.diff(np.sign(series - np.mean(series)))) > 0)
+    zcr = zero_crossings / (len(series) - 1) if len(series) > 1 else 0
+    
+    return TemporalStats(
+        autocorr_lag1=ac1,
+        autocorr_lag5=ac5,
+        autocorr_lag10=ac10,
+        trend_strength=trend,
+        stationarity_pvalue=stat_pvalue,
+        mean=float(np.mean(series)),
+        std=float(np.std(series)),
+        range=float(np.max(series) - np.min(series)),
+        zero_crossing_rate=zcr
+    )
 
 
 def prepare_data(
@@ -77,323 +193,785 @@ def prepare_data(
     # Flatten temporal dimension
     X_flat = flatten_temporal(X)
     
-    # Handle NaN
-    nan_mask = np.any(np.isnan(X_flat), axis=1)
-    X_clean = X_flat[~nan_mask]
-    y_clean = y[~nan_mask]
+    # Handle NaN - replace with 0
+    X_flat = np.nan_to_num(X_flat, nan=0.0)
     
-    if len(y_clean) < 10:
+    if len(y) < 10:
         return None, None, None, None
     
     # Check stratification
-    unique, counts = np.unique(y_clean, return_counts=True)
+    unique, counts = np.unique(y, return_counts=True)
     can_stratify = all(c >= 2 for c in counts) and len(unique) >= 2
     
     try:
         if can_stratify:
             X_train, X_test, y_train, y_test = train_test_split(
-                X_clean, y_clean, test_size=test_size, stratify=y_clean,
+                X_flat, y, test_size=test_size, stratify=y,
                 random_state=int(rng.integers(0, 2**31))
             )
         else:
             X_train, X_test, y_train, y_test = train_test_split(
-                X_clean, y_clean, test_size=test_size,
+                X_flat, y, test_size=test_size,
                 random_state=int(rng.integers(0, 2**31))
             )
+        
+        # Scale
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+        
         return X_train, X_test, y_train, y_test
-    except Exception as e:
-        warnings.warn(f"Split failed: {e}")
+    except:
         return None, None, None, None
 
 
-def evaluate_dataset(
-    dataset: SyntheticDataset3D,
-    dataset_id: int,
-    rng: np.random.Generator
-) -> DatasetStats3D:
-    """
-    Evaluate a single 3D dataset.
-    """
-    X, y = dataset.X, dataset.y
-    config = dataset.config
+def train_models(
+    X_train: np.ndarray, 
+    X_test: np.ndarray,
+    y_train: np.ndarray, 
+    y_test: np.ndarray,
+    is_classification: bool = True
+) -> Dict[str, float]:
+    """Train models and return accuracies."""
+    results = {}
     
-    # Basic stats
-    n_samples, n_features, t_subseq = X.shape
-    has_nan = np.any(np.isnan(X))
-    nan_rate = np.mean(np.isnan(X)) if has_nan else 0.0
-    
-    # Prepare data
-    split = prepare_data(X, y, rng=rng)
-    if split[0] is None:
-        # Can't evaluate
-        return DatasetStats3D(
-            dataset_id=dataset_id,
-            n_samples=n_samples,
-            n_features=n_features,
-            t_subseq=t_subseq,
-            T_total=config.T_total,
-            is_classification=dataset.is_classification,
-            n_classes=dataset.n_classes,
-            sample_mode=config.sample_mode,
-            target_offset_type=config.target_offset_type,
-            target_offset=config.target_offset,
-            n_noise_inputs=config.n_noise_inputs,
-            n_time_inputs=config.n_time_inputs,
-            n_state_inputs=config.n_state_inputs,
-            baseline_acc=1.0,
-            rf_acc=0.0,
-            lift=0.0,
-            has_nan=has_nan,
-            nan_rate=nan_rate
-        )
-    
-    X_train, X_test, y_train, y_test = split
-    
-    if dataset.is_classification:
-        # Baseline: random guess
-        n_classes = len(np.unique(y_train))
-        baseline_acc = 1.0 / max(1, n_classes)
+    if is_classification:
+        # Baseline
+        baseline = DummyClassifier(strategy='most_frequent')
+        baseline.fit(X_train, y_train)
+        results['baseline'] = accuracy_score(y_test, baseline.predict(X_test))
+        
+        # Logistic Regression
+        try:
+            lr = LogisticRegression(max_iter=500, random_state=42)
+            lr.fit(X_train, y_train)
+            results['logistic'] = accuracy_score(y_test, lr.predict(X_test))
+        except:
+            results['logistic'] = results['baseline']
         
         # Random Forest
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            rf = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42)
-            rf.fit(X_train, y_train)
-            rf_acc = accuracy_score(y_test, rf.predict(X_test))
-        
-        lift = rf_acc - baseline_acc
-    else:
-        # Regression - use R^2-like metric
-        baseline_pred = np.mean(y_train)
-        baseline_mse = mean_squared_error(y_test, np.full_like(y_test, baseline_pred))
-        
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            ridge = Ridge(alpha=1.0)
-            ridge.fit(X_train, y_train)
-            model_mse = mean_squared_error(y_test, ridge.predict(X_test))
-        
-        # Convert to "accuracy-like" for comparison
-        baseline_acc = 0.0  # Baseline is "no skill"
-        rf_acc = 1.0 - (model_mse / (baseline_mse + 1e-8))
-        rf_acc = max(0.0, rf_acc)  # Clip negative
-        lift = rf_acc
-    
-    return DatasetStats3D(
-        dataset_id=dataset_id,
-        n_samples=n_samples,
-        n_features=n_features,
-        t_subseq=t_subseq,
-        T_total=config.T_total,
-        is_classification=dataset.is_classification,
-        n_classes=dataset.n_classes,
-        sample_mode=config.sample_mode,
-        target_offset_type=config.target_offset_type,
-        target_offset=config.target_offset,
-        n_noise_inputs=config.n_noise_inputs,
-        n_time_inputs=config.n_time_inputs,
-        n_state_inputs=config.n_state_inputs,
-        baseline_acc=baseline_acc,
-        rf_acc=rf_acc,
-        lift=lift,
-        has_nan=has_nan,
-        nan_rate=nan_rate
-    )
-
-
-def run_sanity_checks(
-    n_datasets: int = 50,
-    seed: int = 42,
-    verbose: bool = True
-) -> Dict[str, Any]:
-    """
-    Run comprehensive sanity checks on the 3D generator.
-    
-    Args:
-        n_datasets: Number of datasets to generate
-        seed: Random seed
-        verbose: Print progress
-        
-    Returns:
-        Dictionary with check results
-    """
-    rng = np.random.default_rng(seed)
-    generator = SyntheticDatasetGenerator3D(seed=seed)
-    
-    all_stats: List[DatasetStats3D] = []
-    errors: List[str] = []
-    
-    if verbose:
-        print(f"Generating and evaluating {n_datasets} 3D datasets...")
-    
-    for i in range(n_datasets):
         try:
-            dataset = generator.generate()
-            stats = evaluate_dataset(dataset, i, rng)
-            all_stats.append(stats)
-            
-            if verbose and (i + 1) % 10 == 0:
-                print(f"  Completed {i + 1}/{n_datasets}")
-        except Exception as e:
-            errors.append(f"Dataset {i}: {str(e)}")
-            if verbose:
-                print(f"  Error on dataset {i}: {e}")
-    
-    if not all_stats:
-        return {"error": "No datasets generated successfully", "errors": errors}
-    
-    # Aggregate statistics
-    results = compute_aggregate_stats(all_stats)
-    results['errors'] = errors
-    results['n_successful'] = len(all_stats)
-    results['n_failed'] = len(errors)
-    results['individual_stats'] = [asdict(s) for s in all_stats]
-    
-    if verbose:
-        print_summary(results)
+            rf = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+            rf.fit(X_train, y_train)
+            results['rf'] = accuracy_score(y_test, rf.predict(X_test))
+        except:
+            results['rf'] = results['baseline']
+        
+        # XGBoost
+        if HAS_XGBOOST:
+            try:
+                xgb = XGBClassifier(n_estimators=50, max_depth=5, random_state=42, 
+                                   verbosity=0, use_label_encoder=False)
+                xgb.fit(X_train, y_train)
+                results['xgb'] = accuracy_score(y_test, xgb.predict(X_test))
+            except:
+                results['xgb'] = results['baseline']
+        else:
+            results['xgb'] = results['rf']
+    else:
+        # Regression
+        mean_pred = np.mean(y_train)
+        results['baseline'] = -mean_squared_error(y_test, np.full_like(y_test, mean_pred))
+        
+        try:
+            ridge = Ridge()
+            ridge.fit(X_train, y_train)
+            results['logistic'] = -mean_squared_error(y_test, ridge.predict(X_test))
+        except:
+            results['logistic'] = results['baseline']
+        
+        results['rf'] = results['logistic']
+        results['xgb'] = results['logistic']
     
     return results
 
 
-def compute_aggregate_stats(stats: List[DatasetStats3D]) -> Dict[str, Any]:
-    """Compute aggregate statistics."""
+class CustomUnpickler(pickle.Unpickler):
+    """Custom unpickler that handles missing modules."""
+    def find_class(self, module, name):
+        # Handle missing modules by returning a dummy class
+        try:
+            return super().find_class(module, name)
+        except ModuleNotFoundError:
+            # Return a simple class that stores attributes
+            class DummyClass:
+                def __init__(self, *args, **kwargs):
+                    pass
+                def __reduce__(self):
+                    return (self.__class__, ())
+            return DummyClass
+
+
+def load_real_datasets(pkl_path: str) -> List[Tuple[str, np.ndarray, np.ndarray]]:
+    """
+    Load real datasets from pickle file.
     
-    def percentiles(values: List[float]) -> Dict[str, float]:
-        arr = np.array(values)
+    Returns:
+        List of (name, X, y) tuples
+    """
+    if not os.path.exists(pkl_path):
+        print(f"  Real datasets file not found: {pkl_path}")
+        return []
+    
+    try:
+        with open(pkl_path, 'rb') as f:
+            data = CustomUnpickler(f).load()
+    except Exception as e:
+        print(f"  Error loading pickle: {e}")
+        return []
+    
+    datasets = []
+    
+    if isinstance(data, dict):
+        items = list(data.items())
+    elif isinstance(data, list):
+        items = list(enumerate(data))
+    else:
+        print(f"  Unexpected data type: {type(data)}")
+        return []
+    
+    for name, content in items:
+        try:
+            X, y = None, None
+            
+            # Try different formats
+            if isinstance(content, dict):
+                X = content.get('X', content.get('data', content.get('X_train', None)))
+                y = content.get('y', content.get('target', content.get('y_train', content.get('labels', None))))
+            elif isinstance(content, (tuple, list)) and len(content) >= 2:
+                X, y = content[0], content[1]
+            elif hasattr(content, 'X') and hasattr(content, 'y'):
+                X, y = content.X, content.y
+            elif hasattr(content, 'data') and hasattr(content, 'target'):
+                X, y = content.data, content.target
+            
+            if X is None or y is None:
+                continue
+            
+            X = np.array(X)
+            y = np.array(y)
+            
+            # Skip if shapes don't make sense
+            if X.size == 0 or y.size == 0:
+                continue
+            if len(X) != len(y):
+                continue
+            
+            # Ensure at least 2D
+            if X.ndim == 1:
+                X = X[:, np.newaxis]
+            if X.ndim == 2:
+                # Assume (n_samples, time_steps) -> (n_samples, 1, time_steps)
+                X = X[:, np.newaxis, :]
+            
+            datasets.append((str(name), X, y))
+        except Exception as e:
+            continue
+    
+    return datasets
+
+
+# =============================================================================
+# Sanity Check Functions
+# =============================================================================
+
+def sanity_check_1_basic_stats(datasets: List[SyntheticDataset3D]) -> Dict[str, Any]:
+    """
+    SANITY CHECK 1: Basic statistics and shape validation.
+    """
+    print("\n" + "="*60)
+    print("SANITY CHECK 1: Basic Statistics")
+    print("="*60)
+    
+    results = {
+        'n_datasets': len(datasets),
+        'shapes': [],
+        'modes': defaultdict(int),
+        'classification_ratio': 0,
+        'nan_stats': [],
+        'all_valid': True
+    }
+    
+    for i, ds in enumerate(datasets):
+        # Shape validation
+        X, y = ds.X, ds.y
+        shape = X.shape
+        results['shapes'].append(shape)
+        
+        # Mode distribution
+        results['modes'][ds.config.sample_mode] += 1
+        
+        # Classification ratio
+        if ds.is_classification:
+            results['classification_ratio'] += 1
+        
+        # NaN stats
+        nan_rate = np.sum(np.isnan(X)) / X.size if X.size > 0 else 0
+        results['nan_stats'].append(nan_rate)
+        
+        # Validation
+        if len(shape) != 3:
+            results['all_valid'] = False
+            print(f"  [FAIL] Dataset {i}: Invalid shape {shape}")
+        elif shape[0] < 10:
+            print(f"  [WARN] Dataset {i}: Few samples ({shape[0]})")
+    
+    results['classification_ratio'] /= len(datasets) if datasets else 1
+    results['modes'] = dict(results['modes'])
+    
+    print(f"\n  Total datasets: {results['n_datasets']}")
+    print(f"  Mode distribution: {results['modes']}")
+    print(f"  Classification ratio: {results['classification_ratio']:.1%}")
+    print(f"  Mean NaN rate: {np.mean(results['nan_stats']):.2%}")
+    print(f"  Shape range: {min(results['shapes'])} to {max(results['shapes'])}")
+    
+    return results
+
+
+def sanity_check_2_learnability(datasets: List[SyntheticDataset3D], n_test: int = 20) -> Dict[str, Any]:
+    """
+    SANITY CHECK 2: Models can learn from the data.
+    """
+    print("\n" + "="*60)
+    print("SANITY CHECK 2: Learnability")
+    print("="*60)
+    
+    stats_list = []
+    
+    for i, ds in enumerate(datasets[:n_test]):
+        if not ds.is_classification:
+            continue
+        
+        data = prepare_data(ds.X, ds.y.astype(int))
+        if data[0] is None:
+            continue
+        
+        X_train, X_test, y_train, y_test = data
+        perf = train_models(X_train, X_test, y_train, y_test, is_classification=True)
+        
+        lift = max(perf['rf'], perf['xgb']) - perf['baseline']
+        
+        stats_list.append({
+            'dataset_id': i,
+            'baseline': perf['baseline'],
+            'logistic': perf['logistic'],
+            'rf': perf['rf'],
+            'xgb': perf['xgb'],
+            'lift': lift,
+            'mode': ds.config.sample_mode
+        })
+        
+        if i % 5 == 0:
+            print(f"  Dataset {i}: baseline={perf['baseline']:.3f}, "
+                  f"rf={perf['rf']:.3f}, lift={lift:+.3f}")
+    
+    if not stats_list:
+        return {'error': 'No valid datasets'}
+    
+    lifts = [s['lift'] for s in stats_list]
+    results = {
+        'n_tested': len(stats_list),
+        'mean_lift': float(np.mean(lifts)),
+        'std_lift': float(np.std(lifts)),
+        'pct_positive_lift': float(np.mean([l > 0 for l in lifts])),
+        'mean_baseline': float(np.mean([s['baseline'] for s in stats_list])),
+        'mean_rf': float(np.mean([s['rf'] for s in stats_list])),
+        'mean_xgb': float(np.mean([s['xgb'] for s in stats_list])),
+        'stats': stats_list
+    }
+    
+    print(f"\n  Mean lift over baseline: {results['mean_lift']:+.3f}")
+    print(f"  Datasets with positive lift: {results['pct_positive_lift']:.1%}")
+    print(f"  Mean accuracy: baseline={results['mean_baseline']:.3f}, "
+          f"RF={results['mean_rf']:.3f}, XGB={results['mean_xgb']:.3f}")
+    
+    return results
+
+
+def sanity_check_3_temporal_characteristics(datasets: List[SyntheticDataset3D], 
+                                            n_test: int = 10) -> Dict[str, Any]:
+    """
+    SANITY CHECK 3: Temporal characteristics of generated data.
+    """
+    print("\n" + "="*60)
+    print("SANITY CHECK 3: Temporal Characteristics")
+    print("="*60)
+    
+    all_stats = []
+    
+    for i, ds in enumerate(datasets[:n_test]):
+        X = ds.X
+        n_samples, n_features, t_len = X.shape
+        
+        # Compute stats for sample of series
+        sample_size = min(100, n_samples)
+        sample_idx = np.random.choice(n_samples, sample_size, replace=False)
+        
+        ac1_list, ac5_list, trend_list, zcr_list = [], [], [], []
+        
+        for idx in sample_idx:
+            for f in range(n_features):
+                series = X[idx, f, :]
+                tstats = compute_temporal_stats(series)
+                ac1_list.append(tstats.autocorr_lag1)
+                ac5_list.append(tstats.autocorr_lag5)
+                trend_list.append(tstats.trend_strength)
+                zcr_list.append(tstats.zero_crossing_rate)
+        
+        all_stats.append({
+            'dataset_id': i,
+            'mode': ds.config.sample_mode,
+            'mean_autocorr_lag1': float(np.mean(ac1_list)),
+            'mean_autocorr_lag5': float(np.mean(ac5_list)),
+            'mean_trend': float(np.mean(trend_list)),
+            'mean_zcr': float(np.mean(zcr_list)),
+            'std_autocorr_lag1': float(np.std(ac1_list))
+        })
+        
+        print(f"  Dataset {i} ({ds.config.sample_mode}): "
+              f"AC(1)={np.mean(ac1_list):.3f}, "
+              f"AC(5)={np.mean(ac5_list):.3f}, "
+              f"Trend={np.mean(trend_list):.3f}")
+    
+    results = {
+        'n_tested': len(all_stats),
+        'mean_autocorr_lag1': float(np.mean([s['mean_autocorr_lag1'] for s in all_stats])),
+        'mean_autocorr_lag5': float(np.mean([s['mean_autocorr_lag5'] for s in all_stats])),
+        'mean_trend': float(np.mean([s['mean_trend'] for s in all_stats])),
+        'stats_by_mode': defaultdict(list),
+        'all_stats': all_stats
+    }
+    
+    # Group by mode
+    for s in all_stats:
+        results['stats_by_mode'][s['mode']].append(s)
+    results['stats_by_mode'] = dict(results['stats_by_mode'])
+    
+    print(f"\n  Overall mean AC(1): {results['mean_autocorr_lag1']:.3f}")
+    print(f"  Overall mean AC(5): {results['mean_autocorr_lag5']:.3f}")
+    print(f"  Overall mean Trend: {results['mean_trend']:.3f}")
+    
+    return results
+
+
+def sanity_check_4_mode_comparison(datasets: List[SyntheticDataset3D]) -> Dict[str, Any]:
+    """
+    SANITY CHECK 4: Compare characteristics across sampling modes.
+    """
+    print("\n" + "="*60)
+    print("SANITY CHECK 4: Sampling Mode Comparison")
+    print("="*60)
+    
+    by_mode = defaultdict(list)
+    
+    for ds in datasets:
+        mode = ds.config.sample_mode
+        by_mode[mode].append({
+            'n_samples': ds.X.shape[0],
+            'n_features': ds.X.shape[1],
+            't_subseq': ds.X.shape[2],
+            'n_classes': ds.n_classes,
+            'T_total': ds.config.T_total
+        })
+    
+    results = {}
+    for mode, stats in by_mode.items():
+        results[mode] = {
+            'count': len(stats),
+            'mean_samples': float(np.mean([s['n_samples'] for s in stats])),
+            'mean_features': float(np.mean([s['n_features'] for s in stats])),
+            'mean_t_subseq': float(np.mean([s['t_subseq'] for s in stats])),
+            'mean_T_total': float(np.mean([s['T_total'] for s in stats]))
+        }
+        
+        print(f"\n  {mode}:")
+        print(f"    Count: {results[mode]['count']}")
+        print(f"    Mean samples: {results[mode]['mean_samples']:.0f}")
+        print(f"    Mean features: {results[mode]['mean_features']:.1f}")
+        print(f"    Mean t_subseq: {results[mode]['mean_t_subseq']:.0f}")
+    
+    return results
+
+
+def sanity_check_5_label_permutation(datasets: List[SyntheticDataset3D], 
+                                     n_test: int = 10) -> Dict[str, Any]:
+    """
+    SANITY CHECK 5: Label permutation test - shuffled labels should hurt performance.
+    """
+    print("\n" + "="*60)
+    print("SANITY CHECK 5: Label Permutation Test")
+    print("="*60)
+    
+    results_list = []
+    
+    for i, ds in enumerate(datasets[:n_test]):
+        if not ds.is_classification:
+            continue
+        
+        data = prepare_data(ds.X, ds.y.astype(int))
+        if data[0] is None:
+            continue
+        
+        X_train, X_test, y_train, y_test = data
+        
+        # Original performance
+        perf_orig = train_models(X_train, X_test, y_train, y_test)
+        
+        # Permuted performance
+        rng = np.random.default_rng(42)
+        y_train_perm = rng.permutation(y_train)
+        perf_perm = train_models(X_train, X_test, y_train_perm, y_test)
+        
+        drop = perf_orig['rf'] - perf_perm['rf']
+        
+        results_list.append({
+            'dataset_id': i,
+            'rf_original': perf_orig['rf'],
+            'rf_permuted': perf_perm['rf'],
+            'drop': drop
+        })
+        
+        print(f"  Dataset {i}: RF original={perf_orig['rf']:.3f}, "
+              f"permuted={perf_perm['rf']:.3f}, drop={drop:+.3f}")
+    
+    if not results_list:
+        return {'error': 'No valid datasets'}
+    
+    drops = [r['drop'] for r in results_list]
+    results = {
+        'n_tested': len(results_list),
+        'mean_drop': float(np.mean(drops)),
+        'pct_positive_drop': float(np.mean([d > 0 for d in drops])),
+        'details': results_list
+    }
+    
+    print(f"\n  Mean performance drop: {results['mean_drop']:+.3f}")
+    print(f"  Datasets with expected behavior: {results['pct_positive_drop']:.1%}")
+    
+    return results
+
+
+def sanity_check_6_compare_with_real(
+    synthetic_datasets: List[SyntheticDataset3D],
+    real_pkl_path: str = "../01_real_data/AEON/data/classification_datasets.pkl",
+    n_synthetic: int = 20,
+    n_real: int = 20
+) -> Dict[str, Any]:
+    """
+    SANITY CHECK 6: Compare synthetic vs real dataset distributions.
+    """
+    print("\n" + "="*60)
+    print("SANITY CHECK 6: Comparison with Real Datasets")
+    print("="*60)
+    
+    # Load real datasets
+    script_dir = Path(__file__).parent
+    pkl_path = script_dir / real_pkl_path
+    
+    real_datasets = load_real_datasets(str(pkl_path))
+    
+    if not real_datasets:
+        print("  [WARN] Could not load real datasets")
+        return {'error': 'No real datasets loaded'}
+    
+    print(f"  Loaded {len(real_datasets)} real datasets")
+    
+    # Extract features from synthetic
+    synthetic_stats = []
+    for i, ds in enumerate(synthetic_datasets[:n_synthetic]):
+        X = ds.X
+        n_samples, n_features, t_len = X.shape
+        
+        # Sample temporal stats
+        sample_idx = np.random.choice(n_samples, min(50, n_samples), replace=False)
+        ac1_list = []
+        for idx in sample_idx:
+            for f in range(n_features):
+                series = X[idx, f, :]
+                ac1_list.append(compute_autocorr(series, 1))
+        
+        synthetic_stats.append({
+            'source': 'synthetic',
+            'n_samples': n_samples,
+            'n_features': n_features,
+            't_length': t_len,
+            'mean_ac1': float(np.mean(ac1_list)),
+            'std_ac1': float(np.std(ac1_list)),
+            'mean_value': float(np.nanmean(X)),
+            'std_value': float(np.nanstd(X))
+        })
+    
+    # Extract features from real
+    real_stats = []
+    for name, X, y in real_datasets[:n_real]:
+        n_samples = X.shape[0]
+        n_features = X.shape[1] if X.ndim > 1 else 1
+        t_len = X.shape[2] if X.ndim > 2 else (X.shape[1] if X.ndim == 2 else 1)
+        
+        # Reshape if needed
+        if X.ndim == 2:
+            X = X[:, :, np.newaxis]
+        
+        # Sample temporal stats
+        sample_idx = np.random.choice(n_samples, min(50, n_samples), replace=False)
+        ac1_list = []
+        for idx in sample_idx:
+            for f in range(min(n_features, 5)):  # Limit features
+                series = X[idx, f, :] if X.ndim == 3 else X[idx, :]
+                if len(series) > 1:
+                    ac1_list.append(compute_autocorr(series, 1))
+        
+        real_stats.append({
+            'source': 'real',
+            'name': name,
+            'n_samples': n_samples,
+            'n_features': n_features,
+            't_length': t_len,
+            'mean_ac1': float(np.mean(ac1_list)) if ac1_list else 0,
+            'std_ac1': float(np.std(ac1_list)) if ac1_list else 0,
+            'mean_value': float(np.nanmean(X)),
+            'std_value': float(np.nanstd(X))
+        })
+    
+    # Compare distributions
+    def compare_feature(synth, real, feature_name):
+        synth_vals = [s[feature_name] for s in synth]
+        real_vals = [s[feature_name] for s in real]
+        
+        # Filter NaN
+        synth_vals = [v for v in synth_vals if np.isfinite(v)]
+        real_vals = [v for v in real_vals if np.isfinite(v)]
+        
+        if not synth_vals or not real_vals:
+            return {'statistic': 0, 'pvalue': 1.0}
+        
+        stat, pvalue = stats.ks_2samp(synth_vals, real_vals)
         return {
-            'min': float(np.min(arr)),
-            'p10': float(np.percentile(arr, 10)),
-            'p25': float(np.percentile(arr, 25)),
-            'median': float(np.median(arr)),
-            'p75': float(np.percentile(arr, 75)),
-            'p90': float(np.percentile(arr, 90)),
-            'max': float(np.max(arr)),
-            'mean': float(np.mean(arr)),
-            'std': float(np.std(arr))
+            'synth_mean': float(np.mean(synth_vals)),
+            'synth_std': float(np.std(synth_vals)),
+            'real_mean': float(np.mean(real_vals)),
+            'real_std': float(np.std(real_vals)),
+            'ks_statistic': float(stat),
+            'ks_pvalue': float(pvalue)
         }
     
-    classification_stats = [s for s in stats if s.is_classification]
-    regression_stats = [s for s in stats if not s.is_classification]
+    comparisons = {
+        'n_samples': compare_feature(synthetic_stats, real_stats, 'n_samples'),
+        't_length': compare_feature(synthetic_stats, real_stats, 't_length'),
+        'mean_ac1': compare_feature(synthetic_stats, real_stats, 'mean_ac1'),
+        'std_value': compare_feature(synthetic_stats, real_stats, 'std_value')
+    }
     
-    # Count by mode
-    mode_counts = {}
-    for s in stats:
-        mode_counts[s.sample_mode] = mode_counts.get(s.sample_mode, 0) + 1
-    
-    # Count by offset type
-    offset_counts = {}
-    for s in stats:
-        offset_counts[s.target_offset_type] = offset_counts.get(s.target_offset_type, 0) + 1
+    print(f"\n  Distribution Comparisons (KS test):")
+    for feature, comp in comparisons.items():
+        print(f"    {feature}:")
+        print(f"      Synthetic: {comp.get('synth_mean', 0):.3f} ± {comp.get('synth_std', 0):.3f}")
+        print(f"      Real:      {comp.get('real_mean', 0):.3f} ± {comp.get('real_std', 0):.3f}")
+        print(f"      KS p-value: {comp.get('ks_pvalue', 0):.4f}")
     
     return {
-        'n_samples': percentiles([s.n_samples for s in stats]),
-        'n_features': percentiles([s.n_features for s in stats]),
-        't_subseq': percentiles([s.t_subseq for s in stats]),
-        'T_total': percentiles([s.T_total for s in stats]),
-        'n_classification': len(classification_stats),
-        'n_regression': len(regression_stats),
-        'mode_distribution': mode_counts,
-        'offset_distribution': offset_counts,
-        'baseline_acc': percentiles([s.baseline_acc for s in stats if s.is_classification]),
-        'rf_acc': percentiles([s.rf_acc for s in stats if s.is_classification]),
-        'lift': percentiles([s.lift for s in stats if s.is_classification]),
-        'nan_datasets': sum(1 for s in stats if s.has_nan),
-        'avg_nan_rate': float(np.mean([s.nan_rate for s in stats])),
-        'input_type_stats': {
-            'noise': percentiles([s.n_noise_inputs for s in stats]),
-            'time': percentiles([s.n_time_inputs for s in stats]),
-            'state': percentiles([s.n_state_inputs for s in stats])
-        }
+        'n_synthetic': len(synthetic_stats),
+        'n_real': len(real_stats),
+        'comparisons': comparisons,
+        'synthetic_stats': synthetic_stats,
+        'real_stats': real_stats
     }
 
 
-def print_summary(results: Dict[str, Any]):
-    """Print a summary of sanity check results."""
-    print("\n" + "="*70)
-    print("SANITY CHECK SUMMARY")
-    print("="*70)
+def sanity_check_7_difficulty_spectrum(datasets: List[SyntheticDataset3D], 
+                                       n_test: int = 30) -> Dict[str, Any]:
+    """
+    SANITY CHECK 7: Check variety of dataset difficulties.
+    """
+    print("\n" + "="*60)
+    print("SANITY CHECK 7: Difficulty Spectrum")
+    print("="*60)
     
-    print(f"\nDatasets: {results['n_successful']} successful, {results['n_failed']} failed")
-    print(f"Classification: {results['n_classification']}, Regression: {results['n_regression']}")
+    difficulties = []
     
-    print(f"\nSample modes: {results['mode_distribution']}")
-    print(f"Target offsets: {results['offset_distribution']}")
+    for i, ds in enumerate(datasets[:n_test]):
+        if not ds.is_classification:
+            continue
+        
+        data = prepare_data(ds.X, ds.y.astype(int))
+        if data[0] is None:
+            continue
+        
+        X_train, X_test, y_train, y_test = data
+        perf = train_models(X_train, X_test, y_train, y_test)
+        
+        difficulties.append({
+            'dataset_id': i,
+            'baseline': perf['baseline'],
+            'best_model': max(perf['rf'], perf['xgb']),
+            'lift': max(perf['rf'], perf['xgb']) - perf['baseline']
+        })
     
-    print(f"\nDataset sizes:")
-    print(f"  n_samples: {results['n_samples']['median']:.0f} median "
-          f"(range: {results['n_samples']['min']:.0f}-{results['n_samples']['max']:.0f})")
-    print(f"  n_features: {results['n_features']['median']:.0f} median "
-          f"(range: {results['n_features']['min']:.0f}-{results['n_features']['max']:.0f})")
-    print(f"  t_subseq: {results['t_subseq']['median']:.0f} median "
-          f"(range: {results['t_subseq']['min']:.0f}-{results['t_subseq']['max']:.0f})")
+    if not difficulties:
+        return {'error': 'No valid datasets'}
     
-    if 'baseline_acc' in results and results['baseline_acc']:
-        print(f"\nClassification performance:")
-        print(f"  Baseline accuracy: {results['baseline_acc']['median']:.3f} median")
-        print(f"  RF accuracy: {results['rf_acc']['median']:.3f} median")
-        print(f"  Lift: {results['lift']['median']:.3f} median "
-              f"(range: {results['lift']['min']:.3f}-{results['lift']['max']:.3f})")
+    lifts = [d['lift'] for d in difficulties]
+    baselines = [d['baseline'] for d in difficulties]
     
-    print(f"\nInput types (median):")
-    print(f"  Noise: {results['input_type_stats']['noise']['median']:.0f}")
-    print(f"  Time: {results['input_type_stats']['time']['median']:.0f}")
-    print(f"  State: {results['input_type_stats']['state']['median']:.0f}")
+    # Categorize difficulty
+    easy = sum(1 for l in lifts if l > 0.3)
+    medium = sum(1 for l in lifts if 0.1 <= l <= 0.3)
+    hard = sum(1 for l in lifts if 0 < l < 0.1)
+    impossible = sum(1 for l in lifts if l <= 0)
     
-    print(f"\nMissing values: {results['nan_datasets']} datasets have NaN")
-    print(f"  Average NaN rate: {results['avg_nan_rate']:.2%}")
+    results = {
+        'n_tested': len(difficulties),
+        'easy': easy,
+        'medium': medium,
+        'hard': hard,
+        'impossible': impossible,
+        'lift_min': float(min(lifts)),
+        'lift_max': float(max(lifts)),
+        'lift_mean': float(np.mean(lifts)),
+        'baseline_mean': float(np.mean(baselines)),
+        'details': difficulties
+    }
     
-    # Warnings
-    print("\n" + "-"*70)
-    print("CHECKS:")
+    print(f"\n  Difficulty distribution:")
+    print(f"    Easy (lift > 0.3):    {easy} ({easy/len(difficulties)*100:.0f}%)")
+    print(f"    Medium (0.1-0.3):     {medium} ({medium/len(difficulties)*100:.0f}%)")
+    print(f"    Hard (0-0.1):         {hard} ({hard/len(difficulties)*100:.0f}%)")
+    print(f"    Impossible (<=0):     {impossible} ({impossible/len(difficulties)*100:.0f}%)")
+    print(f"  Lift range: [{results['lift_min']:.3f}, {results['lift_max']:.3f}]")
     
-    # Check 1: Lift > 0 for most datasets
-    if 'lift' in results and results['lift']:
-        positive_lift = sum(1 for s in results.get('individual_stats', []) 
-                          if s.get('is_classification') and s.get('lift', 0) > 0)
-        total_class = results['n_classification']
-        pct = positive_lift / total_class if total_class > 0 else 0
-        status = "[OK]" if pct > 0.5 else "[WARN]"
-        print(f"  {status} Positive lift: {positive_lift}/{total_class} ({pct:.1%})")
-    
-    # Check 2: Variety in modes
-    modes = results['mode_distribution']
-    if len(modes) >= 2:
-        print(f"  [OK] Multiple sample modes used: {list(modes.keys())}")
-    else:
-        print(f"  [WARN] Only one sample mode: {list(modes.keys())}")
-    
-    # Check 3: Errors
-    if results['n_failed'] == 0:
-        print(f"  [OK] No generation errors")
-    else:
-        print(f"  [WARN] {results['n_failed']} generation errors")
-    
-    print("="*70)
+    return results
 
 
-def save_results(results: Dict[str, Any], filepath: str):
-    """Save results to JSON file."""
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(results, f, indent=2, default=str)
-    print(f"Results saved to {filepath}")
+def sanity_check_8_input_type_impact(datasets: List[SyntheticDataset3D]) -> Dict[str, Any]:
+    """
+    SANITY CHECK 8: Impact of different input types (noise, time, state).
+    """
+    print("\n" + "="*60)
+    print("SANITY CHECK 8: Input Type Distribution")
+    print("="*60)
+    
+    stats = []
+    
+    for ds in datasets:
+        cfg = ds.config
+        total_inputs = cfg.n_noise_inputs + cfg.n_time_inputs + cfg.n_state_inputs
+        
+        stats.append({
+            'n_noise': cfg.n_noise_inputs,
+            'n_time': cfg.n_time_inputs,
+            'n_state': cfg.n_state_inputs,
+            'total': total_inputs,
+            'noise_ratio': cfg.n_noise_inputs / total_inputs if total_inputs > 0 else 0,
+            'time_ratio': cfg.n_time_inputs / total_inputs if total_inputs > 0 else 0,
+            'state_ratio': cfg.n_state_inputs / total_inputs if total_inputs > 0 else 0
+        })
+    
+    results = {
+        'n_datasets': len(stats),
+        'mean_noise': float(np.mean([s['n_noise'] for s in stats])),
+        'mean_time': float(np.mean([s['n_time'] for s in stats])),
+        'mean_state': float(np.mean([s['n_state'] for s in stats])),
+        'mean_noise_ratio': float(np.mean([s['noise_ratio'] for s in stats])),
+        'mean_time_ratio': float(np.mean([s['time_ratio'] for s in stats])),
+        'mean_state_ratio': float(np.mean([s['state_ratio'] for s in stats]))
+    }
+    
+    print(f"\n  Mean input counts:")
+    print(f"    Noise inputs: {results['mean_noise']:.1f} ({results['mean_noise_ratio']*100:.0f}%)")
+    print(f"    Time inputs:  {results['mean_time']:.1f} ({results['mean_time_ratio']*100:.0f}%)")
+    print(f"    State inputs: {results['mean_state']:.1f} ({results['mean_state_ratio']*100:.0f}%)")
+    
+    return results
+
+
+# =============================================================================
+# Main Orchestration
+# =============================================================================
+
+def run_all_checks(
+    n_datasets: int = 50,
+    seed: int = 42,
+    output_dir: str = "sanity_check_results",
+    real_data_path: str = "../01_real_data/AEON/data/classification_datasets.pkl"
+) -> Dict[str, Any]:
+    """
+    Run all sanity checks and save results.
+    """
+    print("="*60)
+    print("3D SYNTHETIC GENERATOR SANITY CHECKS")
+    print("="*60)
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Generate datasets
+    print(f"\nGenerating {n_datasets} synthetic datasets...")
+    generator = SyntheticDatasetGenerator3D(seed=seed)
+    datasets = []
+    
+    for i in range(n_datasets):
+        try:
+            ds = generator.generate()
+            datasets.append(ds)
+            if (i + 1) % 10 == 0:
+                print(f"  Generated {i + 1}/{n_datasets}")
+        except Exception as e:
+            print(f"  Error generating dataset {i}: {e}")
+    
+    print(f"Successfully generated {len(datasets)} datasets")
+    
+    # Run checks
+    all_results = {}
+    
+    all_results['check_1_basic'] = sanity_check_1_basic_stats(datasets)
+    all_results['check_2_learnability'] = sanity_check_2_learnability(datasets)
+    all_results['check_3_temporal'] = sanity_check_3_temporal_characteristics(datasets)
+    all_results['check_4_modes'] = sanity_check_4_mode_comparison(datasets)
+    all_results['check_5_permutation'] = sanity_check_5_label_permutation(datasets)
+    all_results['check_6_vs_real'] = sanity_check_6_compare_with_real(
+        datasets, real_data_path
+    )
+    all_results['check_7_difficulty'] = sanity_check_7_difficulty_spectrum(datasets)
+    all_results['check_8_inputs'] = sanity_check_8_input_type_impact(datasets)
+    
+    # Convert numpy types for JSON serialization
+    def convert(obj):
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: convert(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert(v) for v in obj]
+        return obj
+    
+    # Save results
+    results_path = os.path.join(output_dir, "sanity_check_results.json")
+    with open(results_path, 'w') as f:
+        json.dump(convert(all_results), f, indent=2)
+    
+    print(f"\n" + "="*60)
+    print("SUMMARY")
+    print("="*60)
+    print(f"Results saved to: {results_path}")
+    print(f"Total datasets generated: {len(datasets)}")
+    
+    # Print summary statistics
+    if 'check_2_learnability' in all_results and 'mean_lift' in all_results['check_2_learnability']:
+        print(f"Mean lift over baseline: {all_results['check_2_learnability']['mean_lift']:+.3f}")
+    
+    if 'check_7_difficulty' in all_results and 'lift_mean' in all_results['check_7_difficulty']:
+        print(f"Difficulty spectrum covered: lift range "
+              f"[{all_results['check_7_difficulty']['lift_min']:.3f}, "
+              f"{all_results['check_7_difficulty']['lift_max']:.3f}]")
+    
+    return all_results
 
 
 if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Run 3D generator sanity checks")
-    parser.add_argument("--n_datasets", type=int, default=50, help="Number of datasets")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--output", type=str, default="sanity_check_results_3d.json", 
-                       help="Output file")
-    args = parser.parse_args()
-    
-    results = run_sanity_checks(
-        n_datasets=args.n_datasets,
-        seed=args.seed,
-        verbose=True
-    )
-    
-    save_results(results, args.output)
-
-
+    results = run_all_checks(n_datasets=50, seed=42)

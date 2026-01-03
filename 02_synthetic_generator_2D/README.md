@@ -28,58 +28,101 @@ print(f"Shape: {X.shape}, Classes: {dataset.n_classes}")
 | Archivo | Función |
 |---------|---------|
 | `config.py` | `PriorConfig` (distribuciones) y `DatasetConfig` (instancia) |
-| `dag_builder.py` | Construcción del DAG con redirection sampling |
-| `transformations.py` | Transformaciones: NN, Tree, Discretization, Identity |
+| `dag_builder.py` | Construcción del DAG con orden topológico y densidad controlable |
+| `transformations.py` | Transformaciones: NN (con 12 activaciones), Tree, Discretization |
 | `row_generator.py` | Propagación de valores por el grafo |
 | `feature_selector.py` | Selección de features y target |
 | `post_processing.py` | Warping (Kumaraswamy), cuantización, missing values |
 | `generator.py` | Clase principal |
-| `sanity_checks.py` | Validación de datasets generados |
-| `analyze_value_ranges.py` | Análisis de rangos de valores |
+| `sanity_checks.py` | Validación completa de datasets generados |
+| `tests.py` | Tests unitarios |
 
-## Parámetros Clave (según paper)
+## Parámetros Clave
 
 ### Tamaño
-- **n_rows**: Uniforme en [50, 2048]
+- **n_samples**: Uniforme en [50, 2048]
 - **n_features**: Beta(0.95, 8.0) escalado a [1, 160]
-- **max_cells**: 75,000 (n_rows × n_features)
+- **max_cells**: 75,000 (n_samples × n_features)
 
 ### Estructura del Grafo
 - **n_nodes**: Log-uniform en [50, 600] (nodos latentes)
-- **redirection_prob**: Gamma(2.0, 5.0) - controla densidad del grafo
+- **density**: Uniforme en [0.01, 0.8] - controla cuántos edges adicionales se agregan
+- **n_roots_range**: (3, 15) - número de nodos raíz (inputs)
 
 ### Transformaciones
-```
-NN:            ~50% (linear + activación)
-Tree:          ~20% (decision tree piecewise)
-Discretization: ~15% (categorización por prototipos)
-Identity:      ~15% (suma ponderada + ruido)
+Cada nodo no-raíz tiene exactamente **una** transformación que toma todos sus padres como input:
+
+| Tipo | Prob | Descripción |
+|------|------|-------------|
+| NN | ~60% | Linear combination + activación + ruido |
+| Tree | ~25% | Decision tree con subset de features de padres |
+| Discretization | ~15% | Distancia a prototipos → categoría normalizada |
+
+### Activaciones (12 funciones del paper)
+```python
+['identity', 'log', 'sigmoid', 'abs', 'sin', 'tanh', 
+ 'rank', 'square', 'power', 'softplus', 'step', 'mod']
 ```
 
-### Activaciones (NN)
-`relu, tanh, sigmoid, leaky_relu, elu, softplus, power`
+- **identity**: f(x) = x (transformación lineal)
+- **log**: f(x) = log(|x| + 1)
+- **sigmoid**: f(x) = 1 / (1 + e^(-x))
+- **abs**: f(x) = |x|
+- **sin**: f(x) = sin(x)
+- **tanh**: f(x) = tanh(x)
+- **rank**: f(x) = percentil rank
+- **square**: f(x) = x²
+- **power**: f(x) = |x|^α, α ∈ [0.5, 3]
+- **softplus**: f(x) = log(1 + e^x)
+- **step**: f(x) = 1 si x > 0, else 0
+- **mod**: f(x) = x mod m, m ∈ [0.5, 2]
 
-### Ruido en Raíces
-- **Normal**: N(0, σ²) con σ ~ Uniform[0.1, 2.0]
-- **Uniform**: U(-a, a) con a ~ Uniform[0.5, 2.0]
-- **Mixed**: Selección aleatoria entre Normal y Uniform por nodo
+### Discretización
+- Recibe vector de padres
+- Calcula distancia a K prototipos (K ∈ [2, 8])
+- Asigna categoría del prototipo más cercano
+- Normaliza: output = categoría / K (para usar en grafo)
+- Agrega ruido gaussiano
+
+### Decision Tree
+- Selecciona subset de features de los padres (tree_max_features_fraction=0.7)
+- Genera árbol con profundidad [2, 5]
+- Cada nodo: (feature_idx, threshold, left_val, right_val)
+
+### Ruido en Transformaciones
+Todas las transformaciones agregan ruido gaussiano N(0, σ²) al final.
 
 ### Número de Clases
 - Gamma(2.0, 2.0) + offset de 2
-- Limitado a min(10, n_rows/10) para balance
+- Limitado a min(10, n_samples/min_samples_per_class)
+- **min_samples_per_class**: 10 (mínimo de samples por clase)
 
-## Rangos de Valores Típicos
+## Construcción del DAG
 
-| Etapa | Rango p1-p99 | Mean | Std |
-|-------|--------------|------|-----|
-| Root nodes | [-0.6, 0.5] | ~0 | 0.3 |
-| Depth 4 | [-1.4, 7.4] | 0.3 | 1.1 |
-| Features (X) | [-4.5, 1.7] | 0.2 | 1.0 |
+El DAG se construye usando **orden topológico**:
+
+1. Asignar orden aleatorio a todos los nodos
+2. Determinar número de roots (3-15)
+3. Calcular edges objetivo basado en `density`
+4. Agregar edges solo de nodos con orden menor a mayor (garantiza aciclicidad)
+5. Asegurar conectividad (cada no-root tiene al menos 1 padre)
+
+Esto permite controlar la **densidad** del grafo:
+- density=0: grafo mínimo (árbol)
+- density=1: DAG máximamente denso
+
+## Subgrafos Desconectados
+
+El generador puede crear subgrafos desconectados para features irrelevantes:
+- Probabilidad: 30%
+- Cada subgrafo tiene mínimo 3 nodos
+- Subgrafos pueden tener múltiples roots
+- El subgrafo principal retiene al menos 60% de los nodos
 
 ## Sanity Checks
 
 ```bash
-python sanity_checks.py --n 100 --seed 42
+python sanity_checks.py
 ```
 
 Verifica:
@@ -89,20 +132,14 @@ Verifica:
 - ✅ Label permutation test (sin data leakage)
 - ✅ Learning curves (mejora con más datos)
 - ✅ Invariancia a permutaciones
-
-## Análisis de Rangos
-
-```bash
-python analyze_value_ranges.py --seed 42
-```
-
-Muestra valores en cada profundidad del grafo y por tipo de transformación.
+- ✅ Discretización correcta (prototipos, categorías, entropía)
+- ✅ Visualización de DAGs generados
 
 ## Prevención de Data Leakage
 
 El generador excluye de los features:
 1. El nodo target
-2. Los **padres directos** del target (evita que X contenga la pre-transformación de y)
+2. Los **padres directos** del target
 
 ## Configuración Personalizada
 
@@ -110,10 +147,13 @@ El generador excluye de los features:
 from config import PriorConfig
 
 prior = PriorConfig(
-    n_rows_range=(100, 500),
+    n_samples_range=(100, 500),
     n_nodes_range=(30, 100),
-    prob_classification=1.0,  # Solo clasificación
-    prob_missing_values=0.0,  # Sin missing values
+    density_range=(0.1, 0.5),
+    prob_classification=1.0,
+    prob_missing_values=0.0,
+    min_samples_per_class=20,
+    activations=['identity', 'tanh', 'sigmoid', 'relu']
 )
 
 gen = SyntheticDatasetGenerator(prior=prior, seed=42)
@@ -124,3 +164,10 @@ gen = SyntheticDatasetGenerator(prior=prior, seed=42)
 ```bash
 python tests.py
 ```
+
+Incluye tests para:
+- Construcción de DAG
+- Todas las transformaciones
+- Todas las activaciones
+- Densidad del grafo
+- Múltiples roots

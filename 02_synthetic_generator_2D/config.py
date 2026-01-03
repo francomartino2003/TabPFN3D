@@ -24,7 +24,7 @@ class PriorConfig:
     
     # === Size parameters ===
     # Number of rows (samples) range - sampled uniformly up to 2048 per paper
-    n_rows_range: Tuple[int, int] = (50, 2048)
+    n_rows_range: Tuple[int, int] = (50, 10000)
     n_rows_log_uniform: bool = False  # Paper samples uniformly, not log-uniform
     
     # Number of features - Beta(0.95, 8.0) scaled to [1, 160] per paper
@@ -49,70 +49,68 @@ class PriorConfig:
     # Number of nodes in the DAG (log-uniform as per paper)
     # Larger graphs = more layers of transformation = more complex relationships
     # More nodes = more latent variables = deeper causal structure
-    n_nodes_range: Tuple[int, int] = (50, 600)
+    n_nodes_range: Tuple[int, int] = (12, 250)
     n_nodes_log_uniform: bool = True
     
-    # Redirection probability P (Gamma distribution as per paper)
-    # "The redirection probability P is sampled from a gamma distribution, P ~ Γ(α, β)"
-    # Smaller P = denser graphs with more edges on average
-    redirection_gamma_shape: float = 2.0  # α parameter
-    redirection_gamma_rate: float = 5.0   # β parameter
+    # Edge density (0.0 = minimal tree, 1.0 = complete DAG)
+    # Controls how many edges beyond the minimum (n-1) are added
+    density_range: Tuple[float, float] = (0.01, 0.8)
+    
+    # Number of root/input nodes (nodes without parents)
+    n_roots_range: Tuple[int, int] = (3, 15)
     
     # Probability of creating disconnected subgraphs (for irrelevant features)
     prob_disconnected_subgraph: float = 0.3
     n_disconnected_subgraphs_range: Tuple[int, int] = (1, 5)
     
     # === Transformation parameters ===
-    # Probabilities for each edge transformation type
+    # Probabilities for each node transformation type (applied per child node)
     prob_nn_transform: float = 0.5  # Neural network-like transformation
     prob_tree_transform: float = 0.2  # Decision tree-like transformation
-    prob_discretization: float = 0.2  # Discretization (categorical)
-    prob_identity: float = 0.1  # Identity with noise
+    prob_discretization: float = 0.3  # Discretization (categorical)
     
-    # Neural network transformation parameters
-    nn_hidden_range: Tuple[int, int] = (1, 5)  # Number of hidden "layers"
-    nn_width_range: Tuple[int, int] = (1, 10)  # Width of hidden layers
-    
-    # Available activation functions (per paper):
-    # "identity, logarithm, sigmoid, absolute value, sine, hyperbolic tangent, 
-    # rank operation, squaring, power functions, smooth ReLU, step function 
-    # and modulo operation"
+    # Available activation functions for NN transformation
+    # Per paper: "identity, logarithm, sigmoid, absolute value, sine, 
+    # hyperbolic tangent, rank operation, squaring, power functions, 
+    # smooth ReLU, step function and modulo operation"
     activations: List[str] = field(default_factory=lambda: [
-        'identity', 'log', 'sigmoid', 'tanh', 'sin',
-        'abs', 'square', 'power', 'softplus', 'step', 'mod', 'rank'
+        'identity',    # Linear (no activation)
+        'log',         # Logarithm: log(|x| + eps)
+        'sigmoid',     # Sigmoid: 1/(1+exp(-x))
+        'abs',         # Absolute value: |x|
+        'sin',         # Sine: sin(x)
+        'tanh',        # Hyperbolic tangent: tanh(x)
+        'rank',        # Rank operation: convert to percentile ranks
+        'square',      # Squaring: x^2
+        'power',       # Power function: sign(x)*|x|^p with random p
+        'softplus',    # Smooth ReLU: log(1+exp(x))
+        'step',        # Step function: 1 if x>0 else 0
+        'mod',         # Modulo operation: x mod period
     ])
     
     # Discretization parameters
-    # "We sample the number of categories K from a rounded gamma distribution 
-    # with an offset of 2 to yield a minimum number of classes of 2"
-    n_categories_gamma_shape: float = 2.0
-    n_categories_gamma_scale: float = 2.0
-    n_categories_min: int = 2
-    n_categories_max: int = 10  # Paper limits to 10 classes
+    # Number of categories/prototypes
+    n_categories_range: Tuple[int, int] = (2, 10)
     
     # Decision tree parameters
     tree_depth_range: Tuple[int, int] = (1, 5)
-    tree_n_splits_range: Tuple[int, int] = (1, 10)
+    tree_max_features_fraction: float = 0.7  # Max fraction of parents to use as features
     
     # === Noise parameters ===
-    # Per paper: "1. Normal  2. Uniform  3. Mixed" (no laplace)
-    # "Mixed: for each root node, we randomly select either normal or uniform"
-    noise_types: List[str] = field(default_factory=lambda: [
-        'normal', 'uniform', 'mixed'
-    ])
-    
-    # Initialization noise parameters (per paper these are hyperparameters)
-    # σε for Normal: ε ~ N(0, σε²)
-    init_sigma_range: Tuple[float, float] = (0.5, 2.0)
-    # a for Uniform: ε ~ U(−a, a)
-    init_a_range: Tuple[float, float] = (1.0, 3.0)
-    
-    # Edge noise scale (Gaussian noise added at each edge)
+    # All transformations add Gaussian noise N(0, noise_scale^2)
     noise_scale_range: Tuple[float, float] = (0.01, 1.0)
     noise_scale_log_uniform: bool = True
     
-    # Probability of adding noise to each edge
-    prob_edge_noise: float = 0.8
+    # Initialization noise for root nodes
+    # Normal: ε ~ N(0, σε²)
+    init_sigma_range: Tuple[float, float] = (0.5, 2.0)
+    # Uniform: ε ~ U(−a, a)
+    init_a_range: Tuple[float, float] = (1.0, 3.0)
+    
+    # Noise types for root initialization
+    noise_types: List[str] = field(default_factory=lambda: [
+        'normal', 'uniform', 'mixed'
+    ])
     
     # === Row dependency parameters ===
     # Some datasets have dependencies between rows (prototypes/clusters)
@@ -136,6 +134,9 @@ class PriorConfig:
     # === Target parameters ===
     # Maximum number of classes for classification
     max_classes: int = 10
+    
+    # Minimum samples per class (to ensure balanced enough datasets)
+    min_samples_per_class: int = 10
     
     # Probability of classification vs regression
     prob_classification: float = 0.5
@@ -171,22 +172,20 @@ class DatasetConfig:
     
     # Graph structure
     n_nodes: int
-    redirection_prob: float  # P in the paper - smaller = denser graphs
+    density: float  # Edge density (0.0 = tree, 1.0 = complete DAG)
+    n_roots: int  # Number of input/root nodes
     n_disconnected_subgraphs: int
     
     # Transformation settings
-    edge_transform_probs: Dict[str, float]
-    nn_hidden: int
-    nn_width: int
+    transform_probs: Dict[str, float]
     allowed_activations: List[str]
     n_categories: int
     tree_depth: int
-    tree_n_splits: int
+    tree_max_features_fraction: float
     
     # Noise settings
     noise_type: str
     noise_scale: float
-    edge_noise_prob: float
     init_sigma: float  # σε for initialization noise N(0, σε²)
     init_a: float      # a for initialization noise U(-a, a)
     
@@ -257,44 +256,41 @@ class DatasetConfig:
         # Ensure we have at least n_features + 1 nodes (for features + target)
         n_nodes = max(n_nodes, n_features + 2)
         
-        # Redirection probability P ~ Gamma(α, β) where β is rate (not scale)
-        # Using scale = 1/rate for numpy's gamma (which uses scale)
-        redirection_prob = rng.gamma(prior.redirection_gamma_shape, 
-                                      1.0 / prior.redirection_gamma_rate)
-        # Clip to [0, 1] since it's a probability
-        redirection_prob = min(1.0, redirection_prob)
+        # Sample edge density (uniform in range)
+        density = rng.uniform(*prior.density_range)
+        
+        # Sample number of root nodes (from fixed range)
+        n_roots = rng.integers(*prior.n_roots_range)
+        n_roots = min(n_roots, n_nodes // 2)  # At most half the nodes are roots
+        n_roots = max(1, n_roots)  # At least one root
         
         # Disconnected subgraphs
         has_disconnected = rng.random() < prior.prob_disconnected_subgraph
         n_disconnected = rng.integers(*prior.n_disconnected_subgraphs_range) if has_disconnected else 0
         
-        # Transformation probabilities (could be varied per-dataset)
-        edge_transform_probs = {
+        # Transformation probabilities (normalized)
+        transform_probs = {
             'nn': prior.prob_nn_transform,
             'tree': prior.prob_tree_transform,
-            'discretization': prior.prob_discretization,
-            'identity': prior.prob_identity
+            'discretization': prior.prob_discretization
         }
         
         # Sample subset of activations to use for this dataset
         n_activations = rng.integers(3, len(prior.activations) + 1)
         allowed_activations = list(rng.choice(prior.activations, size=n_activations, replace=False))
+        # Always include identity for potential linear transformations
+        if 'identity' not in allowed_activations:
+            allowed_activations.append('identity')
         
-        # NN parameters
-        nn_hidden = rng.integers(*prior.nn_hidden_range)
-        nn_width = rng.integers(*prior.nn_width_range)
-        
-        # Discretization - Gamma distribution with offset of 2 (per paper)
-        # But also limit based on n_rows to ensure at least 10 samples per category
-        n_categories = int(rng.gamma(prior.n_categories_gamma_shape, 
-                                      prior.n_categories_gamma_scale)) + prior.n_categories_min
-        n_categories = min(n_categories, prior.n_categories_max)
-        max_categories_for_samples = max(2, n_rows // 10)  # At least 10 samples per category
+        # Discretization - number of categories
+        n_categories = rng.integers(*prior.n_categories_range)
+        # Ensure at least 10 samples per category
+        max_categories_for_samples = max(2, n_rows // 10)
         n_categories = min(n_categories, max_categories_for_samples)
         
         # Tree parameters
         tree_depth = rng.integers(*prior.tree_depth_range)
-        tree_n_splits = rng.integers(*prior.tree_n_splits_range)
+        tree_max_features_fraction = prior.tree_max_features_fraction
         
         # Noise
         noise_type = rng.choice(prior.noise_types)
@@ -303,7 +299,7 @@ class DatasetConfig:
         else:
             noise_scale = rng.uniform(*prior.noise_scale_range)
         
-        # Initialization noise hyperparameters (per paper)
+        # Initialization noise hyperparameters
         init_sigma = rng.uniform(*prior.init_sigma_range)
         init_a = rng.uniform(*prior.init_a_range)
         
@@ -324,8 +320,8 @@ class DatasetConfig:
         # Target type
         is_classification = rng.random() < prior.prob_classification
         if is_classification:
-            # Limit n_classes to ensure at least 10 samples per class
-            max_classes_for_samples = max(2, n_rows // 10)
+            # Limit n_classes to ensure min_samples_per_class
+            max_classes_for_samples = max(2, n_rows // prior.min_samples_per_class)
             max_classes = min(prior.max_classes, max_classes_for_samples)
             n_classes = rng.integers(2, max_classes + 1)
         else:
@@ -333,7 +329,6 @@ class DatasetConfig:
         
         # Train/Test split ratio
         # Use Beta distribution scaled to train_ratio_range for realistic distribution
-        # Beta(2,2) gives symmetric distribution peaked at 0.5
         beta_sample = rng.beta(prior.train_ratio_beta_a, prior.train_ratio_beta_b)
         train_ratio = prior.train_ratio_range[0] + beta_sample * (
             prior.train_ratio_range[1] - prior.train_ratio_range[0]
@@ -343,18 +338,16 @@ class DatasetConfig:
             n_rows=n_rows,
             n_features=n_features,
             n_nodes=n_nodes,
-            redirection_prob=redirection_prob,
+            density=density,
+            n_roots=n_roots,
             n_disconnected_subgraphs=n_disconnected,
-            edge_transform_probs=edge_transform_probs,
-            nn_hidden=nn_hidden,
-            nn_width=nn_width,
+            transform_probs=transform_probs,
             allowed_activations=allowed_activations,
             n_categories=n_categories,
             tree_depth=tree_depth,
-            tree_n_splits=tree_n_splits,
+            tree_max_features_fraction=tree_max_features_fraction,
             noise_type=noise_type,
             noise_scale=noise_scale,
-            edge_noise_prob=prior.prob_edge_noise,
             init_sigma=init_sigma,
             init_a=init_a,
             has_row_dependency=has_row_dependency,
@@ -378,18 +371,16 @@ class DatasetConfig:
             'n_rows': self.n_rows,
             'n_features': self.n_features,
             'n_nodes': self.n_nodes,
-            'redirection_prob': self.redirection_prob,
+            'density': self.density,
+            'n_roots': self.n_roots,
             'n_disconnected_subgraphs': self.n_disconnected_subgraphs,
-            'edge_transform_probs': self.edge_transform_probs,
-            'nn_hidden': self.nn_hidden,
-            'nn_width': self.nn_width,
+            'transform_probs': self.transform_probs,
             'allowed_activations': self.allowed_activations,
             'n_categories': self.n_categories,
             'tree_depth': self.tree_depth,
-            'tree_n_splits': self.tree_n_splits,
+            'tree_max_features_fraction': self.tree_max_features_fraction,
             'noise_type': self.noise_type,
             'noise_scale': self.noise_scale,
-            'edge_noise_prob': self.edge_noise_prob,
             'init_sigma': self.init_sigma,
             'init_a': self.init_a,
             'has_row_dependency': self.has_row_dependency,
@@ -406,4 +397,3 @@ class DatasetConfig:
             'train_ratio': self.train_ratio,
             'seed': self.seed
         }
-

@@ -206,14 +206,15 @@ class SyntheticDatasetGenerator3D:
         dag_builder = DAGBuilder(config, rng)
         dag = dag_builder.build()
         
-        # Create transformations
+        # Create transformations - ONE per non-root node
+        # Each transformation takes ALL parents as input
         transform_factory = TransformationFactory(config, rng)
         transformations = {}
         
         for node_id, node in dag.nodes.items():
-            for parent_id in node.parents:
+            if node.parents:  # Only non-root nodes need transformations
                 transform = transform_factory.create(n_parents=len(node.parents))
-                transformations[(parent_id, node_id)] = transform
+                transformations[node_id] = transform
         
         return dag, transformations
     

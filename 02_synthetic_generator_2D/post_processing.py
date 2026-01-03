@@ -195,10 +195,25 @@ class Quantizer:
             else:
                 n_bins = self.rng.integers(low, high)
         
+        # Handle infinite and extreme values
+        x = np.clip(x, -1e10, 1e10)
+        x = np.nan_to_num(x, nan=0.0, posinf=1e10, neginf=-1e10)
+        
         # Compute bin edges
         x_min, x_max = x.min(), x.max()
+        
+        # Check for valid range
+        if not np.isfinite(x_min) or not np.isfinite(x_max):
+            return x
+        
         if x_max - x_min < 1e-10:
             return x
+        
+        # Ensure range is not too large (would cause overflow)
+        if x_max - x_min > 1e15:
+            # Normalize to reasonable range
+            x = (x - np.mean(x)) / (np.std(x) + 1e-10)
+            x_min, x_max = x.min(), x.max()
         
         # Choose binning strategy
         strategy = self.rng.choice(['uniform', 'quantile', 'custom'])
