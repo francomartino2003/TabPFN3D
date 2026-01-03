@@ -69,8 +69,10 @@ class PriorConfig3D:
     
     # Number of root/input nodes (nodes without parents)
     # For 3D, this is the total across noise + time + state inputs
-    n_roots_range: Tuple[int, int] = (3, 30)
-    max_roots_fraction: float = 0.50  # Root nodes can't exceed this fraction of total nodes
+    # Higher root fraction = more temporal signal preservation
+    n_roots_range: Tuple[int, int] = (5, 40)
+    min_roots_fraction: float = 0.30  # At least 30% of nodes should be roots
+    max_roots_fraction: float = 0.65  # Root nodes can't exceed this fraction of total nodes
     
     # Disconnected subgraphs for irrelevant features
     prob_disconnected_subgraph: float = 0.3
@@ -349,10 +351,14 @@ class DatasetConfig3D:
         
         # === Sample root input types ===
         # Determine how many root nodes we'll have
-        # Sample from n_roots_range but cap at max_roots_fraction of total nodes
-        estimated_roots = rng.integers(*prior.n_roots_range)
-        max_roots_by_fraction = max(3, int(n_nodes * prior.max_roots_fraction))
-        estimated_roots = min(estimated_roots, max_roots_by_fraction)
+        # Sample from n_roots_range but enforce min/max fraction of total nodes
+        min_roots_by_fraction = max(3, int(n_nodes * prior.min_roots_fraction))
+        max_roots_by_fraction = max(min_roots_by_fraction, int(n_nodes * prior.max_roots_fraction))
+        
+        # Sample within the allowed range
+        low = max(prior.n_roots_range[0], min_roots_by_fraction)
+        high = min(prior.n_roots_range[1], max_roots_by_fraction) + 1
+        estimated_roots = rng.integers(low, high) if low < high else low
         
         # === Distribute roots among time, state, and noise ===
         # Strategy: time and state are primary, noise is optional with low probability
