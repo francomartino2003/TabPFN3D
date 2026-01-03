@@ -472,8 +472,17 @@ class TransformationFactory:
         # Small bias
         bias = self.rng.normal(0, 0.1)
         
-        # Sample activation (can be 'identity' for linear transformation)
-        activation = self.rng.choice(self.config.allowed_activations)
+        # Sample activation with higher probability for identity (preserves temporal structure)
+        prob_identity = getattr(self.config, 'prob_identity_activation', 0.3)
+        if self.rng.random() < prob_identity and 'identity' in self.config.allowed_activations:
+            activation = 'identity'
+        else:
+            # Sample from other activations
+            other_activations = [a for a in self.config.allowed_activations if a != 'identity']
+            if other_activations:
+                activation = self.rng.choice(other_activations)
+            else:
+                activation = 'identity'
         
         return NNTransformation(
             weights=weights,

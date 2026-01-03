@@ -122,7 +122,10 @@ class PriorConfig3D:
     prob_nn_transform: float = 0.5  # Neural network-like transformation
     prob_tree_transform: float = 0.2  # Decision tree-like transformation
     prob_discretization: float = 0.3  # Discretization (categorical)
-    # Note: identity is now included as an activation in NN transform
+    
+    # Probability of using identity activation in NN (preserves temporal structure)
+    # Higher than 2D because temporal series need more linear propagation
+    prob_identity_activation: float = 0.5  # 50% of NN use identity
     
     # Available activation functions for NN transformation
     # Per paper: "identity, logarithm, sigmoid, absolute value, sine, 
@@ -155,9 +158,9 @@ class PriorConfig3D:
     init_sigma_range: Tuple[float, float] = (0.1, 2.0)  # For Normal
     init_a_range: Tuple[float, float] = (0.5, 2.0)      # For Uniform
     
-    # Edge noise
-    prob_edge_noise: float = 0.3
-    noise_scale_range: Tuple[float, float] = (0.01, 0.3)
+    # Edge noise - reduced to preserve temporal structure
+    prob_edge_noise: float = 0.15  # Reduced from 0.3
+    noise_scale_range: Tuple[float, float] = (0.005, 0.15)  # Reduced scale
     noise_scale_log_uniform: bool = True
     
     # === Sample generation mode ===
@@ -238,6 +241,7 @@ class DatasetConfig3D:
     # === Edge transformations ===
     transform_probs: Dict[str, float]
     allowed_activations: List[str]
+    prob_identity_activation: float  # Probability of using identity in NN
     n_categories: int
     tree_depth: int
     tree_max_features_fraction: float
@@ -525,6 +529,7 @@ class DatasetConfig3D:
             state_alpha=state_alpha,
             transform_probs=transform_probs,
             allowed_activations=allowed_activations,
+            prob_identity_activation=prior.prob_identity_activation,
             n_categories=n_categories,
             tree_depth=tree_depth,
             tree_max_features_fraction=tree_max_features_fraction,

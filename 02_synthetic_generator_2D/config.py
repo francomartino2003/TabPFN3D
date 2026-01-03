@@ -69,6 +69,9 @@ class PriorConfig:
     prob_tree_transform: float = 0.2  # Decision tree-like transformation
     prob_discretization: float = 0.3  # Discretization (categorical)
     
+    # Probability of using identity activation in NN (preserves input structure)
+    prob_identity_activation: float = 0.3
+    
     # Available activation functions for NN transformation
     # Per paper: "identity, logarithm, sigmoid, absolute value, sine, 
     # hyperbolic tangent, rank operation, squaring, power functions, 
@@ -179,6 +182,7 @@ class DatasetConfig:
     # Transformation settings
     transform_probs: Dict[str, float]
     allowed_activations: List[str]
+    prob_identity_activation: float  # Probability of identity activation in NN
     n_categories: int
     tree_depth: int
     tree_max_features_fraction: float
@@ -343,6 +347,7 @@ class DatasetConfig:
             n_disconnected_subgraphs=n_disconnected,
             transform_probs=transform_probs,
             allowed_activations=allowed_activations,
+            prob_identity_activation=prior.prob_identity_activation,
             n_categories=n_categories,
             tree_depth=tree_depth,
             tree_max_features_fraction=tree_max_features_fraction,
