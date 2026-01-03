@@ -44,6 +44,15 @@ except ImportError:
     HAS_XGBOOST = False
     print("Warning: XGBoost not installed. Using RandomForest as replacement.")
 
+# Time series classifiers
+try:
+    from aeon.classification.convolution_based import RocketClassifier
+    from aeon.classification.distance_based import KNeighborsTimeSeriesClassifier
+    HAS_AEON = True
+except ImportError:
+    HAS_AEON = False
+    print("Warning: aeon not installed. Time series classifiers unavailable.")
+
 
 # =============================================================================
 # Data Classes
@@ -225,6 +234,75 @@ def prepare_data(
         return None, None, None, None
 
 
+def train_models_flat(
+    X_train: np.ndarray, 
+    X_test: np.ndarray,
+    y_train: np.ndarray, 
+    y_test: np.ndarray
+) -> Dict[str, float]:
+    """Train tabular models on flattened data."""
+    results = {}
+    
+    # Baseline
+    baseline = DummyClassifier(strategy='most_frequent')
+    baseline.fit(X_train, y_train)
+    results['baseline'] = accuracy_score(y_test, baseline.predict(X_test))
+    
+    # Random Forest (on flattened)
+    try:
+        rf = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+        rf.fit(X_train, y_train)
+        results['rf_flat'] = accuracy_score(y_test, rf.predict(X_test))
+    except:
+        results['rf_flat'] = results['baseline']
+    
+    return results
+
+
+def train_ts_models(
+    X_train_3d: np.ndarray,
+    X_test_3d: np.ndarray, 
+    y_train: np.ndarray,
+    y_test: np.ndarray
+) -> Dict[str, float]:
+    """
+    Train time series classifiers.
+    
+    Args:
+        X_train_3d: Shape (n_samples, n_features, n_timesteps)
+        X_test_3d: Shape (n_samples, n_features, n_timesteps)
+    """
+    results = {}
+    
+    # Baseline
+    baseline = DummyClassifier(strategy='most_frequent')
+    baseline.fit(X_train_3d.reshape(len(X_train_3d), -1), y_train)
+    results['baseline'] = accuracy_score(y_test, baseline.predict(X_test_3d.reshape(len(X_test_3d), -1)))
+    
+    if not HAS_AEON:
+        return results
+    
+    # ROCKET - very fast and effective
+    try:
+        # aeon expects (n_samples, n_channels, n_timesteps)
+        rocket = RocketClassifier(num_kernels=500, random_state=42, n_jobs=-1)
+        rocket.fit(X_train_3d, y_train)
+        results['rocket'] = accuracy_score(y_test, rocket.predict(X_test_3d))
+    except Exception as e:
+        results['rocket'] = results['baseline']
+    
+    # 1-NN DTW (slower but interpretable) - only on small datasets
+    if len(X_train_3d) <= 200 and X_train_3d.shape[2] <= 200:
+        try:
+            knn = KNeighborsTimeSeriesClassifier(n_neighbors=1, distance='dtw')
+            knn.fit(X_train_3d, y_train)
+            results['1nn_dtw'] = accuracy_score(y_test, knn.predict(X_test_3d))
+        except Exception as e:
+            results['1nn_dtw'] = results['baseline']
+    
+    return results
+
+
 def train_models(
     X_train: np.ndarray, 
     X_test: np.ndarray,
@@ -232,7 +310,7 @@ def train_models(
     y_test: np.ndarray,
     is_classification: bool = True
 ) -> Dict[str, float]:
-    """Train models and return accuracies."""
+    """Train models and return accuracies (legacy, uses flattened)."""
     results = {}
     
     if is_classification:
@@ -269,19 +347,11 @@ def train_models(
         else:
             results['xgb'] = results['rf']
     else:
-        # Regression
+        # Regression - not used for TS
         mean_pred = np.mean(y_train)
         results['baseline'] = -mean_squared_error(y_test, np.full_like(y_test, mean_pred))
-        
-        try:
-            ridge = Ridge()
-            ridge.fit(X_train, y_train)
-            results['logistic'] = -mean_squared_error(y_test, ridge.predict(X_test))
-        except:
-            results['logistic'] = results['baseline']
-        
-        results['rf'] = results['logistic']
-        results['xgb'] = results['logistic']
+        results['rf'] = results['baseline']
+        results['xgb'] = results['baseline']
     
     return results
 
@@ -884,6 +954,163 @@ def sanity_check_8_input_type_impact(datasets: List[SyntheticDataset3D]) -> Dict
     return results
 
 
+def sanity_check_9_ts_classifiers(
+    synthetic_datasets: List[SyntheticDataset3D],
+    real_pkl_path: str = "../01_real_data/AEON/data/classification_datasets.pkl",
+    n_synthetic: int = 15,
+    n_real: int = 15
+) -> Dict[str, Any]:
+    """
+    SANITY CHECK 9: Compare classification performance using proper TS classifiers.
+    
+    Uses ROCKET and 1NN-DTW instead of flattened RF/XGB.
+    Compares lift distributions between synthetic and real datasets.
+    """
+    print("\n" + "="*60)
+    print("SANITY CHECK 9: Time Series Classifiers")
+    print("="*60)
+    
+    if not HAS_AEON:
+        print("  [SKIP] aeon not installed - cannot run TS classifiers")
+        return {'error': 'aeon not installed'}
+    
+    # Evaluate synthetic datasets
+    print("\n  Evaluating synthetic datasets with ROCKET...")
+    synthetic_results = []
+    
+    for i, ds in enumerate(synthetic_datasets[:n_synthetic]):
+        if not ds.is_classification:
+            continue
+        
+        X, y = ds.X, ds.y.astype(int)
+        
+        # Handle NaN
+        X = np.nan_to_num(X, nan=0.0)
+        
+        # Need at least 2 classes with 2 samples each
+        unique, counts = np.unique(y, return_counts=True)
+        if len(unique) < 2 or np.min(counts) < 2:
+            continue
+        
+        # Split
+        try:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.3, stratify=y, random_state=42
+            )
+        except:
+            continue
+        
+        # Train TS models
+        perf = train_ts_models(X_train, X_test, y_train, y_test)
+        
+        best_acc = max(perf.get('rocket', perf['baseline']), 
+                       perf.get('1nn_dtw', perf['baseline']))
+        lift = best_acc - perf['baseline']
+        
+        synthetic_results.append({
+            'dataset_id': i,
+            'source': 'synthetic',
+            'baseline': perf['baseline'],
+            'rocket': perf.get('rocket', None),
+            '1nn_dtw': perf.get('1nn_dtw', None),
+            'best': best_acc,
+            'lift': lift
+        })
+        
+        if i < 5:
+            print(f"    Synthetic {i}: baseline={perf['baseline']:.3f}, "
+                  f"ROCKET={perf.get('rocket', 'N/A')}, lift={lift:+.3f}")
+    
+    # Evaluate real datasets
+    print("\n  Evaluating real datasets with ROCKET...")
+    script_dir = Path(__file__).parent
+    pkl_path = script_dir / real_pkl_path
+    real_datasets = load_real_datasets(str(pkl_path))
+    
+    real_results = []
+    
+    for name, X, y in real_datasets[:n_real]:
+        # Handle NaN
+        X = np.nan_to_num(X, nan=0.0)
+        y = np.array(y)
+        
+        # Encode labels if needed
+        if y.dtype == object or not np.issubdtype(y.dtype, np.integer):
+            from sklearn.preprocessing import LabelEncoder
+            le = LabelEncoder()
+            y = le.fit_transform(y)
+        
+        unique, counts = np.unique(y, return_counts=True)
+        if len(unique) < 2 or np.min(counts) < 2:
+            continue
+        
+        # Limit size for speed
+        if len(X) > 500:
+            idx = np.random.choice(len(X), 500, replace=False)
+            X, y = X[idx], y[idx]
+        
+        try:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.3, stratify=y, random_state=42
+            )
+        except:
+            continue
+        
+        perf = train_ts_models(X_train, X_test, y_train, y_test)
+        
+        best_acc = max(perf.get('rocket', perf['baseline']),
+                       perf.get('1nn_dtw', perf['baseline']))
+        lift = best_acc - perf['baseline']
+        
+        real_results.append({
+            'name': name,
+            'source': 'real',
+            'baseline': perf['baseline'],
+            'rocket': perf.get('rocket', None),
+            '1nn_dtw': perf.get('1nn_dtw', None),
+            'best': best_acc,
+            'lift': lift
+        })
+    
+    if len(real_results) > 0:
+        print(f"    Evaluated {len(real_results)} real datasets")
+    
+    # Compare distributions
+    synth_lifts = [r['lift'] for r in synthetic_results]
+    real_lifts = [r['lift'] for r in real_results]
+    
+    synth_baselines = [r['baseline'] for r in synthetic_results]
+    real_baselines = [r['baseline'] for r in real_results]
+    
+    results = {
+        'n_synthetic': len(synthetic_results),
+        'n_real': len(real_results),
+        'synthetic_mean_lift': float(np.mean(synth_lifts)) if synth_lifts else 0,
+        'synthetic_std_lift': float(np.std(synth_lifts)) if synth_lifts else 0,
+        'real_mean_lift': float(np.mean(real_lifts)) if real_lifts else 0,
+        'real_std_lift': float(np.std(real_lifts)) if real_lifts else 0,
+        'synthetic_mean_baseline': float(np.mean(synth_baselines)) if synth_baselines else 0,
+        'real_mean_baseline': float(np.mean(real_baselines)) if real_baselines else 0,
+        'synthetic_results': synthetic_results,
+        'real_results': real_results
+    }
+    
+    # KS test on lifts
+    if synth_lifts and real_lifts:
+        ks_stat, ks_pval = stats.ks_2samp(synth_lifts, real_lifts)
+        results['lift_ks_statistic'] = float(ks_stat)
+        results['lift_ks_pvalue'] = float(ks_pval)
+    
+    print(f"\n  Lift Comparison (ROCKET):")
+    print(f"    Synthetic: {results['synthetic_mean_lift']:+.3f} ± {results['synthetic_std_lift']:.3f}")
+    print(f"    Real:      {results['real_mean_lift']:+.3f} ± {results['real_std_lift']:.3f}")
+    print(f"    Baseline - Synthetic: {results['synthetic_mean_baseline']:.3f}, Real: {results['real_mean_baseline']:.3f}")
+    if 'lift_ks_pvalue' in results:
+        print(f"    KS test p-value: {results['lift_ks_pvalue']:.4f}")
+    
+    return results
+
+
 # =============================================================================
 # Main Orchestration
 # =============================================================================
@@ -933,6 +1160,9 @@ def run_all_checks(
     )
     all_results['check_7_difficulty'] = sanity_check_7_difficulty_spectrum(datasets)
     all_results['check_8_inputs'] = sanity_check_8_input_type_impact(datasets)
+    all_results['check_9_ts_classifiers'] = sanity_check_9_ts_classifiers(
+        datasets, real_data_path
+    )
     
     # Convert numpy types for JSON serialization
     def convert(obj):
