@@ -83,11 +83,9 @@ class FeatureSelector3D:
         # Select target
         target_node = self._select_target()
         
-        # Get target's direct parents (to exclude from features)
-        target_parents = set(self.dag.nodes[target_node].parents)
-        
-        # Nodes to exclude from features
-        feature_excluded = self.excluded_nodes | {target_node} | target_parents
+        # Only exclude target itself from features
+        # Parents of target are valid features (they help predict target!)
+        feature_excluded = self.excluded_nodes | {target_node}
         
         # Get candidate nodes
         relevant_candidates = self._get_relevant_candidates(target_node, feature_excluded)
@@ -297,13 +295,12 @@ class FeatureSelector3D:
         """
         Get nodes that are relevant for predicting the target.
         
-        These are ancestors of the target (excluding direct parents).
+        These are ancestors of the target (including direct parents).
         """
         ancestors = self._get_ancestors(target_node)
-        target_parents = set(self.dag.nodes[target_node].parents)
         
-        # Ancestors minus direct parents minus excluded
-        relevant = ancestors - target_parents - excluded
+        # Include all ancestors as relevant (parents are great features!)
+        relevant = ancestors - excluded
         return list(relevant)
     
     def _get_irrelevant_candidates(

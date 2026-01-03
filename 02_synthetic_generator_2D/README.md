@@ -135,11 +135,11 @@ Verifica:
 - ✅ Discretización correcta (prototipos, categorías, entropía)
 - ✅ Visualización de DAGs generados
 
-## Prevención de Data Leakage
+## Selección de Features
 
-El generador excluye de los features:
-1. El nodo target
-2. Los **padres directos** del target
+El generador excluye de los features solo el **nodo target** (lo que queremos predecir).
+
+Los padres del target **sí pueden ser features** - son información valiosa para la predicción. No hay data leakage porque los features son valores de entrada y el target es el resultado de la transformación.
 
 ## Configuración Personalizada
 

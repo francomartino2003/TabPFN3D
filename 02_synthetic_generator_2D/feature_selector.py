@@ -249,10 +249,9 @@ class FeatureSelector:
         relevant_selected = set()
         irrelevant_selected = set()
         
-        # Exclude target AND its direct parents from selection
-        # (direct parents can leak target info via transformations)
-        target_parents = set(self.dag.nodes[target_node].parents)
-        excluded_nodes = {target_node} | target_parents
+        # Only exclude the target itself from features
+        # Parents of target are valid features (they help predict target!)
+        excluded_nodes = {target_node}
         
         relevant_candidates = [n for n in relevant_candidates if n not in excluded_nodes]
         irrelevant_candidates = [n for n in irrelevant_candidates if n not in excluded_nodes]
