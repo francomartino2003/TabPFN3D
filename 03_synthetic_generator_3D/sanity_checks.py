@@ -1131,9 +1131,14 @@ def run_all_checks(
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
-    # Generate datasets
-    print(f"\nGenerating {n_datasets} synthetic datasets...")
-    generator = SyntheticDatasetGenerator3D(seed=seed)
+    # Generate datasets - CLASSIFICATION ONLY (real datasets are all classification)
+    print(f"\nGenerating {n_datasets} synthetic datasets (classification only)...")
+    
+    # Create prior config with classification forced
+    prior = PriorConfig3D()
+    prior.prob_classification = 1.0  # Force classification
+    
+    generator = SyntheticDatasetGenerator3D(seed=seed, prior=prior)
     datasets = []
     
     for i in range(n_datasets):
