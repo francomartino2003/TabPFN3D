@@ -1,10 +1,10 @@
 """
-Script principal para analizar todos los datasets
+Main script to analyze all datasets
 """
 import sys
 from pathlib import Path
 
-# Agregar el directorio padre al path para imports
+# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
@@ -26,37 +26,37 @@ def analyze_classification_datasets(output_dir: Path,
                                    max_datasets: int = None,
                                    save_datasets: bool = True) -> pd.DataFrame:
     """
-    Analiza todos los datasets de clasificación
+    Analyze all classification datasets
     
     Args:
-        output_dir: Directorio para guardar resultados
-        max_datasets: Número máximo de datasets a analizar
-        save_datasets: Si True, guarda los datasets cargados
+        output_dir: Directory to save results
+        max_datasets: Maximum number of datasets to analyze
+        save_datasets: If True, saves loaded datasets
         
     Returns:
-        DataFrame con estadísticas agregadas
+        DataFrame with aggregated statistics
     """
     print("=" * 80)
-    print("ANÁLISIS DE DATASETS DE CLASIFICACIÓN")
+    print("CLASSIFICATION DATASETS ANALYSIS")
     print("=" * 80)
     
-    # Asegurar que output_dir es relativo al directorio raíz del proyecto
+    # Ensure output_dir is relative to project root directory
     if not output_dir.is_absolute():
-        # Si estamos en src/, subir un nivel
+        # If we're in src/, go up one level
         base_dir = Path(__file__).parent.parent
         output_dir = base_dir / output_dir
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Cargar datasets
+    # Load datasets
     datasets_path = output_dir / "classification_datasets.pkl"
     if datasets_path.exists() and save_datasets:
-        print(f"\nCargando datasets desde {datasets_path}...")
+        print(f"\nLoading datasets from {datasets_path}...")
         with open(datasets_path, 'rb') as f:
             datasets = pickle.load(f)
-        print(f"Cargados {len(datasets)} datasets")
+        print(f"Loaded {len(datasets)} datasets")
     else:
-        print("\nDescargando datasets de clasificación...")
+        print("\nDownloading classification datasets...")
         datasets = load_all_classification_datasets(
             max_datasets=max_datasets,
             save_path=datasets_path if save_datasets else None,
@@ -64,11 +64,11 @@ def analyze_classification_datasets(output_dir: Path,
         )
     
     if not datasets:
-        print("No se pudieron cargar datasets de clasificación")
+        print("Could not load classification datasets")
         return pd.DataFrame()
     
-    # Calcular estadísticas básicas (ligeras)
-    print("\nCalculando estadísticas básicas...")
+    # Calculate basic (lightweight) statistics
+    print("\nCalculating basic statistics...")
     all_stats = []
     simple_stats = []
     
@@ -77,33 +77,33 @@ def analyze_classification_datasets(output_dir: Path,
         simple_stats.append(stats)
         all_stats.append(dataset.get_info())
     
-    # Verificar si tienen benchmarks (usando los benchmarks descargados)
-    print("\nVerificando benchmarks...")
+    # Check if they have benchmarks (using downloaded benchmarks)
+    print("\nChecking benchmarks...")
     base_dir = Path(__file__).parent.parent
     benchmarks_dir = base_dir / "AEON" / "benchmarks"
     
-    # Obtener lista de datasets con benchmarks desde los archivos CSV
-    # Estructura: cada CSV tiene primera columna con nombre del dataset (sin header)
-    # Las demás columnas son diferentes runs del modelo
+    # Get list of datasets with benchmarks from CSV files
+    # Structure: each CSV has first column with dataset name (no header)
+    # Other columns are different model runs
     datasets_with_benchmarks = set()
     if benchmarks_dir.exists():
-        # Buscar en cualquier carpeta de métricas
+        # Search in any metrics folder
         for metric_dir in benchmarks_dir.iterdir():
             if metric_dir.is_dir():
                 for csv_file in metric_dir.glob("*.csv"):
                     try:
-                        # Leer CSV: primera columna es "Resamples," y luego los nombres de datasets están en la primera columna de cada fila
-                        # Estructura: Resamples,0,1,2,... (header)
-                        #           DatasetName,value1,value2,... (datos)
+                        # Read CSV: first column is "Resamples," then dataset names are in the first column of each row
+                        # Structure: Resamples,0,1,2,... (header)
+                        #           DatasetName,value1,value2,... (data)
                         df_bench = pd.read_csv(csv_file)
                         
                         if len(df_bench) > 0:
-                            # La primera columna contiene los nombres de los datasets
+                            # First column contains dataset names
                             first_col_name = df_bench.columns[0]
-                            # Obtener nombres de datasets desde la primera columna
+                            # Get dataset names from first column
                             dataset_names = df_bench[first_col_name].astype(str).tolist()
                             
-                            # Normalizar nombres (lowercase, sin espacios, sin guiones bajos, sin guiones)
+                            # Normalize names (lowercase, no spaces, no underscores, no hyphens)
                             normalized_names = [str(name).lower().replace('_', '').replace(' ', '').replace('-', '') 
                                               for name in dataset_names 
                                               if pd.notna(name) and str(name).strip() and str(name).lower() != 'resamples']
@@ -111,68 +111,68 @@ def analyze_classification_datasets(output_dir: Path,
                     except Exception as e:
                         continue
     
-    # Agregar información de benchmarks a las estadísticas
+    # Add benchmark information to statistics
     for stats in simple_stats:
         dataset_name_normalized = stats['name'].lower().replace('_', '').replace(' ', '')
         stats['has_benchmark'] = dataset_name_normalized in datasets_with_benchmarks
     
-    # Crear DataFrame para resumen (solo para imprimir)
+    # Create DataFrame for summary (only for printing)
     df_stats = pd.DataFrame(simple_stats)
     
-    # Guardar estadísticas en JSON
+    # Save statistics to JSON
     stats_path = output_dir / "classification_stats.json"
     with open(stats_path, 'w') as f:
         json.dump(simple_stats, f, indent=2, default=str)
-    print(f"Estadísticas guardadas en {stats_path}")
+    print(f"Statistics saved to {stats_path}")
     
-    # Imprimir resumen
+    # Print summary
     print("\n" + "=" * 80)
-    print("RESUMEN DE DATASETS DE CLASIFICACIÓN")
+    print("CLASSIFICATION DATASETS SUMMARY")
     print("=" * 80)
-    print(f"\nTotal de datasets: {len(datasets)}")
-    print(f"\nDistribución de shapes:")
+    print(f"\nTotal datasets: {len(datasets)}")
+    print(f"\nShape distribution:")
     if 'length' in df_stats.columns and 'n_dimensions' in df_stats.columns:
         print(df_stats[['n_samples', 'length', 'n_dimensions']].describe())
     else:
         print(df_stats[['n_samples', 'n_timesteps', 'n_channels']].describe())
-    print(f"\nValores faltantes:")
-    print(f"  Promedio: {df_stats['missing_pct'].mean():.2f}%")
-    print(f"  Máximo: {df_stats['missing_pct'].max():.2f}%")
-    print(f"  Datasets con valores faltantes: {(df_stats['missing_pct'] > 0).sum()}")
+    print(f"\nMissing values:")
+    print(f"  Average: {df_stats['missing_pct'].mean():.2f}%")
+    print(f"  Maximum: {df_stats['missing_pct'].max():.2f}%")
+    print(f"  Datasets with missing values: {(df_stats['missing_pct'] > 0).sum()}")
     
     if 'n_classes' in df_stats.columns:
         valid_classes = df_stats['n_classes'].dropna()
         if len(valid_classes) > 0:
-            print(f"\nClases:")
-            print(f"  Promedio: {valid_classes.mean():.1f}")
-            print(f"  Rango: {valid_classes.min():.0f} - {valid_classes.max():.0f}")
+            print(f"\nClasses:")
+            print(f"  Average: {valid_classes.mean():.1f}")
+            print(f"  Range: {valid_classes.min():.0f} - {valid_classes.max():.0f}")
     
     if 'has_benchmark' in df_stats.columns:
         print(f"\nBenchmarks:")
-        print(f"  Datasets con benchmarks: {df_stats['has_benchmark'].sum()}")
+        print(f"  Datasets with benchmarks: {df_stats['has_benchmark'].sum()}")
     
     return df_stats
 
 
 def main():
-    """Función principal"""
-    # Directorios - asegurar que son relativos al directorio raíz del proyecto
+    """Main function"""
+    # Directories - ensure they are relative to project root directory
     base_dir = Path(__file__).parent.parent
     data_dir = base_dir / "AEON" / "data"
     
-    # Analizar datasets de clasificación
+    # Analyze classification datasets
     classification_df = analyze_classification_datasets(
         data_dir,
-        max_datasets=None,  # None = todos
+        max_datasets=None,  # None = all
         save_datasets=True
     )
     
     print("\n" + "=" * 80)
-    print("ANÁLISIS COMPLETADO")
+    print("ANALYSIS COMPLETED")
     print("=" * 80)
-    print(f"\nResultados guardados en: {data_dir}")
-    print(f"Total de datasets analizados: {len(classification_df)}")
-    print(f"Archivo JSON: {data_dir / 'classification_stats.json'}")
+    print(f"\nResults saved to: {data_dir}")
+    print(f"Total datasets analyzed: {len(classification_df)}")
+    print(f"JSON file: {data_dir / 'classification_stats.json'}")
 
 
 if __name__ == "__main__":

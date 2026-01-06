@@ -199,10 +199,19 @@ def evaluate_on_synthetic(
 
 def evaluate_on_real(
     model: TemporalTabPFN,
-    config: FullConfig
+    config: FullConfig,
+    n_datasets: Optional[int] = None
 ) -> BatchEvaluationResult:
     """
     Evaluate model on real datasets.
+    
+    Args:
+        model: The model to evaluate
+        config: Configuration
+        n_datasets: Maximum number of datasets to evaluate (None = all)
+    
+    Returns:
+        BatchEvaluationResult with aggregated metrics
     """
     # Load real datasets
     loader = RealDataLoader(config.data.real_data_path, seed=config.training.seed)
@@ -220,6 +229,13 @@ def evaluate_on_real(
             n_datasets=0,
             per_dataset_results=[]
         )
+    
+    # Limit number of datasets if specified
+    if n_datasets is not None and n_datasets < len(real_samples):
+        # Shuffle and take first n
+        np.random.seed(config.training.seed)
+        indices = np.random.permutation(len(real_samples))[:n_datasets]
+        real_samples = [real_samples[i] for i in indices]
     
     # Evaluate
     evaluator = Evaluator(model, config)

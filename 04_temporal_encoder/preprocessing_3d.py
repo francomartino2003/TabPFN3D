@@ -61,6 +61,7 @@ class Preprocessor3D:
         self.maxs_: Optional[np.ndarray] = None   # (n_features,)
         self.constant_features_: Optional[np.ndarray] = None  # Boolean mask
         self.n_features_original_: int = 0
+        self.n_features_removed_: int = 0  # Count of removed constant features
     
     def fit(self, X: np.ndarray) -> 'Preprocessor3D':
         """
@@ -87,17 +88,75 @@ class Preprocessor3D:
         self.mins_ = np.nanmin(X_flat, axis=0)
         self.maxs_ = np.nanmax(X_flat, axis=0)
         
-        # Handle zero std
-        self.stds_ = np.where(self.stds_ < 1e-8, 1.0, self.stds_)
-        
-        # Identify constant features
+        # Identify constant or near-constant features using multiple criteria
         if self.config.remove_constant_features:
-            self.constant_features_ = self.stds_ < 1e-8
+            self.constant_features_ = self._detect_constant_features(X_flat, n_features)
         else:
             self.constant_features_ = np.zeros(n_features, dtype=bool)
         
+        # Handle zero std (after detecting constants, for normalization)
+        self.stds_ = np.where(self.stds_ < 1e-8, 1.0, self.stds_)
+        
         self.is_fitted = True
+        self.n_features_removed_ = int(self.constant_features_.sum())
+        
         return self
+    
+    def _detect_constant_features(self, X_flat: np.ndarray, n_features: int) -> np.ndarray:
+        """
+        Detect constant or near-constant features using multiple criteria.
+        
+        A feature is considered constant/near-constant if ANY of:
+        1. std < constant_threshold_std
+        2. (max - min) < constant_threshold_range
+        3. n_unique / n_total < constant_threshold_unique_ratio
+        
+        Args:
+            X_flat: (n_samples * n_timesteps, n_features) flattened data
+            n_features: number of features
+        
+        Returns:
+            Boolean mask where True = constant feature to remove
+        """
+        n_total = X_flat.shape[0]
+        constant_mask = np.zeros(n_features, dtype=bool)
+        
+        # Get thresholds from config (with defaults for backward compatibility)
+        std_thresh = getattr(self.config, 'constant_threshold_std', 1e-6)
+        range_thresh = getattr(self.config, 'constant_threshold_range', 1e-6)
+        unique_ratio_thresh = getattr(self.config, 'constant_threshold_unique_ratio', 0.01)
+        
+        for f in range(n_features):
+            feature_data = X_flat[:, f]
+            # Remove NaN for analysis
+            valid_data = feature_data[~np.isnan(feature_data)]
+            
+            if len(valid_data) == 0:
+                # All NaN - mark as constant
+                constant_mask[f] = True
+                continue
+            
+            # Criterion 1: Standard deviation
+            if self.stds_[f] < std_thresh:
+                constant_mask[f] = True
+                continue
+            
+            # Criterion 2: Range (max - min)
+            feature_range = self.maxs_[f] - self.mins_[f]
+            if feature_range < range_thresh:
+                constant_mask[f] = True
+                continue
+            
+            # Criterion 3: Unique values ratio
+            # Only check if we have enough data points
+            if len(valid_data) > 10:
+                n_unique = len(np.unique(valid_data))
+                unique_ratio = n_unique / len(valid_data)
+                if unique_ratio < unique_ratio_thresh:
+                    constant_mask[f] = True
+                    continue
+        
+        return constant_mask
     
     def transform(self, X: np.ndarray) -> np.ndarray:
         """
@@ -298,6 +357,30 @@ class Preprocessor3D:
             n_out *= 2
         
         return int(n_out)
+    
+    def get_feature_removal_info(self) -> dict:
+        """
+        Get information about removed features.
+        
+        Returns:
+            dict with:
+                - n_original: original number of features
+                - n_removed: number of features removed
+                - n_remaining: number of features after removal
+                - removed_indices: indices of removed features
+        """
+        if not self.is_fitted:
+            return {"error": "Preprocessor not fitted"}
+        
+        removed_indices = np.where(self.constant_features_)[0].tolist()
+        
+        return {
+            "n_original": self.n_features_original_,
+            "n_removed": getattr(self, 'n_features_removed_', 0),
+            "n_remaining": self.n_features_original_ - getattr(self, 'n_features_removed_', 0),
+            "removed_indices": removed_indices,
+            "removal_fraction": getattr(self, 'n_features_removed_', 0) / max(1, self.n_features_original_)
+        }
 
 
 def preprocess_batch(

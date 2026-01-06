@@ -1,15 +1,15 @@
 """
-Script de prueba para verificar que la configuración funciona correctamente
+Test script to verify that configuration works correctly
 """
 import sys
 from pathlib import Path
 
 print("=" * 80)
-print("PRUEBA DE CONFIGURACIÓN - TabPFN 3D")
+print("CONFIGURATION TEST - TabPFN 3D")
 print("=" * 80)
 
-# Verificar imports
-print("\n1. Verificando imports...")
+# Check imports
+print("\n1. Checking imports...")
 try:
     import numpy as np
     import pandas as pd
@@ -17,21 +17,21 @@ try:
     import seaborn as sns
     from scipy import stats
     from statsmodels.tsa.stattools import adfuller
-    print("   ✓ Imports básicos OK")
+    print("   ✓ Basic imports OK")
 except ImportError as e:
-    print(f"   ✗ Error en imports básicos: {e}")
+    print(f"   ✗ Error in basic imports: {e}")
     sys.exit(1)
 
 try:
     from aeon.datasets import load_classification, get_dataset_names
-    print("   ✓ aeon instalado correctamente")
+    print("   ✓ aeon installed correctly")
 except ImportError as e:
-    print(f"   ✗ aeon no instalado: {e}")
-    print("   Instalar con: pip install aeon")
+    print(f"   ✗ aeon not installed: {e}")
+    print("   Install with: pip install aeon")
     sys.exit(1)
 
-# Verificar módulos del proyecto
-print("\n2. Verificando módulos del proyecto...")
+# Check project modules
+print("\n2. Checking project modules...")
 try:
     from src.data_loader import TimeSeriesDataset
     from src.time_series_statistics import TimeSeriesStatistics
@@ -39,13 +39,13 @@ try:
         get_all_classification_datasets,
         load_single_classification_dataset
     )
-    print("   ✓ Módulos del proyecto OK")
+    print("   ✓ Project modules OK")
 except ImportError as e:
-    print(f"   ✗ Error en módulos del proyecto: {e}")
+    print(f"   ✗ Error in project modules: {e}")
     sys.exit(1)
 
-# Verificar estructura de carpetas
-print("\n3. Verificando estructura de carpetas...")
+# Check folder structure
+print("\n3. Checking folder structure...")
 folders = [
     "data/real/classification",
     "data/real/forecasting",
@@ -60,52 +60,52 @@ for folder in folders:
     if path.exists():
         print(f"   ✓ {folder}")
     else:
-        print(f"   ✗ {folder} - NO EXISTE")
+        print(f"   ✗ {folder} - DOES NOT EXIST")
         all_ok = False
 
 if not all_ok:
-    print("\n   Creando carpetas faltantes...")
+    print("\n   Creating missing folders...")
     for folder in folders:
         Path(folder).mkdir(parents=True, exist_ok=True)
-    print("   ✓ Carpetas creadas")
+    print("   ✓ Folders created")
 
-# Probar carga de un dataset
-print("\n4. Probando carga de dataset de ejemplo...")
+# Test loading a dataset
+print("\n4. Testing example dataset loading...")
 try:
     dataset = load_single_classification_dataset("GunPoint", verbose=True)
     if dataset:
-        print(f"   ✓ Dataset cargado: {dataset}")
+        print(f"   ✓ Dataset loaded: {dataset}")
         print(f"   ✓ Shape: {dataset.X.shape}")
         print(f"   ✓ Info: {dataset.get_info()}")
         
-        # Probar cálculo de estadísticas
-        print("\n5. Probando cálculo de estadísticas...")
+        # Test statistics calculation
+        print("\n5. Testing statistics calculation...")
         stats_dict = TimeSeriesStatistics.compute_dataset_stats(dataset)
-        print(f"   ✓ Estadísticas calculadas")
-        print(f"   ✓ Número de muestras: {stats_dict['n_samples']}")
-        print(f"   ✓ Longitud temporal: {stats_dict['n_timesteps']}")
-        print(f"   ✓ Número de canales: {stats_dict['n_channels']}")
+        print(f"   ✓ Statistics calculated")
+        print(f"   ✓ Number of samples: {stats_dict['n_samples']}")
+        print(f"   ✓ Temporal length: {stats_dict['n_timesteps']}")
+        print(f"   ✓ Number of channels: {stats_dict['n_channels']}")
     else:
-        print("   ✗ No se pudo cargar el dataset")
+        print("   ✗ Could not load dataset")
 except Exception as e:
     print(f"   ✗ Error: {e}")
     import traceback
     traceback.print_exc()
 
-# Verificar lista de datasets disponibles
-print("\n6. Verificando lista de datasets disponibles...")
+# Check list of available datasets
+print("\n6. Checking list of available datasets...")
 try:
     dataset_names = get_all_classification_datasets()
-    print(f"   ✓ {len(dataset_names)} datasets disponibles")
-    print(f"   ✓ Primeros 5: {dataset_names[:5]}")
+    print(f"   ✓ {len(dataset_names)} datasets available")
+    print(f"   ✓ First 5: {dataset_names[:5]}")
 except Exception as e:
     print(f"   ✗ Error: {e}")
 
 print("\n" + "=" * 80)
-print("CONFIGURACIÓN COMPLETA")
+print("CONFIGURATION COMPLETE")
 print("=" * 80)
-print("\nPróximos pasos:")
-print("1. Ejecutar: python src/analyze_all_datasets.py")
-print("2. O abrir: notebooks/01_statistical_analysis.ipynb")
+print("\nNext steps:")
+print("1. Run: python src/analyze_all_datasets.py")
+print("2. Or open: notebooks/01_statistical_analysis.ipynb")
 print("\n")
 

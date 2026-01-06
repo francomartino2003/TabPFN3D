@@ -1,20 +1,20 @@
 # 3D Synthetic Dataset Generator with Temporal Dependencies
 
-Generador de datasets sintéticos 3D con dependencias temporales para clasificación de series temporales.
+Generator of 3D synthetic datasets with temporal dependencies for time series classification.
 
 ## Overview
 
-Este módulo genera datasets con shape `(n_samples, n_features, t_timesteps)` donde:
-- `n_samples`: Número de observaciones
-- `n_features`: Número de features (nodos del grafo observados)
-- `t_timesteps`: Longitud de la subsecuencia temporal
+This module generates datasets with shape `(n_samples, n_features, t_timesteps)` where:
+- `n_samples`: Number of observations
+- `n_features`: Number of features (observed graph nodes)
+- `t_timesteps`: Temporal subsequence length
 
-## Arquitectura
+## Architecture
 
 ```
                     ┌──────────────────────────────────────────┐
-                    │           DAG Causal                     │
-                    │  (construido con orden topológico)       │
+                    │           Causal DAG                     │
+                    │  (constructed with topological order)    │
                     └──────────────────────────────────────────┘
                                       │
                     ┌─────────────────┴─────────────────┐
@@ -36,15 +36,15 @@ Este módulo genera datasets con shape `(n_samples, n_features, t_timesteps)` do
                               (n, m, t), y
 ```
 
-## Input Types (Nodos Raíz)
+## Input Types (Root Nodes)
 
 ### Noise Inputs
-- Normal N(0, σ²) o Uniform U(-a, a)
-- Valores nuevos en cada timestep
-- Proveen variabilidad entre samples
+- Normal N(0, σ²) or Uniform U(-a, a)
+- New values at each timestep
+- Provide variability between samples
 
 ### Time Inputs
-Funciones determinísticas de tiempo normalizado `u = t/T`:
+Deterministic functions of normalized time `u = t/T`:
 - `linear`: u
 - `quadratic`: u²
 - `cubic`: u³
@@ -55,22 +55,22 @@ Funciones determinísticas de tiempo normalizado `u = t/T`:
 - `log`: log(u + 0.1)
 
 ### State Inputs
-- Memoria del timestep anterior
-- En t=0 se inicializan con ruido
-- Normalizados: `tanh(α · s_{t-1})`
-- Permiten dependencias temporales (AR-like)
+- Memory from previous timestep
+- At t=0 initialized with noise
+- Normalized: `tanh(α · s_{t-1})`
+- Allow temporal dependencies (AR-like)
 
-## Transformaciones
+## Transformations
 
-Cada nodo no-raíz tiene **una** transformación (misma que 2D):
+Each non-root node has **one** transformation (same as 2D):
 
-| Tipo | Descripción |
+| Type | Description |
 |------|-------------|
-| **NN** | weights × padres + bias → activación → ruido |
-| **Tree** | Decision tree sobre subset de padres |
-| **Discretization** | Distancia a prototipos → categoría normalizada |
+| **NN** | weights × parents + bias → activation → noise |
+| **Tree** | Decision tree over subset of parents |
+| **Discretization** | Distance to prototypes → normalized category |
 
-### Activaciones Disponibles (12)
+### Available Activations (12)
 ```python
 ['identity', 'log', 'sigmoid', 'abs', 'sin', 'tanh', 
  'rank', 'square', 'power', 'softplus', 'step', 'mod']
@@ -85,7 +85,7 @@ Sequence 2: ──────────────────────�
     ...
 Sequence N: ────────────────────────────
 ```
-Cada sample es una secuencia independiente con ruido diferente.
+Each sample is an independent sequence with different noise.
 
 ### Sliding Window Mode
 ```
@@ -95,7 +95,7 @@ Windows:       [───────]
                    [───────]
                      [───────]
 ```
-De una secuencia larga T, se extraen múltiples ventanas (pueden solaparse).
+From a long sequence T, multiple windows are extracted (may overlap).
 
 ### Mixed Mode
 ```
@@ -104,37 +104,37 @@ Seq 1: ══════════════════════
 Seq 2: ══════════════════════
         [───] [───] [───]
 ```
-Varias secuencias largas, múltiples ventanas por secuencia.
+Several long sequences, multiple windows per sequence.
 
 ## Target Configuration
 
-El target puede estar en diferentes posiciones:
-- **within**: Dentro de la ventana de features
-- **future_near**: 1-5 pasos después de la ventana
-- **future_far**: 6-20 pasos adelante
-- **past**: Antes de la ventana (raro)
+The target can be at different positions:
+- **within**: Within the feature window
+- **future_near**: 1-5 steps after the window
+- **future_far**: 6-20 steps ahead
+- **past**: Before the window (rare)
 
 ## Usage
 
 ```python
 from generator import SyntheticDatasetGenerator3D, generate_3d_dataset
 
-# Generación rápida
+# Quick generation
 dataset = generate_3d_dataset(seed=42)
 X, y = dataset.X, dataset.y  # (n, m, t), (n,)
 
-# Con configuración custom
+# With custom configuration
 from config import PriorConfig3D
 prior = PriorConfig3D(
     max_features=10,
     prob_classification=1.0,
     prob_sliding_window_mode=0.6,
-    max_complexity=5_000_000  # Limitar complejidad
+    max_complexity=5_000_000  # Limit complexity
 )
 generator = SyntheticDatasetGenerator3D(prior=prior, seed=42)
 dataset = generator.generate()
 
-# Múltiples datasets
+# Multiple datasets
 for i, dataset in enumerate(generator.generate_many(100)):
     print(f"Dataset {i}: {dataset.shape}")
 ```
@@ -144,65 +144,65 @@ for i, dataset in enumerate(generator.generate_many(100)):
 ```
 03_synthetic_generator_3D/
 ├── config.py              # PriorConfig3D, DatasetConfig3D
-├── dag_utils.py           # DAG wrapper sobre 2D (usa orden topológico)
-├── temporal_inputs.py     # Generadores de inputs (noise, time, state)
-├── temporal_propagator.py # Propagación temporal optimizada
-├── sequence_sampler.py    # Extracción de subsecuencias
-├── feature_selector.py    # Selección de features y target
-├── generator.py           # Clase principal
-├── sanity_checks.py       # Validación completa + comparación con reales
-├── discriminator_analysis.py  # Análisis sintético vs real
-├── visualize_dag.py       # Visualización de grafos
+├── dag_utils.py           # DAG wrapper over 2D (uses topological order)
+├── temporal_inputs.py     # Input generators (noise, time, state)
+├── temporal_propagator.py # Optimized temporal propagation
+├── sequence_sampler.py    # Subsequence extraction
+├── feature_selector.py    # Feature and target selection
+├── generator.py           # Main class
+├── sanity_checks.py       # Complete validation + comparison with real data
+├── discriminator_analysis.py  # Synthetic vs real analysis
+├── visualize_dag.py       # Graph visualization
 └── README.md
 ```
 
-## Parámetros Clave
+## Key Parameters
 
-### Límites de Tamaño
-| Parámetro | Valor | Descripción |
+### Size Limits
+| Parameter | Value | Description |
 |-----------|-------|-------------|
-| max_samples | 10,000 | Samples máximos |
-| max_features | 15 | Features máximos |
-| max_t_subseq | 1,000 | Timesteps máximos por ventana |
-| max_T_total | 5,000 | Timesteps totales máximos |
-| max_classes | 10 | Clases máximas |
+| max_samples | 10,000 | Maximum samples |
+| max_features | 15 | Maximum features |
+| max_t_subseq | 1,000 | Maximum timesteps per window |
+| max_T_total | 5,000 | Maximum total timesteps |
+| max_classes | 10 | Maximum classes |
 | max_complexity | 10,000,000 | n_samples × T_total × n_nodes |
 
-### Estructura del Grafo
-| Parámetro | Valor | Descripción |
+### Graph Structure
+| Parameter | Value | Description |
 |-----------|-------|-------------|
-| n_nodes_range | (12, 300) | Nodos del DAG |
-| density_range | (0.01, 0.8) | Densidad de edges |
-| n_roots_range | (3, 40) | Número de roots |
-| max_roots_fraction | 0.25 | Roots ≤ 25% de nodos |
+| n_nodes_range | (12, 300) | DAG nodes |
+| density_range | (0.01, 0.8) | Edge density |
+| n_roots_range | (3, 40) | Number of roots |
+| max_roots_fraction | 0.25 | Roots ≤ 25% of nodes |
 
-### Distribución de Inputs
-| Tipo | Mínimo | Descripción |
-|------|--------|-------------|
-| Noise | 1 | Variabilidad entre samples |
-| Time | 1 | Tendencias temporales |
-| State | 1 | Dependencias temporales |
+### Input Distribution
+| Type | Minimum | Description |
+|------|---------|-------------|
+| Noise | 1 | Variability between samples |
+| Time | 1 | Temporal trends |
+| State | 1 | Temporal dependencies |
 
-### Probabilidades de Modo
-| Modo | Probabilidad |
-|------|--------------|
+### Mode Probabilities
+| Mode | Probability |
+|------|-------------|
 | IID | 20% |
 | Sliding Window | 60% |
 | Mixed | 20% |
 
-## Optimizaciones de Rendimiento
+## Performance Optimizations
 
-El generador incluye varias optimizaciones:
+The generator includes several optimizations:
 
-1. **Límite de complejidad**: Si `n_samples × T_total × n_nodes > max_complexity`, reduce parámetros automáticamente
+1. **Complexity limit**: If `n_samples × T_total × n_nodes > max_complexity`, automatically reduces parameters
 
-2. **Propagación vectorizada**: Arrays pre-asignados en lugar de diccionarios
+2. **Vectorized propagation**: Pre-allocated arrays instead of dictionaries
 
-3. **Cache de timeseries**: Los timeseries se cachean para extracción eficiente
+3. **Timeseries cache**: Timeseries are cached for efficient extraction
 
-4. **Batch processing**: Múltiples samples se procesan en paralelo
+4. **Batch processing**: Multiple samples processed in parallel
 
-Tiempo típico: **~0.8s por dataset** (promedio)
+Typical time: **~0.8s per dataset** (average)
 
 ## Sanity Checks
 
@@ -211,45 +211,45 @@ cd 03_synthetic_generator_3D
 python sanity_checks.py
 ```
 
-Los sanity checks incluyen:
+Sanity checks include:
 
-1. **Basic Stats**: Shapes, modos, NaN rates
+1. **Basic Stats**: Shapes, modes, NaN rates
 2. **Learnability**: Models beat baseline
-3. **Temporal Characteristics**: Autocorrelación, tendencias
+3. **Temporal Characteristics**: Autocorrelation, trends
 4. **Mode Comparison**: IID vs Sliding vs Mixed
-5. **Label Permutation**: Sin data leakage
-6. **Comparison with Real**: Distribuciones vs UCR/UEA datasets
-7. **Difficulty Spectrum**: Variedad de dificultades
+5. **Label Permutation**: No data leakage
+6. **Comparison with Real**: Distributions vs UCR/UEA datasets
+7. **Difficulty Spectrum**: Variety of difficulties
 8. **Input Type Distribution**: Balance noise/time/state
 
-## Comparación con Datasets Reales
+## Comparison with Real Datasets
 
-El check 6 compara con datasets reales del PKL:
-- n_samples, t_length: distribuciones similares
-- Autocorrelación: sintéticos tienen menos AC(1) que reales
-- Varianza: reales tienen más variabilidad
+Check 6 compares with real datasets from PKL:
+- n_samples, t_length: similar distributions
+- Autocorrelation: synthetics have less AC(1) than real
+- Variance: real have more variability
 
-## Diferencias con Generador 2D
+## Differences with 2D Generator
 
-| Aspecto | 2D | 3D |
-|---------|----|----|
+| Aspect | 2D | 3D |
+|--------|----|----|
 | Shape | (n, m) | (n, m, t) |
-| Inputs | Solo ruido | Ruido + Tiempo + Estado |
-| Dependencias | Ninguna | Temporal (memoria) |
-| Target | Un nodo | Un nodo en un timestep |
-| Sampling | Una propagación | T propagaciones + extracción |
-| Complejidad | O(n × nodes) | O(n × T × nodes) |
+| Inputs | Only noise | Noise + Time + State |
+| Dependencies | None | Temporal (memory) |
+| Target | One node | One node at a timestep |
+| Sampling | One propagation | T propagations + extraction |
+| Complexity | O(n × nodes) | O(n × T × nodes) |
 
 ## Discriminator Analysis
 
-Análisis de distinguibilidad sintético vs real:
+Analysis of synthetic vs real distinguishability:
 
 ```bash
 python discriminator_analysis.py
 ```
 
-Genera:
-- Features de datasets (34 métricas)
-- Clasificador Random Forest para distinguir
+Generates:
+- Dataset features (34 metrics)
+- Random Forest classifier to distinguish
 - Feature importance
-- Visualizaciones por dataset
+- Visualizations per dataset

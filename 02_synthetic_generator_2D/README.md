@@ -1,8 +1,8 @@
 # Synthetic Dataset Generator for TabPFN
 
-Implementación del generador de datos sintéticos tabulares basado en el paper de TabPFN. Genera datasets diversos para entrenar modelos que aprenden a resolver problemas tabulares en general.
+Implementation of the tabular synthetic data generator based on the TabPFN paper. Generates diverse datasets to train models that learn to solve tabular problems in general.
 
-## Arquitectura
+## Architecture
 
 ```
 Root Nodes (Noise) → DAG Transformations → Feature Selection → Post-processing → (X, y)
@@ -15,7 +15,7 @@ Root Nodes (Noise) → DAG Transformations → Feature Selection → Post-proces
 ```python
 from generator import SyntheticDatasetGenerator
 
-# Generar un dataset
+# Generate a dataset
 gen = SyntheticDatasetGenerator(seed=42)
 dataset = gen.generate()
 
@@ -23,101 +23,101 @@ X, y = dataset.X, dataset.y
 print(f"Shape: {X.shape}, Classes: {dataset.n_classes}")
 ```
 
-## Módulos
+## Modules
 
-| Archivo | Función |
-|---------|---------|
-| `config.py` | `PriorConfig` (distribuciones) y `DatasetConfig` (instancia) |
-| `dag_builder.py` | Construcción del DAG con orden topológico y densidad controlable |
-| `transformations.py` | Transformaciones: NN (con 12 activaciones), Tree, Discretization |
-| `row_generator.py` | Propagación de valores por el grafo |
-| `feature_selector.py` | Selección de features y target |
-| `post_processing.py` | Warping (Kumaraswamy), cuantización, missing values |
-| `generator.py` | Clase principal |
-| `sanity_checks.py` | Validación completa de datasets generados |
-| `tests.py` | Tests unitarios |
+| File | Function |
+|------|----------|
+| `config.py` | `PriorConfig` (distributions) and `DatasetConfig` (instance) |
+| `dag_builder.py` | DAG construction with topological order and controllable density |
+| `transformations.py` | Transformations: NN (with 12 activations), Tree, Discretization |
+| `row_generator.py` | Value propagation through the graph |
+| `feature_selector.py` | Feature and target selection |
+| `post_processing.py` | Warping (Kumaraswamy), quantization, missing values |
+| `generator.py` | Main class |
+| `sanity_checks.py` | Complete validation of generated datasets |
+| `tests.py` | Unit tests |
 
-## Parámetros Clave
+## Key Parameters
 
-### Tamaño
-- **n_samples**: Uniforme en [50, 2048]
-- **n_features**: Beta(0.95, 8.0) escalado a [1, 160]
+### Size
+- **n_samples**: Uniform in [50, 2048]
+- **n_features**: Beta(0.95, 8.0) scaled to [1, 160]
 - **max_cells**: 75,000 (n_samples × n_features)
 
-### Estructura del Grafo
-- **n_nodes**: Log-uniform en [50, 600] (nodos latentes)
-- **density**: Uniforme en [0.01, 0.8] - controla cuántos edges adicionales se agregan
-- **n_roots_range**: (3, 15) - número de nodos raíz (inputs)
+### Graph Structure
+- **n_nodes**: Log-uniform in [50, 600] (latent nodes)
+- **density**: Uniform in [0.01, 0.8] - controls how many additional edges are added
+- **n_roots_range**: (3, 15) - number of root nodes (inputs)
 
-### Transformaciones
-Cada nodo no-raíz tiene exactamente **una** transformación que toma todos sus padres como input:
+### Transformations
+Each non-root node has exactly **one** transformation that takes all its parents as input:
 
-| Tipo | Prob | Descripción |
+| Type | Prob | Description |
 |------|------|-------------|
-| NN | ~60% | Linear combination + activación + ruido |
-| Tree | ~25% | Decision tree con subset de features de padres |
-| Discretization | ~15% | Distancia a prototipos → categoría normalizada |
+| NN | ~60% | Linear combination + activation + noise |
+| Tree | ~25% | Decision tree with subset of parent features |
+| Discretization | ~15% | Distance to prototypes → normalized category |
 
-### Activaciones (12 funciones del paper)
+### Activations (12 functions from paper)
 ```python
 ['identity', 'log', 'sigmoid', 'abs', 'sin', 'tanh', 
  'rank', 'square', 'power', 'softplus', 'step', 'mod']
 ```
 
-- **identity**: f(x) = x (transformación lineal)
+- **identity**: f(x) = x (linear transformation)
 - **log**: f(x) = log(|x| + 1)
 - **sigmoid**: f(x) = 1 / (1 + e^(-x))
 - **abs**: f(x) = |x|
 - **sin**: f(x) = sin(x)
 - **tanh**: f(x) = tanh(x)
-- **rank**: f(x) = percentil rank
+- **rank**: f(x) = percentile rank
 - **square**: f(x) = x²
 - **power**: f(x) = |x|^α, α ∈ [0.5, 3]
 - **softplus**: f(x) = log(1 + e^x)
-- **step**: f(x) = 1 si x > 0, else 0
+- **step**: f(x) = 1 if x > 0, else 0
 - **mod**: f(x) = x mod m, m ∈ [0.5, 2]
 
-### Discretización
-- Recibe vector de padres
-- Calcula distancia a K prototipos (K ∈ [2, 8])
-- Asigna categoría del prototipo más cercano
-- Normaliza: output = categoría / K (para usar en grafo)
-- Agrega ruido gaussiano
+### Discretization
+- Receives vector of parents
+- Calculates distance to K prototypes (K ∈ [2, 8])
+- Assigns category of closest prototype
+- Normalizes: output = category / K (for use in graph)
+- Adds Gaussian noise
 
 ### Decision Tree
-- Selecciona subset de features de los padres (tree_max_features_fraction=0.7)
-- Genera árbol con profundidad [2, 5]
-- Cada nodo: (feature_idx, threshold, left_val, right_val)
+- Selects subset of features from parents (tree_max_features_fraction=0.7)
+- Generates tree with depth [2, 5]
+- Each node: (feature_idx, threshold, left_val, right_val)
 
-### Ruido en Transformaciones
-Todas las transformaciones agregan ruido gaussiano N(0, σ²) al final.
+### Noise in Transformations
+All transformations add Gaussian noise N(0, σ²) at the end.
 
-### Número de Clases
-- Gamma(2.0, 2.0) + offset de 2
-- Limitado a min(10, n_samples/min_samples_per_class)
-- **min_samples_per_class**: 10 (mínimo de samples por clase)
+### Number of Classes
+- Gamma(2.0, 2.0) + offset of 2
+- Limited to min(10, n_samples/min_samples_per_class)
+- **min_samples_per_class**: 10 (minimum samples per class)
 
-## Construcción del DAG
+## DAG Construction
 
-El DAG se construye usando **orden topológico**:
+The DAG is constructed using **topological order**:
 
-1. Asignar orden aleatorio a todos los nodos
-2. Determinar número de roots (3-15)
-3. Calcular edges objetivo basado en `density`
-4. Agregar edges solo de nodos con orden menor a mayor (garantiza aciclicidad)
-5. Asegurar conectividad (cada no-root tiene al menos 1 padre)
+1. Assign random order to all nodes
+2. Determine number of roots (3-15)
+3. Calculate target edges based on `density`
+4. Add edges only from nodes with lower order to higher order (guarantees acyclicity)
+5. Ensure connectivity (each non-root has at least 1 parent)
 
-Esto permite controlar la **densidad** del grafo:
-- density=0: grafo mínimo (árbol)
-- density=1: DAG máximamente denso
+This allows controlling the **density** of the graph:
+- density=0: minimum graph (tree)
+- density=1: maximally dense DAG
 
-## Subgrafos Desconectados
+## Disconnected Subgraphs
 
-El generador puede crear subgrafos desconectados para features irrelevantes:
-- Probabilidad: 30%
-- Cada subgrafo tiene mínimo 3 nodos
-- Subgrafos pueden tener múltiples roots
-- El subgrafo principal retiene al menos 60% de los nodos
+The generator can create disconnected subgraphs for irrelevant features:
+- Probability: 30%
+- Each subgraph has minimum 3 nodes
+- Subgraphs can have multiple roots
+- Main subgraph retains at least 60% of nodes
 
 ## Sanity Checks
 
@@ -125,23 +125,23 @@ El generador puede crear subgrafos desconectados para features irrelevantes:
 python sanity_checks.py
 ```
 
-Verifica:
-- ✅ Distribución de accuracy (no trivial ni imposible)
-- ✅ Variabilidad de rankings entre modelos
-- ✅ Features relevantes vs irrelevantes
-- ✅ Label permutation test (sin data leakage)
-- ✅ Learning curves (mejora con más datos)
-- ✅ Invariancia a permutaciones
-- ✅ Discretización correcta (prototipos, categorías, entropía)
-- ✅ Visualización de DAGs generados
+Verifies:
+- ✅ Accuracy distribution (not trivial nor impossible)
+- ✅ Variability of rankings between models
+- ✅ Relevant vs irrelevant features
+- ✅ Label permutation test (no data leakage)
+- ✅ Learning curves (improves with more data)
+- ✅ Invariance to permutations
+- ✅ Correct discretization (prototypes, categories, entropy)
+- ✅ Visualization of generated DAGs
 
-## Selección de Features
+## Feature Selection
 
-El generador excluye de los features solo el **nodo target** (lo que queremos predecir).
+The generator excludes from features only the **target node** (what we want to predict).
 
-Los padres del target **sí pueden ser features** - son información valiosa para la predicción. No hay data leakage porque los features son valores de entrada y el target es el resultado de la transformación.
+The target's parents **can be features** - they are valuable information for prediction. There is no data leakage because features are input values and the target is the result of the transformation.
 
-## Configuración Personalizada
+## Custom Configuration
 
 ```python
 from config import PriorConfig
@@ -165,9 +165,9 @@ gen = SyntheticDatasetGenerator(prior=prior, seed=42)
 python tests.py
 ```
 
-Incluye tests para:
-- Construcción de DAG
-- Todas las transformaciones
-- Todas las activaciones
-- Densidad del grafo
-- Múltiples roots
+Includes tests for:
+- DAG construction
+- All transformations
+- All activations
+- Graph density
+- Multiple roots

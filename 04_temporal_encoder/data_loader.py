@@ -105,13 +105,18 @@ class SyntheticDataLoader:
             from config import PriorConfig3D
             
             # Create prior config with training-appropriate settings
+            # Note: PriorConfig3D uses different parameter names than DataConfig
+            # - n_features_range: controls Beta distribution for multivariate features
+            # - t_subseq_range: the 't' in (n, m, t) - subsequence length
+            # - prob_univariate: probability of single-feature time series
             prior = PriorConfig3D(
                 n_samples_range=config.n_samples_range,
-                n_features_range=config.n_features_range,
-                n_timesteps_range=config.n_timesteps_range,
+                n_features_range=config.n_features_range,  # For multivariate beta distribution
+                t_subseq_range=config.n_timesteps_range,   # Map timesteps to t_subseq
                 max_classes=config.max_classes,
                 prob_univariate=config.prob_univariate,
                 train_ratio_range=config.train_ratio_range,
+                force_classification=True,  # Encoder training uses classification
             )
             
             self.generator = SyntheticDatasetGenerator3D(prior=prior, seed=seed)
@@ -127,8 +132,10 @@ class SyntheticDataLoader:
         """Generate a single dataset sample."""
         dataset = self.generator.generate()
         
+        # Get n_samples from X shape (SyntheticDataset3D uses X.shape[0])
+        n_samples = dataset.X.shape[0]
+        
         # Split into train/test
-        n_samples = dataset.n_samples
         train_ratio = self.rng.uniform(*self.config.train_ratio_range)
         n_train = max(2, int(n_samples * train_ratio))
         n_train = min(n_train, n_samples - 2)  # Ensure at least 2 test samples
@@ -143,6 +150,12 @@ class SyntheticDataLoader:
         X_test = dataset.X[test_idx]
         y_test = dataset.y[test_idx]
         
+        # Get feature names if available, otherwise generate default names
+        feature_names = getattr(dataset, 'feature_names', None)
+        if feature_names is None:
+            n_features = dataset.X.shape[1]
+            feature_names = [f"feature_{i}" for i in range(n_features)]
+        
         return DatasetSample(
             X_train=X_train,
             y_train=y_train,
@@ -152,7 +165,7 @@ class SyntheticDataLoader:
             metadata={
                 "source": "synthetic",
                 "config": dataset.config.to_dict() if hasattr(dataset.config, 'to_dict') else {},
-                "feature_names": dataset.feature_names,
+                "feature_names": feature_names,
             }
         )
     
@@ -198,6 +211,9 @@ class RealDataLoader:
     Data loader for real time series classification datasets.
     
     Loads datasets from the 01_real_data directory.
+    Supports both:
+    1. classification_datasets.pkl - a list of TimeSeriesDataset objects
+    2. Individual .pkl/.npz files
     """
     
     def __init__(
@@ -205,49 +221,135 @@ class RealDataLoader:
         data_path: str,
         seed: Optional[int] = None
     ):
-        self.data_path = Path(data_path)
+        # Resolve path: if relative, make it relative to project root
+        data_path_obj = Path(data_path)
+        if not data_path_obj.is_absolute():
+            data_path_obj = _PROJECT_ROOT / data_path
+        self.data_path = data_path_obj
+        
         self.seed = seed
         self.rng = np.random.default_rng(seed)
         
         # Load available datasets
-        self.datasets = self._discover_datasets()
+        self._loaded_datasets: List[DatasetSample] = []
+        self._load_datasets()
     
-    def _discover_datasets(self) -> List[str]:
-        """Discover available dataset files."""
-        datasets = []
-        
-        # Look for pickle or numpy files
-        if self.data_path.exists():
-            for ext in ['*.pkl', '*.npz', '*.npy']:
-                datasets.extend([p.stem for p in self.data_path.glob(ext)])
-        
-        return list(set(datasets))
-    
-    def load_dataset(self, name: str) -> Optional[DatasetSample]:
-        """Load a specific dataset by name."""
+    def _load_datasets(self):
+        """Load datasets from classification_datasets.pkl or individual files."""
         import pickle
         
-        # Try different file formats
-        pkl_path = self.data_path / f"{name}.pkl"
-        npz_path = self.data_path / f"{name}.npz"
+        # First, try to load the main classification_datasets.pkl
+        main_pkl = self.data_path / "classification_datasets.pkl"
         
-        try:
-            if pkl_path.exists():
-                with open(pkl_path, 'rb') as f:
-                    data = pickle.load(f)
-                X = data.get('X', data.get('data'))
-                y = data.get('y', data.get('labels', data.get('target')))
+        if main_pkl.exists():
+            try:
+                with open(main_pkl, 'rb') as f:
+                    datasets_list = pickle.load(f)
                 
-            elif npz_path.exists():
-                data = np.load(npz_path)
-                X = data['X']
-                y = data['y']
+                # Convert TimeSeriesDataset objects to DatasetSample
+                for ds in datasets_list:
+                    try:
+                        sample = self._convert_timeseries_dataset(ds)
+                        if sample is not None:
+                            self._loaded_datasets.append(sample)
+                    except Exception as e:
+                        print(f"Warning: Failed to convert dataset {getattr(ds, 'name', 'unknown')}: {e}")
+                
+                if self._loaded_datasets:
+                    print(f"Loaded {len(self._loaded_datasets)} real datasets from {main_pkl}")
+                    return
+            except Exception as e:
+                print(f"Warning: Failed to load {main_pkl}: {e}")
+        
+        # Fallback: look for individual files
+        if self.data_path.exists():
+            for pkl_path in self.data_path.glob("*.pkl"):
+                if pkl_path.stem == "classification_datasets":
+                    continue  # Already tried
+                sample = self._load_individual_file(pkl_path)
+                if sample is not None:
+                    self._loaded_datasets.append(sample)
+        
+        if not self._loaded_datasets:
+            print(f"Warning: No real datasets found in {self.data_path}")
+    
+    def _convert_timeseries_dataset(self, ds) -> Optional[DatasetSample]:
+        """Convert a TimeSeriesDataset object to DatasetSample."""
+        try:
+            # Get X and y data
+            if hasattr(ds, 'X_train') and ds.X_train is not None:
+                X_train = ds.X_train
+                y_train = ds.y_train
+                X_test = ds.X_test if ds.X_test is not None else np.array([])
+                y_test = ds.y_test if ds.y_test is not None else np.array([])
+            elif hasattr(ds, 'X') and ds.X is not None:
+                # Need to split
+                X = ds.X
+                y = ds.y
+                n_samples = len(y)
+                n_train = int(n_samples * 0.7)
+                indices = self.rng.permutation(n_samples)
+                X_train = X[indices[:n_train]]
+                y_train = y[indices[:n_train]]
+                X_test = X[indices[n_train:]]
+                y_test = y[indices[n_train:]]
             else:
                 return None
             
-            # Ensure 3D format
+            # TimeSeriesDataset uses (n, s, m) where s=timesteps, m=channels
+            # DatasetSample expects (n, m, t) where m=features, t=timesteps
+            # Need to transpose: (n, s, m) -> (n, m, s)
+            if X_train.ndim == 3:
+                X_train = np.transpose(X_train, (0, 2, 1))
+            elif X_train.ndim == 2:
+                X_train = X_train[:, np.newaxis, :]
+            
+            if len(X_test) > 0:
+                if X_test.ndim == 3:
+                    X_test = np.transpose(X_test, (0, 2, 1))
+                elif X_test.ndim == 2:
+                    X_test = X_test[:, np.newaxis, :]
+            
+            # Ensure we have enough samples
+            if len(y_train) < 2 or len(y_test) < 2:
+                return None
+            
+            # Get n_classes
+            all_y = np.concatenate([y_train, y_test]) if len(y_test) > 0 else y_train
+            n_classes = len(np.unique(all_y))
+            
+            name = getattr(ds, 'name', 'unknown')
+            
+            return DatasetSample(
+                X_train=X_train.astype(np.float32),
+                y_train=y_train.astype(np.int64),
+                X_test=X_test.astype(np.float32),
+                y_test=y_test.astype(np.int64),
+                n_classes=n_classes,
+                metadata={"source": "real", "name": name}
+            )
+        except Exception as e:
+            return None
+    
+    def _load_individual_file(self, pkl_path: Path) -> Optional[DatasetSample]:
+        """Load a single dataset file."""
+        import pickle
+        
+        try:
+            with open(pkl_path, 'rb') as f:
+                data = pickle.load(f)
+            
+            if isinstance(data, dict):
+                X = data.get('X', data.get('data'))
+                y = data.get('y', data.get('labels', data.get('target')))
+            else:
+                return None
+            
+            if X is None or y is None:
+                return None
+            
+            # Ensure 3D format (n, m, t)
             if X.ndim == 2:
-                # Assume (n_samples, n_timesteps) -> (n_samples, 1, n_timesteps)
                 X = X[:, np.newaxis, :]
             
             # Split into train/test
@@ -264,24 +366,24 @@ class RealDataLoader:
                 X_test=X[test_idx],
                 y_test=y[test_idx],
                 n_classes=len(np.unique(y)),
-                metadata={"source": "real", "name": name}
+                metadata={"source": "real", "name": pkl_path.stem}
             )
-            
         except Exception as e:
-            print(f"Warning: Failed to load dataset {name}: {e}")
             return None
     
     def load_all(self) -> List[DatasetSample]:
-        """Load all available datasets."""
-        samples = []
-        for name in self.datasets:
-            sample = self.load_dataset(name)
-            if sample is not None:
-                samples.append(sample)
-        return samples
+        """Return all loaded datasets."""
+        return self._loaded_datasets
+    
+    def load_subset(self, n_datasets: int) -> List[DatasetSample]:
+        """Return a random subset of datasets."""
+        if n_datasets >= len(self._loaded_datasets):
+            return self._loaded_datasets
+        indices = self.rng.choice(len(self._loaded_datasets), n_datasets, replace=False)
+        return [self._loaded_datasets[i] for i in indices]
     
     def __len__(self) -> int:
-        return len(self.datasets)
+        return len(self._loaded_datasets)
 
 
 class MixedDataLoader:

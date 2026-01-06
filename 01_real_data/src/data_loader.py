@@ -10,7 +10,7 @@ warnings.filterwarnings('ignore')
 
 
 class TimeSeriesDataset:
-    """Wrapper para datasets de series temporales con train y test separados"""
+    """Wrapper for time series datasets with train and test separated"""
     
     def __init__(self, name: str, 
                  X_train: Optional[np.ndarray] = None,
@@ -53,7 +53,7 @@ class TimeSeriesDataset:
             else:
                 self.n_test, self.s_test, self.m_test = 0, 0, 0
             
-            # Para compatibilidad, X e y apuntan a train+test combinados
+            # For compatibility, X and y point to train+test combined
             if X_test is not None:
                 self.X = np.concatenate([self.X_train, self.X_test], axis=0)
                 self.y = np.concatenate([self.y_train, self.y_test], axis=0) if (y_train is not None and y_test is not None) else None
@@ -64,7 +64,7 @@ class TimeSeriesDataset:
             self.n, self.s, self.m = self.X.shape
             
         else:
-            # Modo legacy: solo X e y combinados
+            # Legacy mode: only combined X and y
             self.X = X
             self.y = y
             self.X_train = None
@@ -86,7 +86,7 @@ class TimeSeriesDataset:
             return f"TimeSeriesDataset(name='{self.name}', shape={self.X.shape if self.X is not None else None}, has_targets={self.y is not None})"
     
     def get_info(self) -> Dict:
-        """Retorna información básica del dataset"""
+        """Returns basic dataset information"""
         info = {
             'name': self.name,
             'has_train_test_split': self.X_train is not None,

@@ -22,15 +22,15 @@ def test_mini_training():
     # Debug config - ultra light for fast testing
     config = get_debug_config()
     config.device = "cuda"
-    config.training.batch_datasets = 1  # Solo 1 dataset por batch
+    config.training.batch_datasets = 1  # Only 1 dataset per batch
     
-    # Reducir tamaño de datasets sintéticos para test rápido
-    config.data.n_samples_range = (20, 50)      # Muy pocos samples
-    config.data.n_features_range = (1, 2)        # Muy pocas features
-    config.data.n_timesteps_range = (10, 20)     # Pocos timesteps
+    # Reduce synthetic dataset size for fast testing
+    config.data.n_samples_range = (20, 50)      # Very few samples
+    config.data.n_features_range = (1, 2)        # Very few features
+    config.data.n_timesteps_range = (10, 20)     # Few timesteps
     
-    # Reducir encoder para menos memoria
-    config.encoder.n_queries = 4  # Reducir de 16 a 4 para test
+    # Reduce encoder for less memory
+    config.encoder.n_queries = 4  # Reduce from 16 to 4 for testing
     
     print("Creating model...")
     model = TemporalTabPFN(config)
@@ -43,7 +43,7 @@ def test_mini_training():
     print("\nCreating data loader...")
     loader = SyntheticDataLoader(config.data, seed=42)
     
-    # Mini training loop - solo 2 steps para test rápido
+    # Mini training loop - only 2 steps for fast testing
     print("\nRunning 2 training steps...")
     losses = []
     

@@ -58,19 +58,25 @@ class TrainingConfig:
     """Configuration for training."""
     
     # Optimization
-    lr: float = 1e-4
+    lr: float = 2e-4
     """Learning rate."""
     
     weight_decay: float = 0.01
     """Weight decay for AdamW."""
     
-    batch_datasets: int = 4
-    """Number of complete datasets per batch (PFN-style training)."""
+    batch_datasets: int = 1
+    """Number of complete datasets processed per forward pass.
+    Keep at 1 for limited VRAM."""
+    
+    accumulation_steps: int = 64
+    """Accumulate gradients over this many datasets before updating weights.
+    Effective batch size = batch_datasets × accumulation_steps.
+    With batch_datasets=1 and accumulation_steps=64, you get batch=64 effect."""
     
     n_steps: int = 10000
     """Total number of training steps."""
     
-    eval_every: int = 500
+    eval_every: int = 100
     """Evaluate every N steps."""
     
     warmup_steps: int = 500
@@ -87,15 +93,21 @@ class TrainingConfig:
     val_synth_seed: int = 42
     """Fixed seed for synthetic validation set (reproducibility)."""
     
-    val_synth_size: int = 100
+    val_synth_size: int = 50
     """Number of datasets in synthetic validation set."""
     
+    val_real_size: int = 20
+    """Number of real datasets in validation set."""
+    
     # Checkpointing
-    save_every: int = 1000
+    save_every: int = 500
     """Save checkpoint every N steps."""
     
     checkpoint_dir: str = "checkpoints"
     """Directory for saving checkpoints."""
+    
+    update_plot_every: int = 100
+    """Update training plot every N steps."""
     
     # Logging
     log_dir: str = "logs"
@@ -114,32 +126,48 @@ class TrainingConfig:
 
 @dataclass 
 class DataConfig:
-    """Configuration for data loading."""
+    """
+    Configuration for data loading.
     
-    # Synthetic generator settings
-    # These override defaults in PriorConfig3D for training
-    n_samples_range: Tuple[int, int] = (100, 2000)
-    """Range of samples per dataset."""
+    These parameters are passed to PriorConfig3D when generating synthetic datasets.
+    Note the mapping between DataConfig and PriorConfig3D parameter names:
     
-    n_features_range: Tuple[int, int] = (1, 10)
-    """Range of features per dataset."""
+    DataConfig              -> PriorConfig3D
+    ─────────────────────────────────────────
+    n_samples_range         -> n_samples_range
+    n_features_range        -> n_features_range (for Beta distribution of multivariate)
+    n_timesteps_range       -> t_subseq_range (the 't' in n×m×t output shape)
+    max_classes             -> max_classes
+    prob_univariate         -> prob_univariate
+    train_ratio_range       -> train_ratio_range
+    """
     
-    n_timesteps_range: Tuple[int, int] = (50, 500)
-    """Range of timesteps per dataset."""
+    # Synthetic generator settings - reduced for 8GB VRAM
+    # TabPFN was designed for small datasets, so we limit sizes
+    n_samples_range: Tuple[int, int] = (50, 500)
+    """Range of samples per dataset (n in n×m×t). Max ~500 for 8GB VRAM."""
+    
+    n_features_range: Tuple[int, int] = (2, 8)
+    """Range of features for multivariate series (m in n×m×t when not univariate).
+    Maps to PriorConfig3D.n_features_range which controls Beta distribution."""
+    
+    n_timesteps_range: Tuple[int, int] = (20, 150)
+    """Range of timesteps per sample (t in n×m×t).
+    Maps to PriorConfig3D.t_subseq_range - the subsequence length."""
     
     max_classes: int = 10
-    """Maximum number of classes."""
+    """Maximum number of classes for classification."""
     
     prob_univariate: float = 0.4
-    """Probability of univariate time series."""
+    """Probability of generating univariate time series (m=1)."""
     
     # Train/val split for each dataset
     train_ratio_range: Tuple[float, float] = (0.6, 0.8)
-    """Range for train/test split ratio."""
+    """Range for train/test split ratio within each dataset."""
     
     # Real data
-    real_data_path: str = "../01_real_data/AEON/data"
-    """Path to real datasets."""
+    real_data_path: str = "01_real_data/AEON/data"
+    """Path to real datasets (relative to project root)."""
     
     # Number of workers for data loading
     num_workers: int = 0
@@ -179,7 +207,17 @@ class Preprocessing3DConfig:
     
     # Feature removal
     remove_constant_features: bool = True
-    """If True, remove features with zero variance."""
+    """If True, remove features with (near-)zero variance."""
+    
+    constant_threshold_std: float = 1e-6
+    """Features with std < this threshold are considered constant."""
+    
+    constant_threshold_range: float = 1e-6
+    """Features with (max-min) < this threshold are considered constant."""
+    
+    constant_threshold_unique_ratio: float = 0.01
+    """Features where n_unique_values/n_total < this ratio are considered nearly constant.
+    E.g., 0.01 means if a feature has fewer than 1% unique values, it's nearly constant."""
 
 
 @dataclass

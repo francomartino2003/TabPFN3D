@@ -1,5 +1,5 @@
 """
-Filtra datasets según criterios específicos
+Filter datasets according to specific criteria
 """
 import sys
 from pathlib import Path
@@ -20,40 +20,40 @@ def filter_datasets(
     output_pkl_path: Path
 ):
     """
-    Filtra datasets según criterios:
+    Filter datasets according to criteria:
     - n_samples (train + test) <= 10000
     - n_dimensions (features) <= 15
     - length (steps) <= 1000
     - n_classes <= 10
     """
-    # Cargar estadísticas
-    print("Cargando estadísticas...")
+    # Load statistics
+    print("Loading statistics...")
     with open(stats_json_path, 'r') as f:
         all_stats = json.load(f)
     
-    # Cargar datasets
-    print("Cargando datasets...")
+    # Load datasets
+    print("Loading datasets...")
     with open(datasets_pkl_path, 'rb') as f:
         all_datasets = pickle.load(f)
     
     # Crear diccionario de datasets por nombre
     datasets_dict = {ds.name: ds for ds in all_datasets}
     
-    # Filtrar datasets
-    print("\nFiltrando datasets...")
+    # Filter datasets
+    print("\nFiltering datasets...")
     filtered_stats = []
     filtered_names = []
     
     for stats in all_stats:
         name = stats['name']
         
-        # Obtener valores
+        # Get values
         n_samples = stats.get('n_samples', 0)
         n_dimensions = stats.get('n_dimensions', 0)
         length = stats.get('length', 0)
         n_classes = stats.get('n_classes', None)
         
-        # Aplicar filtros
+        # Apply filters
         if (n_samples <= 10000 and 
             n_dimensions <= 15 and 
             length <= 1000 and 
@@ -61,37 +61,37 @@ def filter_datasets(
             filtered_stats.append(stats)
             filtered_names.append(name)
     
-    print(f"\nTotal de datasets: {len(all_stats)}")
-    print(f"Datasets que cumplen criterios: {len(filtered_stats)}")
+    print(f"\nTotal datasets: {len(all_stats)}")
+    print(f"Datasets that meet criteria: {len(filtered_stats)}")
     
-    # Guardar nombres en JSON
-    print(f"\nGuardando nombres en {output_json_path}...")
+    # Save names in JSON
+    print(f"\nSaving names to {output_json_path}...")
     with open(output_json_path, 'w') as f:
         json.dump(filtered_names, f, indent=2)
     
-    # Calcular estadísticas de los filtrados
+    # Calculate statistics of filtered datasets
     if filtered_stats:
         df = pd.DataFrame(filtered_stats)
         
         print("\n" + "=" * 80)
-        print("ESTADÍSTICAS DE DATASETS FILTRADOS")
+        print("FILTERED DATASETS STATISTICS")
         print("=" * 80)
         
-        print(f"\nTotal de datasets filtrados: {len(filtered_stats)}")
+        print(f"\nTotal filtered datasets: {len(filtered_stats)}")
         
-        print(f"\nNúmero de muestras (train + test):")
+        print(f"\nNumber of samples (train + test):")
         print(f"  Min: {df['n_samples'].min()}")
         print(f"  Max: {df['n_samples'].max()}")
         print(f"  Mean: {df['n_samples'].mean():.1f}")
         print(f"  Median: {df['n_samples'].median():.1f}")
         
-        print(f"\nNúmero de dimensiones (features):")
+        print(f"\nNumber of dimensions (features):")
         print(f"  Min: {df['n_dimensions'].min()}")
         print(f"  Max: {df['n_dimensions'].max()}")
         print(f"  Mean: {df['n_dimensions'].mean():.1f}")
         print(f"  Median: {df['n_dimensions'].median():.1f}")
         
-        print(f"\nLongitud temporal (steps):")
+        print(f"\nTemporal length (steps):")
         print(f"  Min: {df['length'].min()}")
         print(f"  Max: {df['length'].max()}")
         print(f"  Mean: {df['length'].mean():.1f}")
@@ -99,23 +99,23 @@ def filter_datasets(
         
         valid_classes = df['n_classes'].dropna()
         if len(valid_classes) > 0:
-            print(f"\nNúmero de clases:")
+            print(f"\nNumber of classes:")
             print(f"  Min: {valid_classes.min()}")
             print(f"  Max: {valid_classes.max()}")
             print(f"  Mean: {valid_classes.mean():.1f}")
             print(f"  Median: {valid_classes.median():.1f}")
         
-        print(f"\nDistribución completa:")
+        print(f"\nComplete distribution:")
         print(df[['n_samples', 'n_dimensions', 'length', 'n_classes']].describe())
     
-    # Filtrar datasets del pkl
-    print(f"\nGuardando datasets filtrados en {output_pkl_path}...")
+    # Filter datasets from pkl
+    print(f"\nSaving filtered datasets to {output_pkl_path}...")
     filtered_datasets = [datasets_dict[name] for name in filtered_names if name in datasets_dict]
     
     with open(output_pkl_path, 'wb') as f:
         pickle.dump(filtered_datasets, f)
     
-    print(f"Guardados {len(filtered_datasets)} datasets filtrados")
+    print(f"Saved {len(filtered_datasets)} filtered datasets")
     
     return filtered_names, filtered_stats
 
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     stats_json_path = data_dir / "classification_stats.json"
     datasets_pkl_path = data_dir / "classification_datasets.pkl"
     output_json_path = data_dir / "filtered_dataset_names.json"
-    output_pkl_path = data_dir / "classification_datasets.pkl"  # Sobrescribir el original
+    output_pkl_path = data_dir / "classification_datasets.pkl"  # Overwrite original
     
     filter_datasets(
         stats_json_path,
@@ -135,6 +135,8 @@ if __name__ == "__main__":
         output_json_path,
         output_pkl_path
     )
+
+
 
 
 

@@ -1,19 +1,19 @@
 # TabPFN 3D - Real Data Analysis (AEON)
 
-Este directorio contiene el código y datos para analizar series temporales reales (no sintéticas) que se usarán para validar el modelo final. Los datos provienen del archivo AEON (UCR/UEA Time Series Classification Archive).
+This directory contains code and data for analyzing real (non-synthetic) time series that will be used to validate the final model. The data comes from the AEON archive (UCR/UEA Time Series Classification Archive).
 
-## Estructura
+## Structure
 
 ```
 01_real_data/
-├── src/                          # Código fuente
-│   ├── data_loader.py            # Clase TimeSeriesDataset para encapsular datos
-│   ├── load_classification_datasets.py  # Carga datasets de clasificación UCR/UEA
-│   ├── load_forecasting_datasets.py    # Carga datasets de forecasting Monash
-│   ├── time_series_statistics.py        # Cálculo de estadísticas
-│   └── analyze_all_datasets.py         # Script principal de análisis
-├── AEON/                          # Datos de AEON (UCR/UEA Archive)
-│   ├── benchmarks/               # Benchmarks de bakeoff 2017
+├── src/                          # Source code
+│   ├── data_loader.py            # TimeSeriesDataset class to encapsulate data
+│   ├── load_classification_datasets.py  # Load UCR/UEA classification datasets
+│   ├── load_forecasting_datasets.py    # Load Monash forecasting datasets
+│   ├── time_series_statistics.py        # Statistics calculation
+│   └── analyze_all_datasets.py         # Main analysis script
+├── AEON/                          # AEON data (UCR/UEA Archive)
+│   ├── benchmarks/               # Bakeoff 2017 benchmarks
 │   │   ├── accuracy/
 │   │   ├── auroc/
 │   │   ├── balacc/
@@ -22,62 +22,62 @@ Este directorio contiene el código y datos para analizar series temporales real
 │   │   ├── logloss/
 │   │   ├── memoryusage/
 │   │   └── predicttime/
-│   └── data/                      # Datasets y estadísticas
+│   └── data/                      # Datasets and statistics
 │       ├── classification_datasets.pkl
 │       ├── classification_stats.csv
 │       ├── classification_stats.json
 │       ├── classification_distributions.png
 │       └── classification_relationships.png
 └── notebooks/
-    └── 01_statistical_analysis.ipynb  # Análisis interactivo
+    └── 01_statistical_analysis.ipynb  # Interactive analysis
 ```
 
-## Uso
+## Usage
 
-### 1. Descargar y analizar datasets de clasificación
+### 1. Download and analyze classification datasets
 
 ```bash
 python src/analyze_all_datasets.py
 ```
 
-Esto:
-- Descarga todos los datasets de clasificación UCR/UEA usando `aeon`
-- Guarda train y test por separado en `AEON/data/classification_datasets.pkl`
-- Calcula estadísticas básicas (shape, length, dimensions, classes, etc.)
-- Guarda resultados en CSV y JSON
-- Genera visualizaciones
+This:
+- Downloads all UCR/UEA classification datasets using `aeon`
+- Saves train and test separately in `AEON/data/classification_datasets.pkl`
+- Calculates basic statistics (shape, length, dimensions, classes, etc.)
+- Saves results in CSV and JSON
+- Generates visualizations
 
-### 2. Análisis interactivo
+### 2. Interactive analysis
 
-Abrir `notebooks/01_statistical_analysis.ipynb` para análisis interactivo.
+Open `notebooks/01_statistical_analysis.ipynb` for interactive analysis.
 
 ## Datasets
 
-### Clasificación (UCR/UEA Archive)
-- Fuente: https://www.timeseriesclassification.com/dataset.php
+### Classification (UCR/UEA Archive)
+- Source: https://www.timeseriesclassification.com/dataset.php
 - Total: ~181 datasets
-- Cargados usando `aeon.datasets.load_classification`
-- Train y test se guardan por separado
+- Loaded using `aeon.datasets.load_classification`
+- Train and test are saved separately
 
 ### Forecasting (Monash Archive)
-- Fuente: https://forecastingdata.org/
-- Pendiente de implementación
+- Source: https://forecastingdata.org/
+- Pending implementation
 
-## Estadísticas calculadas
+## Calculated Statistics
 
-Para cada dataset se calcula:
-- `n_samples`: Número total de muestras (train + test)
-- `length`: Longitud temporal (timesteps)
-- `n_dimensions`: Número de dimensiones/variables
-- `n_classes`: Número de clases (para clasificación)
-- `train_size`: Tamaño del conjunto de entrenamiento
-- `test_size`: Tamaño del conjunto de prueba
-- `missing_pct`: Porcentaje de valores faltantes
-- `has_variable_length`: Si tiene series de longitud variable (padded)
+For each dataset, the following are calculated:
+- `n_samples`: Total number of samples (train + test)
+- `length`: Temporal length (timesteps)
+- `n_dimensions`: Number of dimensions/variables
+- `n_classes`: Number of classes (for classification)
+- `train_size`: Training set size
+- `test_size`: Test set size
+- `missing_pct`: Percentage of missing values
+- `has_variable_length`: Whether it has variable length series (padded)
 
 ## Benchmarks
 
-Los benchmarks de bakeoff 2017 se guardan en `AEON/benchmarks/` con métricas:
+Bakeoff 2017 benchmarks are saved in `AEON/benchmarks/` with metrics:
 - accuracy
 - auroc
 - balacc

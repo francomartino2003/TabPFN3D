@@ -314,11 +314,11 @@ class TemporalEncoder(nn.Module):
         
         # Process each feature independently
         # Reshape: (batch, n_features, n_timesteps) -> (batch * n_features, n_timesteps, 1)
-        x_flat = x.view(batch_size * n_features, n_timesteps, 1)
+        x_flat = x.reshape(batch_size * n_features, n_timesteps, 1)
         
         # Handle mask if provided
         if mask is not None:
-            mask_flat = mask.view(batch_size * n_features, n_timesteps)
+            mask_flat = mask.reshape(batch_size * n_features, n_timesteps)
         else:
             mask_flat = None
         
@@ -341,7 +341,7 @@ class TemporalEncoder(nn.Module):
         
         # Reshape: (batch * n_features, n_queries, d_model) -> 
         #          (batch, n_features * n_queries, d_model)
-        output = x_queries.view(batch_size, n_features * self.n_queries, self.d_model)
+        output = x_queries.reshape(batch_size, n_features * self.n_queries, self.d_model)
         
         return output
     
