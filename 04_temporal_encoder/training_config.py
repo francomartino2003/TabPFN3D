@@ -99,6 +99,9 @@ class TrainingConfig:
     val_real_size: int = 20
     """Number of real datasets in validation set."""
     
+    eval_real_datasets: bool = False
+    """If True, evaluate on real datasets during training. If False, skip real dataset evaluation."""
+    
     # Checkpointing
     save_every: int = 500
     """Save checkpoint every N steps."""

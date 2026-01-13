@@ -98,7 +98,7 @@ pip install -r requirements.txt
 
 ```bash
 cd 01_real_data
-python src/load_classification_datasets.py
+python src/analyze_all_datasets.py
 ```
 
 This downloads UCR/UEA classification datasets (~180 datasets) using [AEON](https://github.com/aeon-toolkit/aeon).

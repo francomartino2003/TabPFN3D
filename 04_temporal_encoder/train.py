@@ -42,7 +42,8 @@ try:
         evaluate_on_synthetic, 
         evaluate_on_real,
         TrainingMetrics,
-        plot_training_curves
+        plot_training_curves,
+        BatchEvaluationResult
     )
     from .preprocessing_3d import Preprocessor3D, numpy_to_torch
 except ImportError:
@@ -54,7 +55,8 @@ except ImportError:
         evaluate_on_synthetic, 
         evaluate_on_real,
         TrainingMetrics,
-        plot_training_curves
+        plot_training_curves,
+        BatchEvaluationResult
     )
     from preprocessing_3d import Preprocessor3D, numpy_to_torch
 
@@ -565,20 +567,34 @@ def train(
                 val_synth_accs.append(synth_result.mean_accuracy)
                 val_steps.append(step + 1)
                 
-                # Evaluate on real
-                val_real_size = getattr(config.training, 'val_real_size', 20)
-                real_result = evaluate_on_real(model, config, n_datasets=val_real_size)
-                if real_result.n_datasets > 0:
-                    print(f"Real Val ({real_result.n_datasets} datasets): "
-                          f"Acc={real_result.mean_accuracy:.4f} | "
-                          f"F1={real_result.mean_macro_f1:.4f}")
-                    val_real_accs.append(real_result.mean_accuracy)
+                # Evaluate on real (only if enabled)
+                if config.training.eval_real_datasets:
+                    val_real_size = getattr(config.training, 'val_real_size', 20)
+                    real_result = evaluate_on_real(model, config, n_datasets=val_real_size)
+                    if real_result.n_datasets > 0:
+                        print(f"Real Val ({real_result.n_datasets} datasets): "
+                              f"Acc={real_result.mean_accuracy:.4f} | "
+                              f"F1={real_result.mean_macro_f1:.4f}")
+                        val_real_accs.append(real_result.mean_accuracy)
+                    else:
+                        print("Real Val: No datasets available")
+                        val_real_accs.append(0.0)
+                    
+                    # Add to metrics
+                    metrics.add_val_metrics(synth_result, real_result)
                 else:
-                    print("Real Val: No datasets available")
-                    val_real_accs.append(0.0)
-                
-                # Add to metrics
-                metrics.add_val_metrics(synth_result, real_result)
+                    # Skip real dataset evaluation
+                    real_result = BatchEvaluationResult(
+                        mean_accuracy=0.0,
+                        mean_ce_loss=float('nan'),
+                        mean_macro_f1=0.0,
+                        std_accuracy=0.0,
+                        std_ce_loss=0.0,
+                        std_macro_f1=0.0,
+                        n_datasets=0,
+                        per_dataset_results=[]
+                    )
+                    metrics.add_val_metrics(synth_result, real_result)
                 
                 # Update plot after evaluation
                 plot_training_progress(
@@ -591,13 +607,15 @@ def train(
                 # Wandb logging
                 if config.training.wandb_project:
                     try:
-                        wandb.log({
+                        log_dict = {
                             "val_synth/accuracy": synth_result.mean_accuracy,
                             "val_synth/ce_loss": synth_result.mean_ce_loss,
                             "val_synth/macro_f1": synth_result.mean_macro_f1,
-                            "val_real/accuracy": real_result.mean_accuracy,
-                            "val_real/macro_f1": real_result.mean_macro_f1,
-                        }, step=step)
+                        }
+                        if config.training.eval_real_datasets:
+                            log_dict["val_real/accuracy"] = real_result.mean_accuracy
+                            log_dict["val_real/macro_f1"] = real_result.mean_macro_f1
+                        wandb.log(log_dict, step=step)
                     except:
                         pass
                 
