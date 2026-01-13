@@ -1,0 +1,42 @@
+#!/bin/bash
+# Setup script for MIT Engaging cluster
+# Run this ONCE after cloning the repository
+
+set -e  # Exit on error
+
+echo "=========================================="
+echo "Setting up TabPFN3D on MIT Engaging"
+echo "=========================================="
+
+# Load Python module (Sloan Python)
+echo "Loading Python module..."
+module load sloan/python/3.11.4
+
+# Create virtual environment in $HOME
+echo "Creating virtual environment..."
+python -m venv $HOME/venv_tabpfn3d
+
+# Activate venv
+echo "Activating virtual environment..."
+source $HOME/venv_tabpfn3d/bin/activate
+
+# Upgrade pip
+echo "Upgrading pip..."
+pip install --upgrade pip
+
+# Install PyTorch with CUDA support (for cluster GPUs)
+echo "Installing PyTorch with CUDA..."
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# Install other dependencies
+echo "Installing dependencies from requirements.txt..."
+pip install -r requirements.txt
+
+echo "=========================================="
+echo "Setup complete!"
+echo "=========================================="
+echo ""
+echo "To activate the environment in future sessions:"
+echo "  module load sloan/python/3.11.4"
+echo "  source \$HOME/venv_tabpfn3d/bin/activate"
+echo ""
