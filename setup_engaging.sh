@@ -52,7 +52,8 @@ pip install "scikit-learn>=1.3.0,<1.6.0" --only-binary :all:
 pip install "pandas>=1.4.0,<2.0" --only-binary pandas
 pip install "tabpfn>=6.0.0"
 pip install "einops>=0.7.0"
-# matplotlib is already installed with PyTorch
+# matplotlib: needed for training plots
+pip install "matplotlib>=3.7.0"
 # wandb is optional, uncomment if needed:
 # pip install wandb>=0.15.0
 
