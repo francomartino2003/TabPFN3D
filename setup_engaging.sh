@@ -41,9 +41,14 @@ pip install "numpy<2.0,>=1.24.0" --only-binary numpy
 echo "Installing PyTorch with CUDA 11.8..."
 pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
 
-# Install other dependencies
+# Install pandas < 2.0 (compatible with numpy 1.x) before requirements.txt
+# pandas 2.x requires numpy 2.x which requires GCC >= 9.3
+echo "Installing pandas < 2.0 (compatible with numpy 1.x)..."
+pip install "pandas>=1.5.0,<2.0"
+
+# Install other dependencies (pandas already installed, so it won't reinstall)
 echo "Installing dependencies from requirements.txt..."
-pip install -r requirements.txt
+pip install -r requirements.txt || pip install -r requirements.txt --ignore-installed pandas
 
 echo "=========================================="
 echo "Setup complete!"
