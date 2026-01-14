@@ -487,11 +487,16 @@ def train(
                         step_loss += output["loss"]
                         step_acc += output["accuracy"]
                         n_processed += 1
-                    except RuntimeError as e:
-                        if "out of memory" in str(e).lower():
+                    except (RuntimeError, ValueError) as e:
+                        error_msg = str(e).lower()
+                        if "out of memory" in error_msg:
                             # Clear CUDA cache and skip this sample
                             torch.cuda.empty_cache()
                             print(f"  [OOM] Skipped dataset with shape {sample.X_full.shape}")
+                            continue
+                        elif "cannot reshape" in error_msg or "size 0" in error_msg:
+                            # Skip empty or invalid datasets
+                            print(f"  [Invalid] Skipped dataset with shape {sample.X_full.shape}: {str(e)[:100]}")
                             continue
                         else:
                             raise e
