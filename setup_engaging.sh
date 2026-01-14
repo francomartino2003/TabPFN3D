@@ -44,12 +44,17 @@ pip install torch torchvision --extra-index-url https://download.pytorch.org/whl
 # Install only essential packages for training (minimal set)
 # Many packages in requirements.txt require numpy 2.x which needs GCC >= 9.3
 echo "Installing essential packages for training..."
-pip install "scikit-learn>=1.3.0,<2.0"  # For metrics (compatible with numpy 1.x)
+# scikit-learn: use wheel precompiled (compatible with numpy 1.x)
+pip install "scikit-learn>=1.3.0,<1.6.0" --only-binary scikit-learn
 pip install "tabpfn>=6.0.0"
 pip install "einops>=0.7.0"
 # matplotlib is already installed with PyTorch
 # wandb is optional, uncomment if needed:
 # pip install wandb>=0.15.0
+
+# Pre-download TabPFN weights (optional but recommended)
+echo "Pre-downloading TabPFN weights..."
+python -c "from tabpfn import TabPFNClassifier; TabPFNClassifier()" 2>&1 | head -20 || echo "TabPFN weights download (will download automatically on first use if needed)"
 
 echo "=========================================="
 echo "Setup complete!"
