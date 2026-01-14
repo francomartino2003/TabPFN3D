@@ -292,9 +292,9 @@ def get_default_config() -> FullConfig:
     """Get default configuration."""
     config = FullConfig()
     # Optimized for GPU with 47GB+ memory (e.g., L40S)
-    config.training.batch_datasets = 8
-    config.training.accumulation_steps = 8
-    # Effective batch size = 8 × 8 = 64 datasets
+    config.training.batch_datasets = 64
+    config.training.accumulation_steps = 1
+    # Effective batch size = 64 × 1 = 64 datasets
     return config
 
 
