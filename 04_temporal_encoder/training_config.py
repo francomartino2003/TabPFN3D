@@ -296,7 +296,7 @@ def get_default_config() -> FullConfig:
     config.training.accumulation_steps = 1
     # Effective batch size = 64 × 1 = 64 datasets
     # Dataset size limits (conservative to avoid OOM due to TabPFN's O(n²) attention)
-    config.data.n_samples_range = (50, 1500)
+    config.data.n_samples_range = (50, 1000)  # Reduced to avoid OOM (1000+ samples cause OOM)
     config.data.n_timesteps_range = (20, 300)
     return config
 
