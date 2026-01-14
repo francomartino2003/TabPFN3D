@@ -12,14 +12,10 @@ echo "=========================================="
 echo "Loading Python module..."
 module load sloan/python/3.11.4
 
-# Load newer GCC if available (needed for building some packages)
-# Check if gcc module exists, if not continue with system gcc
-if module avail gcc 2>&1 | grep -q "gcc"; then
-    echo "Loading GCC module..."
-    module load gcc/9.3.0 2>/dev/null || module load gcc/10.2.0 2>/dev/null || echo "Using system GCC"
-else
-    echo "Using system GCC"
-fi
+# Load newer GCC (needed for building some packages)
+# numpy 2.x requires GCC >= 9.3, but we'll install numpy 1.x from wheels
+echo "Loading GCC module (if needed for other packages)..."
+module load gcc/9.3.0 2>/dev/null || echo "GCC module not available, using system GCC"
 
 # Create virtual environment in $HOME
 echo "Creating virtual environment..."
@@ -33,16 +29,16 @@ source $HOME/venv_tabpfn3d/bin/activate
 echo "Upgrading pip..."
 pip install --upgrade pip
 
+# Install numpy FIRST from wheel (precompiled) to avoid GCC version issues
+# Pin to numpy < 2.0 for compatibility - must install before PyTorch
+echo "Installing numpy < 2.0 (precompiled wheel)..."
+pip install "numpy<2.0,>=1.24.0" --only-binary numpy
+
 # Install PyTorch with CUDA support (for cluster GPUs)
 # Using CUDA 11.8 for compatibility with cluster CUDA versions (11.2/11.3)
 # Using --extra-index-url so other packages install from PyPI
 echo "Installing PyTorch with CUDA 11.8..."
-pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
-
-# Install numpy from wheel (precompiled) to avoid GCC version issues
-# Pin to numpy < 2.0 for compatibility with older GCC
-echo "Installing numpy (precompiled wheel)..."
-pip install "numpy<2.0" --only-binary numpy
+pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118 --no-deps || pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
 
 # Install other dependencies
 echo "Installing dependencies from requirements.txt..."
