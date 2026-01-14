@@ -14,9 +14,9 @@ import json
 class EncoderConfig:
     """Configuration for the temporal encoder."""
     
-    # Architecture - must match TabPFN emsize (verified: 128)
-    d_model: int = 128
-    """Embedding dimension. Must match TabPFN's emsize."""
+    # Architecture - must match TabPFN emsize (TabPFN 2.5: 192, TabPFN v2: 128)
+    d_model: int = 192
+    """Embedding dimension. Must match TabPFN's emsize (192 for TabPFN 2.5)."""
     
     n_queries: int = 16
     """Number of latent queries per time series feature."""
@@ -45,8 +45,9 @@ class EncoderConfig:
     """Hidden dimension for MLP projection. If None, uses d_model."""
     
     def __post_init__(self):
-        assert self.d_model == 128, (
-            f"d_model must be 128 to match TabPFN emsize, got {self.d_model}"
+        # TabPFN 2.5 uses emsize=192, TabPFN v2 uses emsize=128
+        assert self.d_model in [128, 192], (
+            f"d_model must be 128 (TabPFN v2) or 192 (TabPFN 2.5), got {self.d_model}"
         )
         assert self.d_model % self.n_heads == 0, (
             f"d_model ({self.d_model}) must be divisible by n_heads ({self.n_heads})"
@@ -280,9 +281,9 @@ class FullConfig:
     
     def __post_init__(self):
         """Validate configuration."""
-        # Encoder d_model must match TabPFN emsize
-        assert self.encoder.d_model == 128, (
-            f"encoder.d_model must be 128 to match TabPFN, got {self.encoder.d_model}"
+        # Encoder d_model must match TabPFN emsize (192 for TabPFN 2.5, 128 for TabPFN v2)
+        assert self.encoder.d_model in [128, 192], (
+            f"encoder.d_model must be 128 (TabPFN v2) or 192 (TabPFN 2.5), got {self.encoder.d_model}"
         )
 
 
