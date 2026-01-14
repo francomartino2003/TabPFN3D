@@ -47,6 +47,9 @@ echo "Installing essential packages for training..."
 # scikit-learn: use wheel precompiled (compatible with numpy 1.x)
 # scikit-learn 1.5.x is the last version compatible with numpy < 2.0
 pip install "scikit-learn>=1.3.0,<1.6.0" --only-binary :all:
+# pandas: install < 2.0 (compatible with numpy 1.x) before tabpfn
+# pandas 1.5.x is the last version compatible with numpy < 2.0
+pip install "pandas>=1.4.0,<2.0" --only-binary pandas
 pip install "tabpfn>=6.0.0"
 pip install "einops>=0.7.0"
 # matplotlib is already installed with PyTorch
