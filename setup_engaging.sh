@@ -44,9 +44,9 @@ pip install torch torchvision --extra-index-url https://download.pytorch.org/whl
 # Install only essential packages for training (minimal set)
 # Many packages in requirements.txt require numpy 2.x which needs GCC >= 9.3
 echo "Installing essential packages for training..."
-pip install scikit-learn>=1.3.0,<2.0  # For metrics (compatible with numpy 1.x)
-pip install tabpfn>=6.0.0
-pip install einops>=0.7.0
+pip install "scikit-learn>=1.3.0,<2.0"  # For metrics (compatible with numpy 1.x)
+pip install "tabpfn>=6.0.0"
+pip install "einops>=0.7.0"
 # matplotlib is already installed with PyTorch
 # wandb is optional, uncomment if needed:
 # pip install wandb>=0.15.0
