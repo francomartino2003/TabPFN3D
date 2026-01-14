@@ -25,8 +25,9 @@ echo "Upgrading pip..."
 pip install --upgrade pip
 
 # Install PyTorch with CUDA support (for cluster GPUs)
-echo "Installing PyTorch with CUDA..."
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Using CUDA 11.8 for compatibility with cluster CUDA versions (11.2/11.3)
+echo "Installing PyTorch with CUDA 11.8..."
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
 # Install other dependencies
 echo "Installing dependencies from requirements.txt..."
