@@ -26,8 +26,9 @@ pip install --upgrade pip
 
 # Install PyTorch with CUDA support (for cluster GPUs)
 # Using CUDA 11.8 for compatibility with cluster CUDA versions (11.2/11.3)
+# Using --extra-index-url so other packages install from PyPI
 echo "Installing PyTorch with CUDA 11.8..."
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
 
 # Install other dependencies
 echo "Installing dependencies from requirements.txt..."
