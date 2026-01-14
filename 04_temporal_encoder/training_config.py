@@ -303,13 +303,15 @@ def get_default_config() -> FullConfig:
 
 # Quick configs for different scenarios
 def get_debug_config() -> FullConfig:
-    """Get configuration for quick debugging."""
-    config = get_default_config()  # Start with default config (8x8)
-    config.training.n_steps = 100  # Only difference: fewer steps for quick testing
-    config.training.eval_every = 20
-    config.training.val_synth_size = 10
-    config.data.n_samples_range = (50, 200)
-    config.data.n_timesteps_range = (20, 100)
+    """Get configuration for quick debugging with real-size datasets."""
+    config = get_default_config()  # Same dataset sizes as real training
+    # Only reduce number of steps for quick testing
+    config.training.n_steps = 50
+    config.training.eval_every = 10
+    config.training.val_synth_size = 5
+    # Keep same dataset sizes as default to test prefetching properly
+    # config.data.n_samples_range = (50, 1500)  # inherited from default
+    # config.data.n_timesteps_range = (20, 300)  # inherited from default
     return config
 
 
