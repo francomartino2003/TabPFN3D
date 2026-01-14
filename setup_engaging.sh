@@ -45,7 +45,8 @@ pip install torch torchvision --extra-index-url https://download.pytorch.org/whl
 # Many packages in requirements.txt require numpy 2.x which needs GCC >= 9.3
 echo "Installing essential packages for training..."
 # scikit-learn: use wheel precompiled (compatible with numpy 1.x)
-pip install "scikit-learn>=1.3.0,<1.6.0" --only-binary scikit-learn
+# scikit-learn 1.5.x is the last version compatible with numpy < 2.0
+pip install "scikit-learn>=1.3.0,<1.6.0" --only-binary :all:
 pip install "tabpfn>=6.0.0"
 pip install "einops>=0.7.0"
 # matplotlib is already installed with PyTorch
