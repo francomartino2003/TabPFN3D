@@ -43,7 +43,7 @@ cd 04_temporal_encoder
 
 # Run debug training (quick test)
 echo "Starting DEBUG training (--debug flag)..."
-python train.py --debug
+python -u train.py --debug
 
 echo "=========================================="
 echo "DEBUG JOB finished at: $(date)"

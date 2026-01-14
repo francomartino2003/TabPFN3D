@@ -52,7 +52,7 @@ cd 04_temporal_encoder
 
 # Run training (using default config)
 echo "Starting training..."
-python train.py
+python -u train.py
 
 echo "=========================================="
 echo "Job finished at: $(date)"
