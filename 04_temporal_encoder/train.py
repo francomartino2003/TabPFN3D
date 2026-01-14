@@ -18,9 +18,10 @@ import argparse
 import signal
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend
@@ -379,6 +380,9 @@ def train(
     print("\nInitializing data loader...")
     data_loader = SyntheticDataLoader(config.data, seed=config.training.seed)
     
+    # Prefetching executor for parallel data generation
+    prefetch_executor = ThreadPoolExecutor(max_workers=1)
+    
     # Metrics tracker
     metrics = TrainingMetrics()
     
@@ -455,15 +459,33 @@ def train(
     print(f"  Effective batch size: {effective_batch} datasets")
     print(f"  Eval every: {config.training.eval_every} steps")
     print(f"  Device: {config.device}")
+    print(f"  Prefetching: enabled (parallel data generation)")
     print(f"  Press Ctrl+C to save and exit")
     print()
     
     current_step = start_step
     
+    # Pre-generate first batch(es) for prefetching
+    def generate_step_batches() -> List[List]:
+        """Generate all batches needed for one training step."""
+        return [
+            data_loader.generate_batch(config.training.batch_datasets)
+            for _ in range(accumulation_steps)
+        ]
+    
+    # Start prefetching first step's data
+    prefetch_future = prefetch_executor.submit(generate_step_batches)
+    
     try:
         for step in range(start_step, config.training.n_steps):
             current_step = step
             step_start = time.time()
+            
+            # Get pre-generated batches (blocks if not ready yet)
+            step_batches = prefetch_future.result()
+            
+            # Immediately start generating next step's batches in background
+            prefetch_future = prefetch_executor.submit(generate_step_batches)
             
             # Zero gradients at start of accumulation
             optimizer.zero_grad()
@@ -473,9 +495,7 @@ def train(
             step_acc = 0.0
             
             n_processed = 0
-            for accum_idx in range(accumulation_steps):
-                # Generate batch of datasets
-                samples = data_loader.generate_batch(config.training.batch_datasets)
+            for accum_idx, samples in enumerate(step_batches):
                 
                 # Forward and backward for each sample in batch
                 for sample in samples:
@@ -668,8 +688,12 @@ def train(
     
     except KeyboardInterrupt:
         # This shouldn't happen due to signal handler, but just in case
+        prefetch_executor.shutdown(wait=False)
         save_checkpoint_on_interrupt()
         return model
+    
+    # Cleanup prefetch executor
+    prefetch_executor.shutdown(wait=False)
     
     # Final save
     torch.save({
