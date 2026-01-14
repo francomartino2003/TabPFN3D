@@ -12,7 +12,9 @@ This script implements TabPFN-style training where:
 Usage:
     python train.py --config config.json
     python train.py --debug  # Quick debug run
+    python train.py --debug --multi-gpu  # Debug with multiple GPUs
     python train.py --resume checkpoints/checkpoint_step1000.pt
+    python train.py --multi-gpu  # Full training with multiple GPUs
 """
 import argparse
 import signal
@@ -47,6 +49,7 @@ try:
         BatchEvaluationResult
     )
     from .preprocessing_3d import Preprocessor3D, numpy_to_torch
+    from .multi_gpu import MultiGPUTrainer, get_available_gpus
 except ImportError:
     from training_config import FullConfig, get_default_config, get_debug_config
     from model import TemporalTabPFN, LossComputer
@@ -60,6 +63,7 @@ except ImportError:
         BatchEvaluationResult
     )
     from preprocessing_3d import Preprocessor3D, numpy_to_torch
+    from multi_gpu import MultiGPUTrainer, get_available_gpus
 
 
 def check_cuda_info() -> dict:
@@ -271,7 +275,8 @@ def optimizer_step(
 
 def train(
     config: FullConfig,
-    resume_from: Optional[str] = None
+    resume_from: Optional[str] = None,
+    multi_gpu: bool = False
 ) -> TemporalTabPFN:
     """
     Main training function.
@@ -279,6 +284,7 @@ def train(
     Args:
         config: Full configuration
         resume_from: Path to checkpoint to resume from
+        multi_gpu: Whether to use multiple GPUs (if available)
     
     Returns:
         Trained model
@@ -295,12 +301,25 @@ def train(
         print(f"  Device: {cuda_info['device_name']}")
         print(f"  Memory: {cuda_info['memory_total_gb']:.1f} GB total, "
               f"{cuda_info['memory_free_gb']:.1f} GB free")
+        
+        # Show all available GPUs
+        all_gpus = get_available_gpus()
+        print(f"  Total GPUs: {len(all_gpus)}")
+        if multi_gpu and len(all_gpus) > 1:
+            print(f"  Multi-GPU: ENABLED")
+            for gpu in all_gpus:
+                print(f"    GPU {gpu['id']}: {gpu['name']} ({gpu['total_memory_gb']:.1f} GB)")
+        elif multi_gpu:
+            print(f"  Multi-GPU: requested but only 1 GPU available")
+            multi_gpu = False
+        
         if config.device == "cpu":
             print(f"  WARNING: Using CPU despite CUDA being available!")
     else:
         print(f"  CUDA available: No")
         print(f"  Using CPU")
         config.device = "cpu"
+        multi_gpu = False
     
     # Set seed
     torch.manual_seed(config.training.seed)
@@ -322,6 +341,14 @@ def train(
     
     print(f"  Trainable parameters (encoder): {model.get_num_trainable_params():,}")
     print(f"  Frozen parameters (TabPFN): {model.get_num_frozen_params():,}")
+    
+    # Initialize multi-GPU trainer if requested
+    multi_gpu_trainer = None
+    if multi_gpu:
+        multi_gpu_trainer = MultiGPUTrainer(model, config)
+        if multi_gpu_trainer.n_gpus < 2:
+            multi_gpu_trainer = None
+            multi_gpu = False
     
     # Optimizer (only encoder parameters)
     optimizer = AdamW(
@@ -460,6 +487,10 @@ def train(
     print(f"  Eval every: {config.training.eval_every} steps")
     print(f"  Device: {config.device}")
     print(f"  Prefetching: enabled (parallel data generation)")
+    if multi_gpu_trainer:
+        print(f"  Multi-GPU: {multi_gpu_trainer.n_gpus} GPUs")
+    else:
+        print(f"  Multi-GPU: disabled")
     print(f"  Press Ctrl+C to save and exit")
     print()
     
@@ -488,42 +519,58 @@ def train(
             prefetch_future = prefetch_executor.submit(generate_step_batches)
             
             # Zero gradients at start of accumulation
-            optimizer.zero_grad()
+            if multi_gpu_trainer:
+                multi_gpu_trainer.zero_grad()
+            else:
+                optimizer.zero_grad()
             
             # Accumulate gradients over multiple forward passes
             step_loss = 0.0
             step_acc = 0.0
-            
             n_processed = 0
-            for accum_idx, samples in enumerate(step_batches):
-                
-                # Forward and backward for each sample in batch
-                for sample in samples:
-                    try:
-                        output = forward_backward_step(
-                            model, sample, config, 
-                            accumulation_steps=effective_batch
-                        )
-                        step_loss += output["loss"]
-                        step_acc += output["accuracy"]
-                        n_processed += 1
-                    except (RuntimeError, ValueError) as e:
-                        error_msg = str(e).lower()
-                        if "out of memory" in error_msg:
-                            # Clear CUDA cache and skip this sample
-                            torch.cuda.empty_cache()
-                            print(f"  [OOM] Skipped dataset with shape {sample.X_full.shape}")
-                            continue
-                        elif "cannot reshape" in error_msg or "size 0" in error_msg:
-                            # Skip empty or invalid datasets
-                            print(f"  [Invalid] Skipped dataset with shape {sample.X_full.shape}: {str(e)[:100]}")
-                            continue
-                        else:
-                            raise e
+            
+            if multi_gpu_trainer:
+                # Multi-GPU: process all samples in parallel across GPUs
+                all_samples = [s for batch in step_batches for s in batch]
+                result = multi_gpu_trainer.forward_backward_batch(all_samples, effective_batch)
+                step_loss = result["loss"]
+                step_acc = result["accuracy"]
+                n_processed = result["n_processed"]
+            else:
+                # Single GPU: process samples sequentially
+                for accum_idx, samples in enumerate(step_batches):
+                    
+                    # Forward and backward for each sample in batch
+                    for sample in samples:
+                        try:
+                            output = forward_backward_step(
+                                model, sample, config, 
+                                accumulation_steps=effective_batch
+                            )
+                            step_loss += output["loss"]
+                            step_acc += output["accuracy"]
+                            n_processed += 1
+                        except (RuntimeError, ValueError) as e:
+                            error_msg = str(e).lower()
+                            if "out of memory" in error_msg:
+                                # Clear CUDA cache and skip this sample
+                                torch.cuda.empty_cache()
+                                print(f"  [OOM] Skipped dataset with shape {sample.X_full.shape}")
+                                continue
+                            elif "cannot reshape" in error_msg or "size 0" in error_msg:
+                                # Skip empty or invalid datasets
+                                print(f"  [Invalid] Skipped dataset with shape {sample.X_full.shape}: {str(e)[:100]}")
+                                continue
+                            else:
+                                raise e
             
             # Optimizer step after accumulation
             optimizer_step(model, optimizer, config)
             scheduler.step()
+            
+            # Sync weights to replicas after optimizer step (multi-GPU only)
+            if multi_gpu_trainer:
+                multi_gpu_trainer.sync_weights()
             
             # Average metrics (use n_processed to handle skipped OOM samples)
             if n_processed == 0:
@@ -689,11 +736,15 @@ def train(
     except KeyboardInterrupt:
         # This shouldn't happen due to signal handler, but just in case
         prefetch_executor.shutdown(wait=False)
+        if multi_gpu_trainer:
+            multi_gpu_trainer.shutdown()
         save_checkpoint_on_interrupt()
         return model
     
-    # Cleanup prefetch executor
+    # Cleanup prefetch executor and multi-GPU trainer
     prefetch_executor.shutdown(wait=False)
+    if multi_gpu_trainer:
+        multi_gpu_trainer.shutdown()
     
     # Final save
     torch.save({
@@ -745,6 +796,7 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Quick debug run")
     parser.add_argument("--resume", type=str, help="Path to checkpoint to resume from")
     parser.add_argument("--device", type=str, default="cuda", help="Device (cuda/cpu)")
+    parser.add_argument("--multi-gpu", action="store_true", help="Use multiple GPUs if available")
     
     args = parser.parse_args()
     
@@ -767,7 +819,8 @@ def main():
         config.device = "cpu"
     
     # Train
-    model = train(config, resume_from=args.resume)
+    multi_gpu = getattr(args, 'multi_gpu', False)
+    model = train(config, resume_from=args.resume, multi_gpu=multi_gpu)
     
     return model
 
