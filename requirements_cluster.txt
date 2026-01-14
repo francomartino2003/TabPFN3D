@@ -1,0 +1,19 @@
+# Minimal requirements for temporal encoder training on cluster
+# Uses numpy 1.x and compatible versions to avoid GCC compilation issues
+
+# Core (already installed)
+# numpy>=1.24.0,<2.0  # Installed separately in setup script
+# torch, torchvision  # Installed separately in setup script
+
+# Essential for training
+tabpfn>=6.0.0
+einops>=0.7.0
+
+# Evaluation metrics (scikit-learn - install from wheel if possible)
+scikit-learn>=1.3.0
+
+# Optional - for experiment tracking
+# wandb>=0.15.0  # Uncomment if needed
+
+# Note: pandas, scipy, matplotlib are NOT required for basic training
+# They are only needed for data analysis/evaluation scripts

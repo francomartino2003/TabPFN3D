@@ -41,17 +41,15 @@ pip install "numpy<2.0,>=1.24.0" --only-binary numpy
 echo "Installing PyTorch with CUDA 11.8..."
 pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
 
-# Install pandas < 2.0 (compatible with numpy 1.x) before requirements.txt
-# pandas 2.x requires numpy 2.x which requires GCC >= 9.3
-echo "Installing pandas < 2.0 (compatible with numpy 1.x)..."
-pip install "pandas>=1.5.0,<2.0"
-
-# Install other dependencies from requirements.txt (excluding pandas)
-# Create a temporary requirements file without pandas
-echo "Installing dependencies from requirements.txt (excluding pandas)..."
-grep -v "^pandas" requirements.txt > /tmp/requirements_no_pandas.txt || cat requirements.txt > /tmp/requirements_no_pandas.txt
-pip install -r /tmp/requirements_no_pandas.txt
-rm -f /tmp/requirements_no_pandas.txt
+# Install only essential packages for training (minimal set)
+# Many packages in requirements.txt require numpy 2.x which needs GCC >= 9.3
+echo "Installing essential packages for training..."
+pip install scikit-learn>=1.3.0,<2.0  # For metrics (compatible with numpy 1.x)
+pip install tabpfn>=6.0.0
+pip install einops>=0.7.0
+# matplotlib is already installed with PyTorch
+# wandb is optional, uncomment if needed:
+# pip install wandb>=0.15.0
 
 echo "=========================================="
 echo "Setup complete!"
