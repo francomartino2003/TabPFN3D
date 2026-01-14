@@ -46,9 +46,12 @@ pip install torch torchvision --extra-index-url https://download.pytorch.org/whl
 echo "Installing pandas < 2.0 (compatible with numpy 1.x)..."
 pip install "pandas>=1.5.0,<2.0"
 
-# Install other dependencies (pandas already installed, so it won't reinstall)
-echo "Installing dependencies from requirements.txt..."
-pip install -r requirements.txt || pip install -r requirements.txt --ignore-installed pandas
+# Install other dependencies from requirements.txt (excluding pandas)
+# Create a temporary requirements file without pandas
+echo "Installing dependencies from requirements.txt (excluding pandas)..."
+grep -v "^pandas" requirements.txt > /tmp/requirements_no_pandas.txt || cat requirements.txt > /tmp/requirements_no_pandas.txt
+pip install -r /tmp/requirements_no_pandas.txt
+rm -f /tmp/requirements_no_pandas.txt
 
 echo "=========================================="
 echo "Setup complete!"
