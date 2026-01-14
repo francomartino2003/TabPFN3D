@@ -19,8 +19,13 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "=========================================="
 
+# Initialize module system (if available)
+if [ -f /etc/profile.d/modules.sh ]; then
+    source /etc/profile.d/modules.sh
+fi
+
 # Load Python module
-module load sloan/python/3.11.4
+module load sloan/python/3.11.4 2>/dev/null || echo "Module system not available, using venv Python directly"
 
 # Activate virtual environment
 source $HOME/venv_tabpfn3d/bin/activate
