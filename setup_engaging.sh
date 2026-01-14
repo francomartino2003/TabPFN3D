@@ -12,6 +12,15 @@ echo "=========================================="
 echo "Loading Python module..."
 module load sloan/python/3.11.4
 
+# Load newer GCC if available (needed for building some packages)
+# Check if gcc module exists, if not continue with system gcc
+if module avail gcc 2>&1 | grep -q "gcc"; then
+    echo "Loading GCC module..."
+    module load gcc/9.3.0 2>/dev/null || module load gcc/10.2.0 2>/dev/null || echo "Using system GCC"
+else
+    echo "Using system GCC"
+fi
+
 # Create virtual environment in $HOME
 echo "Creating virtual environment..."
 python -m venv $HOME/venv_tabpfn3d
@@ -29,6 +38,11 @@ pip install --upgrade pip
 # Using --extra-index-url so other packages install from PyPI
 echo "Installing PyTorch with CUDA 11.8..."
 pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
+
+# Install numpy from wheel (precompiled) to avoid GCC version issues
+# Pin to numpy < 2.0 for compatibility with older GCC
+echo "Installing numpy (precompiled wheel)..."
+pip install "numpy<2.0" --only-binary numpy
 
 # Install other dependencies
 echo "Installing dependencies from requirements.txt..."
