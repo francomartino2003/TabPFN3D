@@ -290,7 +290,12 @@ class FullConfig:
 # Convenience function to create default config
 def get_default_config() -> FullConfig:
     """Get default configuration."""
-    return FullConfig()
+    config = FullConfig()
+    # Optimized for GPU with 47GB+ memory (e.g., L40S)
+    config.training.batch_datasets = 8
+    config.training.accumulation_steps = 8
+    # Effective batch size = 8 × 8 = 64 datasets
+    return config
 
 
 # Quick configs for different scenarios
