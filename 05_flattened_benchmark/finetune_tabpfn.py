@@ -174,70 +174,109 @@ class SyntheticDataGenerator:
         self.prior = create_synthetic_generator_prior(config)
         self.generator = SyntheticDatasetGenerator3D(self.prior, seed=seed)
     
-    def generate_one(self) -> Dict[str, Any]:
-        """Generate one synthetic dataset (flattened, train/test split)."""
-        # Update seed for each dataset to ensure uniqueness
-        self.dataset_count += 1
-        self.generator = self.generator.__class__(
-            self.prior, 
-            seed=self.seed + self.dataset_count
-        )
+    def generate_one(self, max_retries: int = 10) -> Dict[str, Any]:
+        """Generate one synthetic dataset (flattened, train/test split).
         
-        try:
-            dataset = self.generator.generate()
-            X_3d = dataset.X  # (n_samples, n_features, length)
-            y = dataset.y
+        Uses stratified split to ensure all classes are in both train and test.
+        Validates that features are not constant.
+        """
+        from sklearn.model_selection import train_test_split
+        
+        for retry in range(max_retries):
+            # Update seed for each dataset to ensure uniqueness
+            self.dataset_count += 1
+            self.generator = self.generator.__class__(
+                self.prior, 
+                seed=self.seed + self.dataset_count
+            )
             
-            # Flatten
-            n_samples, n_features, length = X_3d.shape
-            X_flat = X_3d.reshape(n_samples, -1)
-            
-            # Check constraints
-            if X_flat.shape[1] > self.config.max_flat_features:
-                # Skip this dataset
-                return self.generate_one()
-            
-            if len(np.unique(y)) > self.config.max_classes:
-                return self.generate_one()
-            
-            # Train/test split (70/30)
-            n_train = int(0.7 * n_samples)
-            indices = self.rng.permutation(n_samples)
-            train_idx, test_idx = indices[:n_train], indices[n_train:]
-            
-            X_train = X_flat[train_idx].astype(np.float32)
-            X_test = X_flat[test_idx].astype(np.float32)
-            y_train = y[train_idx].astype(np.int64)
-            y_test = y[test_idx].astype(np.int64)
-            
-            # Encode labels to be contiguous
-            le = LabelEncoder()
-            le.fit(y_train)
-            y_train = le.transform(y_train)
-            y_test = le.transform(y_test)
-            
-            # Handle missing values (use train mean)
-            if np.any(np.isnan(X_train)):
-                col_means = np.nanmean(X_train, axis=0)
-                col_means = np.nan_to_num(col_means, nan=0.0)
-                for i in range(X_train.shape[1]):
-                    X_train[:, i] = np.where(np.isnan(X_train[:, i]), col_means[i], X_train[:, i])
-                    X_test[:, i] = np.where(np.isnan(X_test[:, i]), col_means[i], X_test[:, i])
-            
-            return {
-                'X_train': X_train,
-                'X_test': X_test,
-                'y_train': y_train,
-                'y_test': y_test,
-                'n_classes': len(le.classes_),
-                'n_features': X_flat.shape[1],
-                'n_samples': n_samples,
-                'metadata': dataset.metadata,
-            }
-        except Exception as e:
-            # If generation fails, try again
-            print(f"  Generation warning: {e}")
-            return self.generate_one()
+            try:
+                dataset = self.generator.generate()
+                X_3d = dataset.X  # (n_samples, n_features, length)
+                y = dataset.y
+                
+                # Flatten
+                n_samples, n_features, length = X_3d.shape
+                X_flat = X_3d.reshape(n_samples, -1)
+                
+                # Check constraints
+                if X_flat.shape[1] > self.config.max_flat_features:
+                    continue  # Try another dataset
+                
+                n_classes = len(np.unique(y))
+                if n_classes > self.config.max_classes:
+                    continue
+                
+                if n_classes < 2:
+                    continue  # Need at least 2 classes
+                
+                # Check that we have enough samples per class for stratified split
+                class_counts = np.bincount(y.astype(int))
+                min_samples_per_class = class_counts[class_counts > 0].min()
+                if min_samples_per_class < 2:
+                    continue  # Need at least 2 samples per class for stratified split
+                
+                # Stratified train/test split (ensures all classes in both sets)
+                try:
+                    X_train, X_test, y_train, y_test = train_test_split(
+                        X_flat, y, 
+                        test_size=0.3, 
+                        stratify=y,
+                        random_state=self.seed + self.dataset_count
+                    )
+                except ValueError:
+                    # Stratified split failed (e.g., class with only 1 sample)
+                    continue
+                
+                X_train = X_train.astype(np.float32)
+                X_test = X_test.astype(np.float32)
+                y_train = y_train.astype(np.int64)
+                y_test = y_test.astype(np.int64)
+                
+                # Encode labels to be contiguous (0, 1, 2, ...)
+                le = LabelEncoder()
+                le.fit(y_train)  # Now y_test is guaranteed to have same classes
+                y_train = le.transform(y_train)
+                y_test = le.transform(y_test)
+                
+                # Check for constant features (would cause TabPFN to fail)
+                feature_std = np.std(X_train, axis=0)
+                n_constant = np.sum(feature_std < 1e-8)
+                if n_constant == X_train.shape[1]:
+                    # ALL features are constant - invalid dataset
+                    continue
+                
+                # Handle missing values (use train mean)
+                if np.any(np.isnan(X_train)):
+                    col_means = np.nanmean(X_train, axis=0)
+                    col_means = np.nan_to_num(col_means, nan=0.0)
+                    for i in range(X_train.shape[1]):
+                        X_train[:, i] = np.where(np.isnan(X_train[:, i]), col_means[i], X_train[:, i])
+                        X_test[:, i] = np.where(np.isnan(X_test[:, i]), col_means[i], X_test[:, i])
+                
+                # Handle any remaining NaN/Inf
+                X_train = np.nan_to_num(X_train, nan=0.0, posinf=1e6, neginf=-1e6)
+                X_test = np.nan_to_num(X_test, nan=0.0, posinf=1e6, neginf=-1e6)
+                
+                return {
+                    'X_train': X_train,
+                    'X_test': X_test,
+                    'y_train': y_train,
+                    'y_test': y_test,
+                    'n_classes': len(le.classes_),
+                    'n_features': X_flat.shape[1],
+                    'n_samples': n_samples,
+                    'metadata': dataset.metadata,
+                }
+                
+            except Exception as e:
+                # If generation fails, try again
+                if retry == max_retries - 1:
+                    print(f"  Generation failed after {max_retries} retries: {e}")
+                continue
+        
+        # If all retries failed, generate with minimal constraints
+        raise RuntimeError(f"Could not generate valid dataset after {max_retries} retries")
 
 
 # ============================================================================
@@ -602,6 +641,9 @@ class TabPFNFineTuner:
                     total_loss += output['loss'].item()
                     total_acc += output['accuracy'].item()
                     n_valid += 1
+                
+                # Clear intermediate tensors to free memory
+                del output
                     
             except Exception as e:
                 print(f"  Batch item error: {e}")
@@ -616,6 +658,10 @@ class TabPFNFineTuner:
         
         # Optimizer step
         self.optimizer.step()
+        
+        # Clear CUDA cache periodically to prevent memory fragmentation
+        if self.device == 'cuda' and self.current_step % 10 == 0:
+            torch.cuda.empty_cache()
         self.scheduler.step()
         
         self.current_step += 1
