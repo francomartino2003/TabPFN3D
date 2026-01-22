@@ -94,8 +94,9 @@ class FinetuneConfig:
     # Device - auto-detect
     device: str = "auto"  # Will be set to cuda/mps/cpu
     
-    # Number of estimators for finetuning (lower = faster, less memory)
-    n_estimators_finetune: int = 2
+    # Number of estimators for finetuning 
+    # MUST be 1 for batched mode (finetuning with gradients)
+    n_estimators_finetune: int = 1
     n_estimators_eval: int = 4
     
     # Random seed
@@ -758,7 +759,6 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
         print("Warning: No real datasets found. Evaluation will be skipped.")
     
     # Initialize trainer
-    print("\nInitializing TabPFN fine-tuner...")
     trainer = TabPFNFineTuner(config)
     _trainer_instance = trainer
     
