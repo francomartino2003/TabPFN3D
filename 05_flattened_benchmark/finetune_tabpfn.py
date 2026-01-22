@@ -474,9 +474,12 @@ class TabPFNFineTuner:
             configs_list = []
             
             for config in ensemble_configs_list:
+                # X tensors: (n_samples, n_features)
                 X_train_tensor = torch.tensor(X_train_proc, dtype=torch.float32, device=self.device)
-                y_train_tensor = torch.tensor(y_train_proc, dtype=torch.long, device=self.device)
                 X_test_tensor = torch.tensor(X_test, dtype=torch.float32, device=self.device)
+                
+                # y tensors need batch dimension: (1, n_samples) for transpose in inference
+                y_train_tensor = torch.tensor(y_train_proc, dtype=torch.float32, device=self.device).unsqueeze(0)
                 
                 X_context_list.append(X_train_tensor)
                 y_context_list.append(y_train_tensor)
@@ -538,8 +541,10 @@ class TabPFNFineTuner:
             
         except Exception as e:
             import traceback
-            print(f"  Forward error: {e}")
-            traceback.print_exc()
+            import sys
+            print(f"  Forward error: {e}", flush=True)
+            traceback.print_exc(file=sys.stdout)
+            sys.stdout.flush()
             return {
                 'loss': torch.tensor(0.0, device=self.device, requires_grad=True),
                 'accuracy': torch.tensor(0.0),
