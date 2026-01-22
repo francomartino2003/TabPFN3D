@@ -434,51 +434,6 @@ class TabPFNFineTuner:
         
         return torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
     
-    def preprocess_dataset(
-        self, 
-        X_train: np.ndarray, 
-        y_train: np.ndarray,
-        X_test: np.ndarray,
-    ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor], List[Any]]:
-        """
-        Preprocess a dataset using TabPFN's internal preprocessing.
-        
-        Returns:
-            X_context: List of preprocessed train features per estimator
-            y_context: List of preprocessed train labels per estimator
-            X_query: List of preprocessed test features per estimator
-            configs: Preprocessing configs
-        """
-        # Get preprocessing from TabPFN
-        rng = np.random.default_rng(self.config.seed)
-        
-        # Use TabPFN's preprocessing
-        ensemble_configs, X_processed, y_processed = self.clf._initialize_dataset_preprocessing(
-            X_train, y_train, rng
-        )
-        
-        # Preprocess test data with the same configs
-        X_test_processed_list = []
-        
-        for config in ensemble_configs.configs:
-            # Apply same preprocessing to test data
-            X_test_tensor = torch.tensor(X_test, dtype=torch.float32, device=self.device)
-            X_test_processed_list.append(X_test_tensor)
-        
-        # Convert to expected format
-        X_context = []
-        y_context = []
-        X_query = []
-        
-        for i, config in enumerate(ensemble_configs.configs):
-            X_train_tensor = torch.tensor(X_processed, dtype=torch.float32, device=self.device)
-            y_train_tensor = torch.tensor(y_processed, dtype=torch.long, device=self.device)
-            
-            X_context.append(X_train_tensor)
-            y_context.append(y_train_tensor)
-            X_query.append(X_test_processed_list[i])
-        
-        return X_context, y_context, X_query, ensemble_configs.configs
     
     def forward_single_dataset(
         self, 
@@ -490,30 +445,34 @@ class TabPFNFineTuner:
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass for a single dataset using TabPFN's finetuning API.
+        
+        ensemble_configs from _initialize_dataset_preprocessing is a list of 
+        ClassifierEnsembleConfig objects (one per estimator).
         """
         try:
-            # Convert to tensors
-            X_train_t = torch.tensor(X_train, dtype=torch.float32)
-            y_train_t = torch.tensor(y_train, dtype=torch.long)
-            X_test_t = torch.tensor(X_test, dtype=torch.float32)
             y_test_t = torch.tensor(y_test, dtype=torch.long, device=self.device)
             
             # Get preprocessing config
             rng = np.random.default_rng(self.config.seed + self.current_step)
             
             # Use TabPFN's internal preprocessing
-            ensemble_configs, X_train_proc, y_train_proc = self.clf._initialize_dataset_preprocessing(
+            # Returns: (list[ClassifierEnsembleConfig], X_processed, y_processed)
+            ensemble_configs_list, X_train_proc, y_train_proc = self.clf._initialize_dataset_preprocessing(
                 X_train, y_train, rng
             )
             
+            # ensemble_configs_list is already a list of configs (one per estimator)
+            n_estimators = len(ensemble_configs_list)
+            
             # Prepare data for fit_from_preprocessed
-            # Need list format per estimator
+            # Need list format: one tensor per estimator
             X_context_list = []
             y_context_list = []
             X_query_list = []
             cat_indices_list = []
+            configs_list = []
             
-            for config in ensemble_configs.configs:
+            for config in ensemble_configs_list:
                 X_train_tensor = torch.tensor(X_train_proc, dtype=torch.float32, device=self.device)
                 y_train_tensor = torch.tensor(y_train_proc, dtype=torch.long, device=self.device)
                 X_test_tensor = torch.tensor(X_test, dtype=torch.float32, device=self.device)
@@ -522,13 +481,19 @@ class TabPFNFineTuner:
                 y_context_list.append(y_train_tensor)
                 X_query_list.append(X_test_tensor)
                 cat_indices_list.append(self.clf.inferred_categorical_indices_)
+                configs_list.append(config)
+            
+            # fit_from_preprocessed expects configs as list[list[EnsembleConfig]]
+            # Wrap in another list for batch dimension
+            configs_batched = [configs_list]
+            cat_indices_batched = [cat_indices_list]
             
             # Fit the context (sets up internal state)
             self.clf.fit_from_preprocessed(
                 X_context_list,
                 y_context_list,
-                cat_indices_list,
-                ensemble_configs.configs,
+                cat_indices_batched,
+                configs_batched,
             )
             
             # Forward pass to get logits
@@ -539,7 +504,6 @@ class TabPFNFineTuner:
             )
             
             Q, B, E, L = logits_QBEL.shape
-            n_test = X_test.shape[0]
             
             # Reshape for loss: (B*E, L, Q)
             logits_BLQ = logits_QBEL.permute(1, 2, 3, 0).reshape(B * E, L, Q)
