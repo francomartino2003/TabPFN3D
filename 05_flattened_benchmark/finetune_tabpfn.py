@@ -474,11 +474,11 @@ class TabPFNFineTuner:
             configs_list = []
             
             for config in ensemble_configs_list:
-                # X tensors: (n_samples, n_features)
-                X_train_tensor = torch.tensor(X_train_proc, dtype=torch.float32, device=self.device)
-                X_test_tensor = torch.tensor(X_test, dtype=torch.float32, device=self.device)
-                
-                # y tensors need batch dimension: (1, n_samples) for transpose in inference
+                # All tensors need batch dimension for the batched inference engine
+                # X: (1, n_samples, n_features) -> after transpose: (n_samples, 1, n_features)
+                # y: (1, n_samples) -> after transpose: (n_samples, 1)
+                X_train_tensor = torch.tensor(X_train_proc, dtype=torch.float32, device=self.device).unsqueeze(0)
+                X_test_tensor = torch.tensor(X_test, dtype=torch.float32, device=self.device).unsqueeze(0)
                 y_train_tensor = torch.tensor(y_train_proc, dtype=torch.float32, device=self.device).unsqueeze(0)
                 
                 X_context_list.append(X_train_tensor)
