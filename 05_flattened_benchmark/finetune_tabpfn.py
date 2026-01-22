@@ -50,7 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / '00_TabPFN' / 'src'))
 
 from tabpfn import TabPFNClassifier
 from tabpfn.finetuning.data_util import ClassifierBatch
-from tabpfn.preprocessing import fit_preprocessing
+from tabpfn.preprocessing import fit_preprocessing, EnsembleConfig
 
 # Global for signal handling
 _trainer_instance = None
@@ -447,8 +447,8 @@ class TabPFNFineTuner:
         """
         Forward pass for a single dataset using TabPFN's finetuning API.
         
-        ensemble_configs from _initialize_dataset_preprocessing is a list of 
-        ClassifierEnsembleConfig objects (one per estimator).
+        Uses fit_preprocessing to properly preprocess the data before passing
+        to the model, matching what the official finetuning does.
         """
         try:
             y_test_t = torch.tensor(y_test, dtype=torch.long, device=self.device)
@@ -456,43 +456,73 @@ class TabPFNFineTuner:
             # Get preprocessing config
             rng = np.random.default_rng(self.config.seed + self.current_step)
             
-            # Use TabPFN's internal preprocessing
-            # Returns: (list[ClassifierEnsembleConfig], X_processed, y_processed)
-            ensemble_configs_list, X_train_proc, y_train_proc = self.clf._initialize_dataset_preprocessing(
+            # Step 1: Initialize dataset preprocessing (creates configs)
+            ensemble_configs_list, X_train_init, y_train_init = self.clf._initialize_dataset_preprocessing(
                 X_train, y_train, rng
             )
             
-            # ensemble_configs_list is already a list of configs (one per estimator)
-            n_estimators = len(ensemble_configs_list)
+            # Get categorical indices
+            cat_ix = self.clf.inferred_categorical_indices_ or []
             
-            # Prepare data for fit_from_preprocessed
-            # Need list format: one tensor per estimator
+            # Step 2: Apply REAL preprocessing using fit_preprocessing
+            # This normalizes, encodes, and transforms the data
+            preprocessing_results = list(fit_preprocessing(
+                configs=ensemble_configs_list,
+                X_train=X_train_init,
+                y_train=y_train_init,
+                random_state=rng,
+                cat_ix=cat_ix,
+                n_preprocessing_jobs=1,
+                parallel_mode="block",
+            ))
+            
+            # Unpack results
+            configs_processed = []
+            X_trains_preprocessed = []
+            y_trains_preprocessed = []
+            cat_ixs_processed = []
+            preprocessors = []
+            
+            for config, preprocessor, X_train_pp, y_train_pp, cat_ix_pp in preprocessing_results:
+                configs_processed.append(config)
+                preprocessors.append(preprocessor)
+                X_trains_preprocessed.append(X_train_pp)
+                y_trains_preprocessed.append(y_train_pp)
+                cat_ixs_processed.append(cat_ix_pp)
+            
+            # Step 3: Apply same preprocessing to test data
+            X_tests_preprocessed = []
+            for preprocessor in preprocessors:
+                X_test_pp = preprocessor.transform(X_test).X
+                X_tests_preprocessed.append(X_test_pp)
+            
+            # Step 4: Convert to tensors with batch dimension
             X_context_list = []
             y_context_list = []
             X_query_list = []
-            cat_indices_list = []
-            configs_list = []
             
-            for config in ensemble_configs_list:
-                # All tensors need batch dimension for the batched inference engine
-                # X: (1, n_samples, n_features) -> after transpose: (n_samples, 1, n_features)
-                # y: (1, n_samples) -> after transpose: (n_samples, 1)
-                X_train_tensor = torch.tensor(X_train_proc, dtype=torch.float32, device=self.device).unsqueeze(0)
-                X_test_tensor = torch.tensor(X_test, dtype=torch.float32, device=self.device).unsqueeze(0)
-                y_train_tensor = torch.tensor(y_train_proc, dtype=torch.float32, device=self.device).unsqueeze(0)
+            for i in range(len(configs_processed)):
+                # X: add batch dim -> (1, n_samples, n_features)
+                X_train_tensor = torch.as_tensor(
+                    X_trains_preprocessed[i], dtype=torch.float32, device=self.device
+                ).unsqueeze(0)
+                X_test_tensor = torch.as_tensor(
+                    X_tests_preprocessed[i], dtype=torch.float32, device=self.device
+                ).unsqueeze(0)
+                # y: add batch dim -> (1, n_samples)
+                y_train_tensor = torch.as_tensor(
+                    y_trains_preprocessed[i], dtype=torch.float32, device=self.device
+                ).unsqueeze(0)
                 
                 X_context_list.append(X_train_tensor)
                 y_context_list.append(y_train_tensor)
                 X_query_list.append(X_test_tensor)
-                cat_indices_list.append(self.clf.inferred_categorical_indices_)
-                configs_list.append(config)
             
-            # fit_from_preprocessed expects configs as list[list[EnsembleConfig]]
-            # Wrap in another list for batch dimension
-            configs_batched = [configs_list]
-            cat_indices_batched = [cat_indices_list]
+            # Wrap configs and cat_indices in batch dimension
+            configs_batched = [configs_processed]
+            cat_indices_batched = [cat_ixs_processed]
             
-            # Fit the context (sets up internal state)
+            # Step 5: Fit the context (sets up internal state)
             self.clf.fit_from_preprocessed(
                 X_context_list,
                 y_context_list,
@@ -500,8 +530,7 @@ class TabPFNFineTuner:
                 configs_batched,
             )
             
-            # Forward pass to get logits
-            # With return_raw_logits=True, shape depends on configuration
+            # Step 6: Forward pass to get logits
             logits = self.clf.forward(
                 X_query_list,
                 return_raw_logits=True,
@@ -513,20 +542,16 @@ class TabPFNFineTuner:
                 self._logged_shape = True
             
             # Handle different output shapes
-            # With n_estimators=1 and batched mode, shape might be (Q, L) or (Q, 1, L)
             if logits.ndim == 2:
-                # Shape: (Q, L) - direct logits
                 logits_QL = logits
             elif logits.ndim == 3:
-                # Shape: (Q, E, L) or (Q, B, L) - squeeze middle dim
                 logits_QL = logits.squeeze(1)
             elif logits.ndim == 4:
-                # Shape: (Q, B, E, L) - average over B and E
                 logits_QL = logits.mean(dim=(1, 2))
             else:
                 raise ValueError(f"Unexpected logits shape: {logits.shape}")
             
-            # Compute loss: cross-entropy expects (N, C) logits and (N,) targets
+            # Compute loss
             loss = F.cross_entropy(logits_QL, y_test_t)
             
             # Compute accuracy
