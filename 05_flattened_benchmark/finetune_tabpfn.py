@@ -245,10 +245,15 @@ class SyntheticDataGenerator:
 
 def load_real_datasets(config: FinetuneConfig) -> List[Dict[str, Any]]:
     """Load real datasets from pickle file."""
-    # Need to add src path for unpickling
-    real_data_src = Path(__file__).parent.parent / '01_real_data' / 'src'
-    if str(real_data_src) not in sys.path:
-        sys.path.insert(0, str(real_data_src))
+    # The pickle was saved with 'src.data_loader.TimeSeriesDataset'
+    # We need '01_real_data' in path so that 'src' is importable as a submodule
+    real_data_dir = Path(__file__).resolve().parent.parent / '01_real_data'
+    
+    if str(real_data_dir) not in sys.path:
+        sys.path.insert(0, str(real_data_dir))
+    
+    # Now 'src' should be importable
+    from src.data_loader import TimeSeriesDataset  # noqa: F401 - needed for pickle
     
     pkl_path = Path(__file__).parent / config.real_data_path
     if not pkl_path.exists():
