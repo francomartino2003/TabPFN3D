@@ -498,27 +498,37 @@ class TabPFNFineTuner:
             )
             
             # Forward pass to get logits
-            # Shape: (Q, B, E, L) where Q=n_queries, B=batch(=1), E=n_estimators, L=n_classes
-            logits_QBEL = self.clf.forward(
+            # With return_raw_logits=True, shape depends on configuration
+            logits = self.clf.forward(
                 X_query_list,
                 return_raw_logits=True,
             )
             
-            Q, B, E, L = logits_QBEL.shape
+            # Debug: print shape on first call
+            if self.current_step == 0 and not hasattr(self, '_logged_shape'):
+                print(f"  Logits shape: {logits.shape}, ndim: {logits.ndim}")
+                self._logged_shape = True
             
-            # Reshape for loss: (B*E, L, Q)
-            logits_BLQ = logits_QBEL.permute(1, 2, 3, 0).reshape(B * E, L, Q)
+            # Handle different output shapes
+            # With n_estimators=1 and batched mode, shape might be (Q, L) or (Q, 1, L)
+            if logits.ndim == 2:
+                # Shape: (Q, L) - direct logits
+                logits_QL = logits
+            elif logits.ndim == 3:
+                # Shape: (Q, E, L) or (Q, B, L) - squeeze middle dim
+                logits_QL = logits.squeeze(1)
+            elif logits.ndim == 4:
+                # Shape: (Q, B, E, L) - average over B and E
+                logits_QL = logits.mean(dim=(1, 2))
+            else:
+                raise ValueError(f"Unexpected logits shape: {logits.shape}")
             
-            # Targets: repeat for each estimator
-            targets_BQ = y_test_t.unsqueeze(0).repeat(B * E, 1)
+            # Compute loss: cross-entropy expects (N, C) logits and (N,) targets
+            loss = F.cross_entropy(logits_QL, y_test_t)
             
-            # Compute loss
-            loss = _compute_classification_loss(logits_BLQ, targets_BQ)
-            
-            # Compute accuracy (average over estimators)
+            # Compute accuracy
             with torch.no_grad():
-                avg_logits = logits_QBEL.mean(dim=(1, 2))  # (Q, L)
-                preds = avg_logits.argmax(dim=-1)
+                preds = logits_QL.argmax(dim=-1)
                 acc = (preds == y_test_t).float().mean()
             
             return {
