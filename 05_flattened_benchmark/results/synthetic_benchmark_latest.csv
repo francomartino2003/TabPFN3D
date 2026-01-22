@@ -1,0 +1,43 @@
+status,reason,dataset_id,dataset_name,sample_mode,shape,accuracy,roc_auc,train_time,n_train,n_test,n_features_flat,n_classes
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",0,synthetic_0000,iid,"(2015, 1, 126)",,,,,,,
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",1,synthetic_0001,iid,"(2885, 1, 92)",,,,,,,
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",2,synthetic_0002,iid,"(1562, 2, 146)",,,,,,,
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",3,synthetic_0003,iid,"(2235, 3, 98)",,,,,,,
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",4,synthetic_0004,iid,"(1453, 1, 137)",,,,,,,
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",5,synthetic_0005,iid,"(2617, 1, 265)",,,,,,,
+success,,6,synthetic_0006,iid,"(917, 3, 106)",0.9706959706959707,0.9993026103499559,98.1675910949707,644.0,273.0,318.0,4.0
+success,,7,synthetic_0007,sliding_window,"(290, 1, 68)",0.15476190476190477,0.5056122448979592,7.5257909297943115,206.0,84.0,68.0,6.0
+success,,8,synthetic_0008,sliding_window,"(630, 1, 216)",0.8138297872340425,0.8210728836577637,48.170027017593384,442.0,188.0,216.0,2.0
+success,,9,synthetic_0009,mixed,"(1006, 1, 70)",0.22333333333333333,0.47745185185185185,26.19102907180786,706.0,300.0,70.0,4.0
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",10,synthetic_0010,mixed,"(1614, 1, 92)",,,,,,,
+success,,11,synthetic_0011,iid,"(1386, 1, 93)",0.8265060240963855,0.9727101175787487,44.67563605308533,971.0,415.0,93.0,5.0
+success,,12,synthetic_0012,sliding_window,"(60, 1, 294)",1.0,1.0,8.83213996887207,42.0,18.0,294.0,3.0
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",13,synthetic_0013,iid,"(2300, 1, 213)",,,,,,,
+success,,14,synthetic_0014,iid,"(992, 1, 74)",0.6666666666666666,0.8244056728905212,26.061302185058594,695.0,297.0,74.0,3.0
+success,,15,synthetic_0015,mixed,"(1265, 3, 121)",0.48148148148148145,0.6453346770807089,165.5138499736786,887.0,378.0,363.0,3.0
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",16,synthetic_0016,iid,"(2406, 1, 53)",,,,,,,
+success,,17,synthetic_0017,sliding_window,"(20, 2, 217)",0.5,0.3333333333333333,8.487138986587524,14.0,6.0,434.0,2.0
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",18,synthetic_0018,iid,"(2680, 1, 143)",,,,,,,
+error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
+To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
+Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",19,synthetic_0019,iid,"(1470, 2, 179)",,,,,,,

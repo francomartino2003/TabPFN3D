@@ -75,6 +75,10 @@ def _worker_process(
             
             task_id, sample_data, accumulation_steps = task
             
+            # Debug timing
+            import time as _time
+            proc_start = _time.time()
+            
             try:
                 # Unpack sample data
                 X_full, y_train, y_test, n_train = sample_data
@@ -255,6 +259,9 @@ class MultiGPUTrainer:
         n_samples = len(samples)
         task_ids = []
         
+        import time as _time
+        submit_start = _time.time()
+        
         for i, sample in enumerate(samples):
             gpu_idx = i % self.n_gpus
             task_id = self._task_counter
@@ -271,8 +278,13 @@ class MultiGPUTrainer:
             self.task_queues[gpu_idx].put((task_id, sample_data, accumulation_steps))
             task_ids.append(task_id)
         
+        submit_time = _time.time() - submit_start
+        if submit_time > 1.0:
+            print(f"  [MultiGPU] Task submission took {submit_time:.1f}s")
+        
         # Collect results
         results = {}
+        collect_start = _time.time()
         while len(results) < n_samples:
             try:
                 task_id, result = self.result_queue.get(timeout=300)  # 5 min timeout
@@ -280,6 +292,13 @@ class MultiGPUTrainer:
             except queue.Empty:
                 print("[MultiGPU] Timeout waiting for results!")
                 break
+        
+        collect_time = _time.time() - collect_start
+        # Debug: show which GPUs processed how many tasks
+        gpu_counts = [0] * self.n_gpus
+        for i, tid in enumerate(task_ids):
+            if tid in results:
+                gpu_counts[i % self.n_gpus] += 1
         
         # Aggregate results
         total_loss = 0.0

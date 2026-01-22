@@ -1,0 +1,11 @@
+{
+  "total_datasets": 20,
+  "successful": 9,
+  "skipped": 0,
+  "errors": 11,
+  "mean_accuracy": 0.6263639075855316,
+  "std_accuracy": 0.3075699070633016,
+  "mean_roc_auc": 0.7310248212934269,
+  "std_roc_auc": 0.25004310606427355,
+  "mean_train_time": 48.1805005868276
+}

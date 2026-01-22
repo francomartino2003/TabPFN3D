@@ -303,18 +303,17 @@ class SequenceSampler:
         Returns:
             Target timestep
         """
-        offset_type = self.config.target_offset_type
         offset = self.target_offset
         
-        if offset_type == 'within':
-            # Target within the window
+        if offset == 0:
+            # Target within the window (middle)
             t_target = t_start + self.t_subseq // 2
-        elif offset_type in ['future_near', 'future_far']:
-            # Target after the window
+        elif offset > 0:
+            # Target after the window (future)
             t_target = t_end + offset
-        else:  # past
-            # Target before the window
-            t_target = t_start + offset  # offset is negative
+        else:
+            # Target before the window (past, offset is negative)
+            t_target = t_start + offset
         
         # Clamp to valid range
         t_target = max(0, min(t_target, T_total - 1))

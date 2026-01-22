@@ -1,0 +1,281 @@
+{
+  "description": "Datasets that need subsampling (features \u2264500, classes \u226410, samples >10000)",
+  "constraints": {
+    "max_features": 500,
+    "max_classes": 10,
+    "max_samples": 10000
+  },
+  "n_datasets": 5,
+  "statistics": {
+    "n_datasets": 5,
+    "n_univariate": 3,
+    "n_multivariate": 2,
+    "n_variable_length": 0,
+    "flattened_features": {
+      "min": 16,
+      "max": 230,
+      "mean": 139.6,
+      "median": 178.0,
+      "std": 75.23190812414637
+    },
+    "n_samples": {
+      "min": 10992,
+      "max": 569100,
+      "mean": 141583.2,
+      "median": 16637.0
+    },
+    "n_dimensions": {
+      "min": 1,
+      "max": 10,
+      "mean": 3.0
+    },
+    "length": {
+      "min": 8,
+      "max": 178,
+      "mean": 96.6,
+      "median": 96.0
+    },
+    "n_classes": {
+      "min": 2,
+      "max": 10,
+      "mean": 6.6
+    },
+    "train_size": {
+      "min": 80,
+      "max": 478785,
+      "mean": 115399.8
+    },
+    "test_size": {
+      "min": 3498,
+      "max": 90315,
+      "mean": 26183.4
+    }
+  },
+  "datasets": [
+    {
+      "name": "PenDigits",
+      "shape": "(10992, 2, 8)",
+      "n_samples": 10992,
+      "length": 8,
+      "min_length": 8,
+      "max_length": 8,
+      "n_dimensions": 2,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 49.97511342407259,
+          "std": 33.881888973424594,
+          "min": 0.0,
+          "max": 100.0
+        },
+        {
+          "dimension": 1,
+          "mean": 51.42879303442754,
+          "std": 35.16939686913388,
+          "min": 0.0,
+          "max": 100.0
+        }
+      ],
+      "n_classes": 10,
+      "class_balance": 0.9222027972027972,
+      "train_size": 7494,
+      "test_size": 3498,
+      "has_benchmark": false,
+      "flattened_features": 16,
+      "meets_feature_limit": true,
+      "meets_class_limit": true,
+      "meets_sample_limit": false,
+      "needs_subsampling": true
+    },
+    {
+      "name": "Epilepsy2",
+      "shape": "(11500, 1, 178)",
+      "n_samples": 11500,
+      "length": 178,
+      "min_length": 178,
+      "max_length": 178,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.5109229297816134,
+          "std": 0.08032023360476497,
+          "min": 0.0,
+          "max": 1.0
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.25,
+      "train_size": 80,
+      "test_size": 11420,
+      "has_benchmark": false,
+      "flattened_features": 178,
+      "meets_feature_limit": true,
+      "meets_class_limit": true,
+      "meets_sample_limit": false,
+      "needs_subsampling": true
+    },
+    {
+      "name": "ElectricDevices",
+      "shape": "(16637, 1, 96)",
+      "n_samples": 16637,
+      "length": 96,
+      "min_length": 96,
+      "max_length": 96,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 8.309898880660108e-12,
+          "std": 0.9947780320919024,
+          "min": -9.6958969,
+          "max": 9.6958969
+        }
+      ],
+      "n_classes": 7,
+      "class_balance": 0.2928654970760234,
+      "train_size": 8926,
+      "test_size": 7711,
+      "has_benchmark": false,
+      "flattened_features": 96,
+      "meets_feature_limit": true,
+      "meets_class_limit": true,
+      "meets_sample_limit": false,
+      "needs_subsampling": true
+    },
+    {
+      "name": "Tiselac",
+      "shape": "(99687, 10, 23)",
+      "n_samples": 99687,
+      "length": 23,
+      "min_length": 23,
+      "max_length": 23,
+      "n_dimensions": 10,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 51.882455882712875,
+          "std": 74.45970534215162,
+          "min": 0.0,
+          "max": 1033.0
+        },
+        {
+          "dimension": 1,
+          "mean": 55.10426716298947,
+          "std": 76.2864747066455,
+          "min": 0.0,
+          "max": 1053.0
+        },
+        {
+          "dimension": 2,
+          "mean": 72.54365544300322,
+          "std": 77.48387486226268,
+          "min": 0.0,
+          "max": 1122.0
+        },
+        {
+          "dimension": 3,
+          "mean": 69.92798583819919,
+          "std": 81.06179949781334,
+          "min": 0.0,
+          "max": 1147.0
+        },
+        {
+          "dimension": 4,
+          "mean": 236.05793057652832,
+          "std": 136.62427353916374,
+          "min": 0.0,
+          "max": 1143.0
+        },
+        {
+          "dimension": 5,
+          "mean": 147.4160507858267,
+          "std": 72.11573189343096,
+          "min": 0.0,
+          "max": 843.0
+        },
+        {
+          "dimension": 6,
+          "mean": 92.33545792270176,
+          "std": 52.171901911799985,
+          "min": 0.0,
+          "max": 890.0
+        },
+        {
+          "dimension": 7,
+          "mean": 506.2654332023356,
+          "std": 316.31463374371776,
+          "min": -1000.0,
+          "max": 1000.0
+        },
+        {
+          "dimension": 8,
+          "mean": -173.34801497481672,
+          "std": 251.1942277593135,
+          "min": -1000.0,
+          "max": 1000.0
+        },
+        {
+          "dimension": 9,
+          "mean": 339.8742762402483,
+          "std": 191.1406652413509,
+          "min": 0.0,
+          "max": 2475.0
+        }
+      ],
+      "n_classes": 9,
+      "class_balance": 0.0877,
+      "train_size": 81714,
+      "test_size": 17973,
+      "has_benchmark": false,
+      "flattened_features": 230,
+      "meets_feature_limit": true,
+      "meets_class_limit": true,
+      "meets_sample_limit": false,
+      "needs_subsampling": true
+    },
+    {
+      "name": "Sleep",
+      "shape": "(569100, 1, 178)",
+      "n_samples": 569100,
+      "length": 178,
+      "min_length": 178,
+      "max_length": 178,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -0.3243511923761879,
+          "std": 19.826648644971264,
+          "min": -208.0,
+          "max": 203.39926
+        }
+      ],
+      "n_classes": 5,
+      "class_balance": 0.15753694027754367,
+      "train_size": 478785,
+      "test_size": 90315,
+      "has_benchmark": false,
+      "flattened_features": 178,
+      "meets_feature_limit": true,
+      "meets_class_limit": true,
+      "meets_sample_limit": false,
+      "needs_subsampling": true
+    }
+  ]
+}

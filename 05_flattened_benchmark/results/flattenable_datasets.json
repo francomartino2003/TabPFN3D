@@ -1,0 +1,3097 @@
+{
+  "description": "Datasets that can be flattened for TabPFN (\u2264500 features)",
+  "tabpfn_max_features": 500,
+  "n_datasets": 99,
+  "statistics": {
+    "n_datasets": 99,
+    "n_univariate": 90,
+    "n_multivariate": 9,
+    "n_variable_length": 0,
+    "flattened_features": {
+      "min": 15,
+      "max": 500,
+      "mean": 231.21212121212122,
+      "median": 216.0,
+      "std": 141.40137532564987
+    },
+    "n_samples": {
+      "min": 56,
+      "max": 569100,
+      "mean": 8560.272727272728,
+      "median": 640.0
+    },
+    "n_dimensions": {
+      "min": 1,
+      "max": 12,
+      "mean": 1.393939393939394
+    },
+    "length": {
+      "min": 8,
+      "max": 500,
+      "mean": 215.03030303030303,
+      "median": 166.0
+    },
+    "n_classes": {
+      "min": 2,
+      "max": 50,
+      "mean": 7.454545454545454
+    },
+    "train_size": {
+      "min": 16,
+      "max": 478785,
+      "mean": 6264.868686868687
+    },
+    "test_size": {
+      "min": 28,
+      "max": 90315,
+      "mean": 2295.40404040404
+    }
+  },
+  "datasets": [
+    {
+      "name": "SmoothSubspace",
+      "shape": "(300, 1, 15)",
+      "n_samples": 300,
+      "length": 15,
+      "min_length": 15,
+      "max_length": 15,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.5381515284122311,
+          "std": 0.2695562050683718,
+          "min": 0.00034146222,
+          "max": 1.0379862
+        }
+      ],
+      "n_classes": 3,
+      "class_balance": 1.0,
+      "train_size": 150,
+      "test_size": 150,
+      "has_benchmark": false,
+      "flattened_features": 15,
+      "is_flattenable": true
+    },
+    {
+      "name": "PenDigits",
+      "shape": "(10992, 2, 8)",
+      "n_samples": 10992,
+      "length": 8,
+      "min_length": 8,
+      "max_length": 8,
+      "n_dimensions": 2,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 49.97511342407259,
+          "std": 33.881888973424594,
+          "min": 0.0,
+          "max": 100.0
+        },
+        {
+          "dimension": 1,
+          "mean": 51.42879303442754,
+          "std": 35.16939686913388,
+          "min": 0.0,
+          "max": 100.0
+        }
+      ],
+      "n_classes": 10,
+      "class_balance": 0.9222027972027972,
+      "train_size": 7494,
+      "test_size": 3498,
+      "has_benchmark": false,
+      "flattened_features": 16,
+      "is_flattenable": true
+    },
+    {
+      "name": "Chinatown",
+      "shape": "(363, 1, 24)",
+      "n_samples": 363,
+      "length": 24,
+      "min_length": 24,
+      "max_length": 24,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 636.325,
+          "std": 532.5209332739887,
+          "min": 3.0,
+          "max": 1891.0
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.4015444015444015,
+      "train_size": 20,
+      "test_size": 343,
+      "has_benchmark": false,
+      "flattened_features": 24,
+      "is_flattenable": true
+    },
+    {
+      "name": "ItalyPowerDemand",
+      "shape": "(1096, 1, 24)",
+      "n_samples": 1096,
+      "length": 24,
+      "min_length": 24,
+      "max_length": 24,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -4.412935357101132e-10,
+          "std": 0.9789450107875908,
+          "min": -1.99099,
+          "max": 2.4248455
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9963570127504554,
+      "train_size": 67,
+      "test_size": 1029,
+      "has_benchmark": false,
+      "flattened_features": 24,
+      "is_flattenable": true
+    },
+    {
+      "name": "MelbournePedestrian",
+      "shape": "(3457, 1, 24)",
+      "n_samples": 3457,
+      "length": 24,
+      "min_length": 24,
+      "max_length": 24,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 770.1446983011131,
+          "std": 1007.5028994594348,
+          "min": 0.0,
+          "max": 9682.0
+        }
+      ],
+      "n_classes": 10,
+      "class_balance": 0.7933884297520661,
+      "train_size": 1138,
+      "test_size": 2319,
+      "has_benchmark": false,
+      "flattened_features": 24,
+      "is_flattenable": true
+    },
+    {
+      "name": "Crop",
+      "shape": "(24000, 1, 46)",
+      "n_samples": 24000,
+      "length": 46,
+      "min_length": 46,
+      "max_length": 46,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.4495670111528079,
+          "std": 0.22059337695442469,
+          "min": -1.014,
+          "max": 0.968
+        }
+      ],
+      "n_classes": 24,
+      "class_balance": 1.0,
+      "train_size": 7200,
+      "test_size": 16800,
+      "has_benchmark": false,
+      "flattened_features": 46,
+      "is_flattenable": true
+    },
+    {
+      "name": "SharePriceIncrease",
+      "shape": "(1931, 1, 60)",
+      "n_samples": 1931,
+      "length": 60,
+      "min_length": 60,
+      "max_length": 60,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.0819734363390404,
+          "std": 1.763750166556407,
+          "min": -24.8093043527789,
+          "max": 30.481510364569797
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.45625942684766213,
+      "train_size": 965,
+      "test_size": 966,
+      "has_benchmark": false,
+      "flattened_features": 60,
+      "is_flattenable": true
+    },
+    {
+      "name": "SyntheticControl",
+      "shape": "(600, 1, 60)",
+      "n_samples": 600,
+      "length": 60,
+      "min_length": 60,
+      "max_length": 60,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 2.0539333335357748e-10,
+          "std": 0.9916316521711556,
+          "min": -2.4537559,
+          "max": 2.4119769
+        }
+      ],
+      "n_classes": 6,
+      "class_balance": 1.0,
+      "train_size": 300,
+      "test_size": 300,
+      "has_benchmark": false,
+      "flattened_features": 60,
+      "is_flattenable": true
+    },
+    {
+      "name": "SonyAIBORobotSurface2",
+      "shape": "(980, 1, 65)",
+      "n_samples": 980,
+      "length": 65,
+      "min_length": 65,
+      "max_length": 65,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -2.0569799665417967e-10,
+          "std": 0.9922778774049984,
+          "min": -4.137978,
+          "max": 4.2306925
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.6225165562913907,
+      "train_size": 27,
+      "test_size": 953,
+      "has_benchmark": false,
+      "flattened_features": 65,
+      "is_flattenable": true
+    },
+    {
+      "name": "SonyAIBORobotSurface1",
+      "shape": "(621, 1, 70)",
+      "n_samples": 621,
+      "length": 70,
+      "min_length": 70,
+      "max_length": 70,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.935714238105695e-10,
+          "std": 0.9928314494871807,
+          "min": -2.7266926,
+          "max": 3.62627
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.7793696275071633,
+      "train_size": 20,
+      "test_size": 601,
+      "has_benchmark": false,
+      "flattened_features": 70,
+      "is_flattenable": true
+    },
+    {
+      "name": "DistalPhalanxOutlineAgeGroup",
+      "shape": "(539, 1, 80)",
+      "n_samples": 539,
+      "length": 80,
+      "min_length": 80,
+      "max_length": 80,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -3.5399146935954917e-10,
+          "std": 0.9937303457869536,
+          "min": -1.9944642,
+          "max": 2.0584075
+        }
+      ],
+      "n_classes": 3,
+      "class_balance": 0.13975155279503104,
+      "train_size": 400,
+      "test_size": 139,
+      "has_benchmark": false,
+      "flattened_features": 80,
+      "is_flattenable": true
+    },
+    {
+      "name": "DistalPhalanxOutlineCorrect",
+      "shape": "(876, 1, 80)",
+      "n_samples": 876,
+      "length": 80,
+      "min_length": 80,
+      "max_length": 80,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -3.3632331194096327e-10,
+          "std": 0.9937303458986346,
+          "min": -2.1589217,
+          "max": 2.4457132
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.6252319109461967,
+      "train_size": 600,
+      "test_size": 276,
+      "has_benchmark": false,
+      "flattened_features": 80,
+      "is_flattenable": true
+    },
+    {
+      "name": "DistalPhalanxTW",
+      "shape": "(539, 1, 80)",
+      "n_samples": 539,
+      "length": 80,
+      "min_length": 80,
+      "max_length": 80,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.4946784471225883e-10,
+          "std": 0.9937303457505503,
+          "min": -1.9944642,
+          "max": 2.0584075
+        }
+      ],
+      "n_classes": 6,
+      "class_balance": 0.10196078431372549,
+      "train_size": 400,
+      "test_size": 139,
+      "has_benchmark": false,
+      "flattened_features": 80,
+      "is_flattenable": true
+    },
+    {
+      "name": "MiddlePhalanxOutlineAgeGroup",
+      "shape": "(554, 1, 80)",
+      "n_samples": 554,
+      "length": 80,
+      "min_length": 80,
+      "max_length": 80,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.6973821970189818e-10,
+          "std": 0.9937303461641444,
+          "min": -1.6408082,
+          "max": 1.9244749
+        }
+      ],
+      "n_classes": 3,
+      "class_balance": 0.3458646616541353,
+      "train_size": 400,
+      "test_size": 154,
+      "has_benchmark": false,
+      "flattened_features": 80,
+      "is_flattenable": true
+    },
+    {
+      "name": "MiddlePhalanxOutlineCorrect",
+      "shape": "(891, 1, 80)",
+      "n_samples": 891,
+      "length": 80,
+      "min_length": 80,
+      "max_length": 80,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 1.2884627187403907e-10,
+          "std": 0.9937303458080804,
+          "min": -1.6601736,
+          "max": 2.0673416
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.6083032490974729,
+      "train_size": 600,
+      "test_size": 291,
+      "has_benchmark": false,
+      "flattened_features": 80,
+      "is_flattenable": true
+    },
+    {
+      "name": "MiddlePhalanxTW",
+      "shape": "(553, 1, 80)",
+      "n_samples": 553,
+      "length": 80,
+      "min_length": 80,
+      "max_length": 80,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -3.9003079618703026e-10,
+          "std": 0.9937303461414895,
+          "min": -1.7194793,
+          "max": 1.9244749
+        }
+      ],
+      "n_classes": 6,
+      "class_balance": 0.16831683168316833,
+      "train_size": 399,
+      "test_size": 154,
+      "has_benchmark": false,
+      "flattened_features": 80,
+      "is_flattenable": true
+    },
+    {
+      "name": "PhalangesOutlinesCorrect",
+      "shape": "(2658, 1, 80)",
+      "n_samples": 2658,
+      "length": 80,
+      "min_length": 80,
+      "max_length": 80,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 7.699611220207064e-12,
+          "std": 0.9937303456490615,
+          "min": -2.1589217,
+          "max": 2.4457132
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.5653710247349824,
+      "train_size": 1800,
+      "test_size": 858,
+      "has_benchmark": false,
+      "flattened_features": 80,
+      "is_flattenable": true
+    },
+    {
+      "name": "ProximalPhalanxOutlineAgeGroup",
+      "shape": "(605, 1, 80)",
+      "n_samples": 605,
+      "length": 80,
+      "min_length": 80,
+      "max_length": 80,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 1.2898162582430927e-10,
+          "std": 0.9937303454591555,
+          "min": -1.4834275,
+          "max": 1.9029012
+        }
+      ],
+      "n_classes": 3,
+      "class_balance": 0.3079584775086505,
+      "train_size": 400,
+      "test_size": 205,
+      "has_benchmark": false,
+      "flattened_features": 80,
+      "is_flattenable": true
+    },
+    {
+      "name": "ProximalPhalanxOutlineCorrect",
+      "shape": "(891, 1, 80)",
+      "n_samples": 891,
+      "length": 80,
+      "min_length": 80,
+      "max_length": 80,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 2.3057587387557513e-10,
+          "std": 0.9937303452404693,
+          "min": -1.4834275,
+          "max": 1.9029012
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.4727272727272727,
+      "train_size": 600,
+      "test_size": 291,
+      "has_benchmark": false,
+      "flattened_features": 80,
+      "is_flattenable": true
+    },
+    {
+      "name": "ProximalPhalanxTW",
+      "shape": "(605, 1, 80)",
+      "n_samples": 605,
+      "length": 80,
+      "min_length": 80,
+      "max_length": 80,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 1.2249090497462588e-10,
+          "std": 0.9937303455037659,
+          "min": -1.4834275,
+          "max": 1.9029012
+        }
+      ],
+      "n_classes": 6,
+      "class_balance": 0.07142857142857142,
+      "train_size": 400,
+      "test_size": 205,
+      "has_benchmark": false,
+      "flattened_features": 80,
+      "is_flattenable": true
+    },
+    {
+      "name": "TwoLeadECG",
+      "shape": "(1162, 1, 82)",
+      "n_samples": 1162,
+      "length": 82,
+      "min_length": 82,
+      "max_length": 82,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -3.7281341157844643e-10,
+          "std": 0.9938837345709478,
+          "min": -3.1489147,
+          "max": 1.8704788
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 1.0,
+      "train_size": 23,
+      "test_size": 1139,
+      "has_benchmark": false,
+      "flattened_features": 82,
+      "is_flattenable": true
+    },
+    {
+      "name": "MoteStrain",
+      "shape": "(1272, 1, 84)",
+      "n_samples": 1272,
+      "length": 84,
+      "min_length": 84,
+      "max_length": 84,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 8.080654790801202e-10,
+          "std": 0.9940297968588272,
+          "min": -8.40928,
+          "max": 2.468436
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.8569343065693431,
+      "train_size": 20,
+      "test_size": 1252,
+      "has_benchmark": false,
+      "flattened_features": 84,
+      "is_flattenable": true
+    },
+    {
+      "name": "Libras",
+      "shape": "(360, 2, 45)",
+      "n_samples": 360,
+      "length": 45,
+      "min_length": 45,
+      "max_length": 45,
+      "n_dimensions": 2,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.520397864691358,
+          "std": 0.19127770801664773,
+          "min": 0.005803,
+          "max": 0.98259
+        },
+        {
+          "dimension": 1,
+          "mean": 0.5081724058024691,
+          "std": 0.16627597833618346,
+          "min": 0.0,
+          "max": 1.0
+        }
+      ],
+      "n_classes": 15,
+      "class_balance": 1.0,
+      "train_size": 180,
+      "test_size": 180,
+      "has_benchmark": false,
+      "flattened_features": 90,
+      "is_flattenable": true
+    },
+    {
+      "name": "ECG200",
+      "shape": "(200, 1, 96)",
+      "n_samples": 200,
+      "length": 96,
+      "min_length": 96,
+      "max_length": 96,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 1.563919808470852e-10,
+          "std": 0.9947780323086644,
+          "min": -2.6171746,
+          "max": 4.1991449
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.5037593984962406,
+      "train_size": 100,
+      "test_size": 100,
+      "has_benchmark": false,
+      "flattened_features": 96,
+      "is_flattenable": true
+    },
+    {
+      "name": "ElectricDevices",
+      "shape": "(16637, 1, 96)",
+      "n_samples": 16637,
+      "length": 96,
+      "min_length": 96,
+      "max_length": 96,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 8.309898880660108e-12,
+          "std": 0.9947780320919024,
+          "min": -9.6958969,
+          "max": 9.6958969
+        }
+      ],
+      "n_classes": 7,
+      "class_balance": 0.2928654970760234,
+      "train_size": 8926,
+      "test_size": 7711,
+      "has_benchmark": false,
+      "flattened_features": 96,
+      "is_flattenable": true
+    },
+    {
+      "name": "MedicalImages",
+      "shape": "(1141, 1, 99)",
+      "n_samples": 1141,
+      "length": 99,
+      "min_length": 99,
+      "max_length": 99,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 9.598653087693344e-11,
+          "std": 0.9949366765573884,
+          "min": -2.3918951,
+          "max": 7.2223706
+        }
+      ],
+      "n_classes": 10,
+      "class_balance": 0.03872053872053872,
+      "train_size": 381,
+      "test_size": 760,
+      "has_benchmark": false,
+      "flattened_features": 99,
+      "is_flattenable": true
+    },
+    {
+      "name": "BME",
+      "shape": "(180, 1, 128)",
+      "n_samples": 180,
+      "length": 128,
+      "min_length": 128,
+      "max_length": 128,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.05838363314184091,
+          "std": 0.6398400227903049,
+          "min": -1.396,
+          "max": 1.37
+        }
+      ],
+      "n_classes": 3,
+      "class_balance": 1.0,
+      "train_size": 30,
+      "test_size": 150,
+      "has_benchmark": false,
+      "flattened_features": 128,
+      "is_flattenable": true
+    },
+    {
+      "name": "CBF",
+      "shape": "(930, 1, 128)",
+      "n_samples": 930,
+      "length": 128,
+      "min_length": 128,
+      "max_length": 128,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 2.2209427121463085e-10,
+          "std": 0.9960860905880812,
+          "min": -2.3168621,
+          "max": 3.2445649
+        }
+      ],
+      "n_classes": 3,
+      "class_balance": 1.0,
+      "train_size": 30,
+      "test_size": 900,
+      "has_benchmark": false,
+      "flattened_features": 128,
+      "is_flattenable": true
+    },
+    {
+      "name": "SwedishLeaf",
+      "shape": "(1125, 1, 128)",
+      "n_samples": 1125,
+      "length": 128,
+      "min_length": 128,
+      "max_length": 128,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.110698750238573e-10,
+          "std": 0.996086090783281,
+          "min": -3.4116419,
+          "max": 3.2215896
+        }
+      ],
+      "n_classes": 15,
+      "class_balance": 1.0,
+      "train_size": 500,
+      "test_size": 625,
+      "has_benchmark": false,
+      "flattened_features": 128,
+      "is_flattenable": true
+    },
+    {
+      "name": "TwoPatterns",
+      "shape": "(5000, 1, 128)",
+      "n_samples": 5000,
+      "length": 128,
+      "min_length": 128,
+      "max_length": 128,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 2.246152497778313e-10,
+          "std": 0.9960860901772802,
+          "min": -1.9393215,
+          "max": 1.9393822
+        }
+      ],
+      "n_classes": 4,
+      "class_balance": 0.9196018376722818,
+      "train_size": 1000,
+      "test_size": 4000,
+      "has_benchmark": false,
+      "flattened_features": 128,
+      "is_flattenable": true
+    },
+    {
+      "name": "FaceAll",
+      "shape": "(2250, 1, 131)",
+      "n_samples": 2250,
+      "length": 131,
+      "min_length": 131,
+      "max_length": 131,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -8.207189219400406e-11,
+          "std": 0.9961758942694539,
+          "min": -4.4846757,
+          "max": 4.8761608
+        }
+      ],
+      "n_classes": 14,
+      "class_balance": 0.14678899082568808,
+      "train_size": 560,
+      "test_size": 1690,
+      "has_benchmark": false,
+      "flattened_features": 131,
+      "is_flattenable": true
+    },
+    {
+      "name": "FacesUCR",
+      "shape": "(2250, 1, 131)",
+      "n_samples": 2250,
+      "length": 131,
+      "min_length": 131,
+      "max_length": 131,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 5.905927457007574e-11,
+          "std": 0.9961758942595774,
+          "min": -3.9590575,
+          "max": 8.7393801
+        }
+      ],
+      "n_classes": 14,
+      "class_balance": 0.14678899082568808,
+      "train_size": 200,
+      "test_size": 2050,
+      "has_benchmark": false,
+      "flattened_features": 131,
+      "is_flattenable": true
+    },
+    {
+      "name": "ECGFiveDays",
+      "shape": "(884, 1, 136)",
+      "n_samples": 884,
+      "length": 136,
+      "min_length": 136,
+      "max_length": 136,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 3.913362955654055e-11,
+          "std": 0.9963167463286339,
+          "min": -6.5111593,
+          "max": 5.4210751
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 1.0,
+      "train_size": 23,
+      "test_size": 861,
+      "has_benchmark": false,
+      "flattened_features": 136,
+      "is_flattenable": true
+    },
+    {
+      "name": "ECG5000",
+      "shape": "(5000, 1, 140)",
+      "n_samples": 5000,
+      "length": 140,
+      "min_length": 140,
+      "max_length": 140,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 7.35492280158821e-11,
+          "std": 0.9964221709359703,
+          "min": -5.7976446,
+          "max": 4.0581274
+        }
+      ],
+      "n_classes": 5,
+      "class_balance": 0.008221993833504625,
+      "train_size": 500,
+      "test_size": 4500,
+      "has_benchmark": false,
+      "flattened_features": 140,
+      "is_flattenable": true
+    },
+    {
+      "name": "Plane",
+      "shape": "(210, 1, 144)",
+      "n_samples": 210,
+      "length": 144,
+      "min_length": 144,
+      "max_length": 144,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.1996990866932312e-10,
+          "std": 0.9965217283018218,
+          "min": -2.1133046,
+          "max": 2.9112464
+        }
+      ],
+      "n_classes": 7,
+      "class_balance": 1.0,
+      "train_size": 105,
+      "test_size": 105,
+      "has_benchmark": false,
+      "flattened_features": 144,
+      "is_flattenable": true
+    },
+    {
+      "name": "PowerCons",
+      "shape": "(360, 1, 144)",
+      "n_samples": 360,
+      "length": 144,
+      "min_length": 144,
+      "max_length": 144,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 1.1143113425925928,
+          "std": 1.0870910453473674,
+          "min": 0.04,
+          "max": 7.8
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 1.0,
+      "train_size": 180,
+      "test_size": 180,
+      "has_benchmark": false,
+      "flattened_features": 144,
+      "is_flattenable": true
+    },
+    {
+      "name": "GunPoint",
+      "shape": "(200, 1, 150)",
+      "n_samples": 200,
+      "length": 150,
+      "min_length": 150,
+      "max_length": 150,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.9812000289221032e-10,
+          "std": 0.9966610925871109,
+          "min": -2.3692305,
+          "max": 2.0533673
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 1.0,
+      "train_size": 50,
+      "test_size": 150,
+      "has_benchmark": false,
+      "flattened_features": 150,
+      "is_flattenable": true
+    },
+    {
+      "name": "GunPointAgeSpan",
+      "shape": "(451, 1, 150)",
+      "n_samples": 451,
+      "length": 150,
+      "min_length": 150,
+      "max_length": 150,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 606.8668769496296,
+          "std": 308.697333223935,
+          "min": 228.03761,
+          "max": 1418.3971
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9780701754385965,
+      "train_size": 135,
+      "test_size": 316,
+      "has_benchmark": false,
+      "flattened_features": 150,
+      "is_flattenable": true
+    },
+    {
+      "name": "GunPointMaleVersusFemale",
+      "shape": "(451, 1, 150)",
+      "n_samples": 451,
+      "length": 150,
+      "min_length": 150,
+      "max_length": 150,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 607.16101784,
+          "std": 311.18654449639354,
+          "min": 224.50412,
+          "max": 1418.3971
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9029535864978903,
+      "train_size": 135,
+      "test_size": 316,
+      "has_benchmark": false,
+      "flattened_features": 150,
+      "is_flattenable": true
+    },
+    {
+      "name": "GunPointOldVersusYoung",
+      "shape": "(451, 1, 150)",
+      "n_samples": 451,
+      "length": 150,
+      "min_length": 150,
+      "max_length": 150,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 589.3059711779412,
+          "std": 306.50098987813584,
+          "min": 228.21569,
+          "max": 1416.0969
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9110169491525424,
+      "train_size": 136,
+      "test_size": 315,
+      "has_benchmark": false,
+      "flattened_features": 150,
+      "is_flattenable": true
+    },
+    {
+      "name": "UMD",
+      "shape": "(180, 1, 150)",
+      "n_samples": 180,
+      "length": 150,
+      "min_length": 150,
+      "max_length": 150,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.10031805788722649,
+          "std": 0.6111762945139739,
+          "min": -1.368,
+          "max": 1.504
+        }
+      ],
+      "n_classes": 3,
+      "class_balance": 1.0,
+      "train_size": 36,
+      "test_size": 144,
+      "has_benchmark": false,
+      "flattened_features": 150,
+      "is_flattenable": true
+    },
+    {
+      "name": "Wafer",
+      "shape": "(7164, 1, 152)",
+      "n_samples": 7164,
+      "length": 152,
+      "min_length": 152,
+      "max_length": 152,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.0593101979220651e-10,
+          "std": 0.9967050981341318,
+          "min": -3.0539799,
+          "max": 11.787121
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.1190253045923149,
+      "train_size": 1000,
+      "test_size": 6164,
+      "has_benchmark": false,
+      "flattened_features": 152,
+      "is_flattenable": true
+    },
+    {
+      "name": "ChlorineConcentration",
+      "shape": "(4307, 1, 166)",
+      "n_samples": 4307,
+      "length": 166,
+      "min_length": 166,
+      "max_length": 166,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 2.440198873840643e-11,
+          "std": 0.9969834018285858,
+          "min": -11.839069,
+          "max": 7.4423236
+        }
+      ],
+      "n_classes": 3,
+      "class_balance": 0.43346337234503685,
+      "train_size": 467,
+      "test_size": 3840,
+      "has_benchmark": false,
+      "flattened_features": 166,
+      "is_flattenable": true
+    },
+    {
+      "name": "Adiac",
+      "shape": "(781, 1, 176)",
+      "n_samples": 781,
+      "length": 176,
+      "min_length": 176,
+      "max_length": 176,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 4.7230011872448654e-11,
+          "std": 0.9971550441723511,
+          "min": -1.9877783,
+          "max": 2.6250629
+        }
+      ],
+      "n_classes": 37,
+      "class_balance": 0.6896551724137931,
+      "train_size": 390,
+      "test_size": 391,
+      "has_benchmark": false,
+      "flattened_features": 176,
+      "is_flattenable": true
+    },
+    {
+      "name": "Epilepsy2",
+      "shape": "(11500, 1, 178)",
+      "n_samples": 11500,
+      "length": 178,
+      "min_length": 178,
+      "max_length": 178,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.5109229297816134,
+          "std": 0.08032023360476497,
+          "min": 0.0,
+          "max": 1.0
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.25,
+      "train_size": 80,
+      "test_size": 11420,
+      "has_benchmark": false,
+      "flattened_features": 178,
+      "is_flattenable": true
+    },
+    {
+      "name": "Sleep",
+      "shape": "(569100, 1, 178)",
+      "n_samples": 569100,
+      "length": 178,
+      "min_length": 178,
+      "max_length": 178,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -0.3243511923761879,
+          "std": 19.826648644971264,
+          "min": -208.0,
+          "max": 203.39926
+        }
+      ],
+      "n_classes": 5,
+      "class_balance": 0.15753694027754367,
+      "train_size": 478785,
+      "test_size": 90315,
+      "has_benchmark": false,
+      "flattened_features": 178,
+      "is_flattenable": true
+    },
+    {
+      "name": "Colposcopy",
+      "shape": "(200, 1, 180)",
+      "n_samples": 200,
+      "length": 180,
+      "min_length": 180,
+      "max_length": 180,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 13.40236247327486,
+          "std": 12.66022083018168,
+          "min": 0.0,
+          "max": 61.9685498
+        }
+      ],
+      "n_classes": 6,
+      "class_balance": 0.26785714285714285,
+      "train_size": 99,
+      "test_size": 101,
+      "has_benchmark": false,
+      "flattened_features": 180,
+      "is_flattenable": true
+    },
+    {
+      "name": "RacketSports",
+      "shape": "(303, 6, 30)",
+      "n_samples": 303,
+      "length": 30,
+      "min_length": 30,
+      "max_length": 30,
+      "n_dimensions": 6,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 2.813331116335541,
+          "std": 7.7781506858557075,
+          "min": -29.154907,
+          "max": 29.37761
+        },
+        {
+          "dimension": 1,
+          "mean": -0.17426972295805737,
+          "std": 6.663144982437595,
+          "min": -29.395939,
+          "max": 29.082859
+        },
+        {
+          "dimension": 2,
+          "mean": -1.9357551101545256,
+          "std": 6.906507090998809,
+          "min": -28.888906,
+          "max": 27.494814
+        },
+        {
+          "dimension": 3,
+          "mean": -0.2889271218543046,
+          "std": 4.839341372994505,
+          "min": -34.871536,
+          "max": 34.8742
+        },
+        {
+          "dimension": 4,
+          "mean": -0.05545105717439292,
+          "std": 4.335044303461973,
+          "min": -34.639824,
+          "max": 34.61319
+        },
+        {
+          "dimension": 5,
+          "mean": -0.3111965688741722,
+          "std": 3.9994451013191314,
+          "min": -32.48249,
+          "max": 20.569225
+        }
+      ],
+      "n_classes": 4,
+      "class_balance": 0.7906976744186046,
+      "train_size": 151,
+      "test_size": 152,
+      "has_benchmark": false,
+      "flattened_features": 180,
+      "is_flattenable": true
+    },
+    {
+      "name": "Fungi",
+      "shape": "(204, 1, 201)",
+      "n_samples": 204,
+      "length": 201,
+      "min_length": 201,
+      "max_length": 201,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 4.969742796938088,
+          "std": 9.766039059254235,
+          "min": -1.4935439,
+          "max": 80.786109
+        }
+      ],
+      "n_classes": 18,
+      "class_balance": 0.4,
+      "train_size": 18,
+      "test_size": 186,
+      "has_benchmark": false,
+      "flattened_features": 201,
+      "is_flattenable": true
+    },
+    {
+      "name": "LSST",
+      "shape": "(4925, 6, 36)",
+      "n_samples": 4925,
+      "length": 36,
+      "min_length": 36,
+      "max_length": 36,
+      "n_dimensions": 6,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 9.457359120735617,
+          "std": 248.78172878688963,
+          "min": -3420.0,
+          "max": 32932.0
+        },
+        {
+          "dimension": 1,
+          "mean": 18.967526788068767,
+          "std": 780.9231962926452,
+          "min": -11585.0,
+          "max": 44394.0
+        },
+        {
+          "dimension": 2,
+          "mean": 28.0079912204148,
+          "std": 714.9067118154604,
+          "min": -10289.0,
+          "max": 37032.0
+        },
+        {
+          "dimension": 3,
+          "mean": 38.9722708567846,
+          "std": 846.0685130470202,
+          "min": -8009.9,
+          "max": 48133.0
+        },
+        {
+          "dimension": 4,
+          "mean": 50.13731959510415,
+          "std": 1116.886710315931,
+          "min": -19855.0,
+          "max": 60249.0
+        },
+        {
+          "dimension": 5,
+          "mean": 55.647919023304404,
+          "std": 1427.1133507449656,
+          "min": -40036.0,
+          "max": 64062.0
+        }
+      ],
+      "n_classes": 14,
+      "class_balance": 0.009009009009009009,
+      "train_size": 2459,
+      "test_size": 2466,
+      "has_benchmark": false,
+      "flattened_features": 216,
+      "is_flattenable": true
+    },
+    {
+      "name": "Tiselac",
+      "shape": "(99687, 10, 23)",
+      "n_samples": 99687,
+      "length": 23,
+      "min_length": 23,
+      "max_length": 23,
+      "n_dimensions": 10,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 51.882455882712875,
+          "std": 74.45970534215162,
+          "min": 0.0,
+          "max": 1033.0
+        },
+        {
+          "dimension": 1,
+          "mean": 55.10426716298947,
+          "std": 76.2864747066455,
+          "min": 0.0,
+          "max": 1053.0
+        },
+        {
+          "dimension": 2,
+          "mean": 72.54365544300322,
+          "std": 77.48387486226268,
+          "min": 0.0,
+          "max": 1122.0
+        },
+        {
+          "dimension": 3,
+          "mean": 69.92798583819919,
+          "std": 81.06179949781334,
+          "min": 0.0,
+          "max": 1147.0
+        },
+        {
+          "dimension": 4,
+          "mean": 236.05793057652832,
+          "std": 136.62427353916374,
+          "min": 0.0,
+          "max": 1143.0
+        },
+        {
+          "dimension": 5,
+          "mean": 147.4160507858267,
+          "std": 72.11573189343096,
+          "min": 0.0,
+          "max": 843.0
+        },
+        {
+          "dimension": 6,
+          "mean": 92.33545792270176,
+          "std": 52.171901911799985,
+          "min": 0.0,
+          "max": 890.0
+        },
+        {
+          "dimension": 7,
+          "mean": 506.2654332023356,
+          "std": 316.31463374371776,
+          "min": -1000.0,
+          "max": 1000.0
+        },
+        {
+          "dimension": 8,
+          "mean": -173.34801497481672,
+          "std": 251.1942277593135,
+          "min": -1000.0,
+          "max": 1000.0
+        },
+        {
+          "dimension": 9,
+          "mean": 339.8742762402483,
+          "std": 191.1406652413509,
+          "min": 0.0,
+          "max": 2475.0
+        }
+      ],
+      "n_classes": 9,
+      "class_balance": 0.0877,
+      "train_size": 81714,
+      "test_size": 17973,
+      "has_benchmark": false,
+      "flattened_features": 230,
+      "is_flattenable": true
+    },
+    {
+      "name": "Wine",
+      "shape": "(111, 1, 234)",
+      "n_samples": 111,
+      "length": 234,
+      "min_length": 234,
+      "max_length": 234,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 2.0789098624377202e-10,
+          "std": 0.9978609603321953,
+          "min": -1.9425245,
+          "max": 3.20063
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9473684210526315,
+      "train_size": 57,
+      "test_size": 54,
+      "has_benchmark": false,
+      "flattened_features": 234,
+      "is_flattenable": true
+    },
+    {
+      "name": "Strawberry",
+      "shape": "(983, 1, 235)",
+      "n_samples": 983,
+      "length": 235,
+      "min_length": 235,
+      "max_length": 235,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 3.353232600015812e-11,
+          "std": 0.9978700721199874,
+          "min": -2.3281436,
+          "max": 3.681954
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.555379746835443,
+      "train_size": 613,
+      "test_size": 370,
+      "has_benchmark": false,
+      "flattened_features": 235,
+      "is_flattenable": true
+    },
+    {
+      "name": "ArrowHead",
+      "shape": "(211, 1, 251)",
+      "n_samples": 211,
+      "length": 251,
+      "min_length": 251,
+      "max_length": 251,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 1.0180279225486282e-10,
+          "std": 0.9980059803610941,
+          "min": -2.2570801,
+          "max": 2.5540023
+        }
+      ],
+      "n_classes": 3,
+      "class_balance": 0.8024691358024691,
+      "train_size": 36,
+      "test_size": 175,
+      "has_benchmark": false,
+      "flattened_features": 251,
+      "is_flattenable": true
+    },
+    {
+      "name": "ElectricDeviceDetection",
+      "shape": "(4392, 1, 256)",
+      "n_samples": 4392,
+      "length": 256,
+      "min_length": 256,
+      "max_length": 256,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 1958.921643379407,
+          "std": 14934.273109939664,
+          "min": 0.0,
+          "max": 1229851.0
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.1615974609891563,
+      "train_size": 624,
+      "test_size": 3768,
+      "has_benchmark": false,
+      "flattened_features": 256,
+      "is_flattenable": true
+    },
+    {
+      "name": "ERing",
+      "shape": "(300, 4, 65)",
+      "n_samples": 300,
+      "length": 65,
+      "min_length": 65,
+      "max_length": 65,
+      "n_dimensions": 4,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 3.282051262104711e-10,
+          "std": 0.9922778769499613,
+          "min": -1.92401757,
+          "max": 2.5071579
+        },
+        {
+          "dimension": 1,
+          "mean": 1.5897436666224307e-10,
+          "std": 0.992277876737311,
+          "min": -3.11436857,
+          "max": 2.37242265
+        },
+        {
+          "dimension": 2,
+          "mean": -1.5384615746591945e-10,
+          "std": 0.9922778769003631,
+          "min": -1.46606963,
+          "max": 2.35508165
+        },
+        {
+          "dimension": 3,
+          "mean": -1.1794872042022083e-10,
+          "std": 0.99227787682081,
+          "min": -1.83919421,
+          "max": 2.59793923
+        }
+      ],
+      "n_classes": 6,
+      "class_balance": 1.0,
+      "train_size": 30,
+      "test_size": 270,
+      "has_benchmark": false,
+      "flattened_features": 260,
+      "is_flattenable": true
+    },
+    {
+      "name": "FiftyWords",
+      "shape": "(905, 1, 270)",
+      "n_samples": 905,
+      "length": 270,
+      "min_length": 270,
+      "max_length": 270,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -3.06071440857788e-11,
+          "std": 0.998146430333431,
+          "min": -2.3543165,
+          "max": 5.0183761
+        }
+      ],
+      "n_classes": 50,
+      "class_balance": 0.05504587155963303,
+      "train_size": 450,
+      "test_size": 455,
+      "has_benchmark": false,
+      "flattened_features": 270,
+      "is_flattenable": true
+    },
+    {
+      "name": "WordSynonyms",
+      "shape": "(905, 1, 270)",
+      "n_samples": 905,
+      "length": 270,
+      "min_length": 270,
+      "max_length": 270,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -6.614129122633771e-11,
+          "std": 0.9981464309394834,
+          "min": -2.260736,
+          "max": 5.0028301
+        }
+      ],
+      "n_classes": 25,
+      "class_balance": 0.06,
+      "train_size": 267,
+      "test_size": 638,
+      "has_benchmark": false,
+      "flattened_features": 270,
+      "is_flattenable": true
+    },
+    {
+      "name": "Trace",
+      "shape": "(200, 1, 275)",
+      "n_samples": 200,
+      "length": 275,
+      "min_length": 275,
+      "max_length": 275,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 1.5028203315316867e-10,
+          "std": 0.9981801619551339,
+          "min": -2.2210572,
+          "max": 3.9667403
+        }
+      ],
+      "n_classes": 4,
+      "class_balance": 1.0,
+      "train_size": 100,
+      "test_size": 100,
+      "has_benchmark": false,
+      "flattened_features": 275,
+      "is_flattenable": true
+    },
+    {
+      "name": "ToeSegmentation1",
+      "shape": "(268, 1, 277)",
+      "n_samples": 268,
+      "length": 277,
+      "min_length": 277,
+      "max_length": 277,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 2.839002781759548e-10,
+          "std": 0.9981933140374227,
+          "min": -3.5830641,
+          "max": 3.9324304
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9142857142857143,
+      "train_size": 40,
+      "test_size": 228,
+      "has_benchmark": false,
+      "flattened_features": 277,
+      "is_flattenable": true
+    },
+    {
+      "name": "Coffee",
+      "shape": "(56, 1, 286)",
+      "n_samples": 56,
+      "length": 286,
+      "min_length": 286,
+      "max_length": 286,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 6.527846572758598e-11,
+          "std": 0.9982502173798652,
+          "min": -2.064161,
+          "max": 2.1771109
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9310344827586207,
+      "train_size": 28,
+      "test_size": 28,
+      "has_benchmark": false,
+      "flattened_features": 286,
+      "is_flattenable": true
+    },
+    {
+      "name": "DodgerLoopDay",
+      "shape": "(144, 1, 288)",
+      "n_samples": 144,
+      "length": 288,
+      "min_length": 288,
+      "max_length": 288,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 20.353907545605306,
+          "std": 12.878796525556108,
+          "min": 0.0,
+          "max": 64.0
+        }
+      ],
+      "n_classes": 7,
+      "class_balance": 0.782608695652174,
+      "train_size": 67,
+      "test_size": 77,
+      "has_benchmark": false,
+      "flattened_features": 288,
+      "is_flattenable": true
+    },
+    {
+      "name": "DodgerLoopGame",
+      "shape": "(144, 1, 288)",
+      "n_samples": 144,
+      "length": 288,
+      "min_length": 288,
+      "max_length": 288,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 20.487132352941178,
+          "std": 12.718122951800837,
+          "min": 0.0,
+          "max": 61.0
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9459459459459459,
+      "train_size": 17,
+      "test_size": 127,
+      "has_benchmark": false,
+      "flattened_features": 288,
+      "is_flattenable": true
+    },
+    {
+      "name": "DodgerLoopWeekend",
+      "shape": "(144, 1, 288)",
+      "n_samples": 144,
+      "length": 288,
+      "min_length": 288,
+      "max_length": 288,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 19.277199074074073,
+          "std": 12.227466243464377,
+          "min": 0.0,
+          "max": 61.0
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.44,
+      "train_size": 18,
+      "test_size": 126,
+      "has_benchmark": false,
+      "flattened_features": 288,
+      "is_flattenable": true
+    },
+    {
+      "name": "CricketX",
+      "shape": "(780, 1, 300)",
+      "n_samples": 780,
+      "length": 300,
+      "min_length": 300,
+      "max_length": 300,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 1.7906911281419853e-11,
+          "std": 0.9983319422064909,
+          "min": -4.7661851,
+          "max": 11.493645
+        }
+      ],
+      "n_classes": 12,
+      "class_balance": 1.0,
+      "train_size": 390,
+      "test_size": 390,
+      "has_benchmark": false,
+      "flattened_features": 300,
+      "is_flattenable": true
+    },
+    {
+      "name": "CricketY",
+      "shape": "(780, 1, 300)",
+      "n_samples": 780,
+      "length": 300,
+      "min_length": 300,
+      "max_length": 300,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.6422847856563004e-11,
+          "std": 0.998331942206975,
+          "min": -9.774511,
+          "max": 6.8385115
+        }
+      ],
+      "n_classes": 12,
+      "class_balance": 1.0,
+      "train_size": 390,
+      "test_size": 390,
+      "has_benchmark": false,
+      "flattened_features": 300,
+      "is_flattenable": true
+    },
+    {
+      "name": "CricketZ",
+      "shape": "(780, 1, 300)",
+      "n_samples": 780,
+      "length": 300,
+      "min_length": 300,
+      "max_length": 300,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 5.797626504993351e-11,
+          "std": 0.9983319422166226,
+          "min": -4.758267,
+          "max": 11.92429
+        }
+      ],
+      "n_classes": 12,
+      "class_balance": 1.0,
+      "train_size": 390,
+      "test_size": 390,
+      "has_benchmark": false,
+      "flattened_features": 300,
+      "is_flattenable": true
+    },
+    {
+      "name": "JapaneseVowels",
+      "shape": "(640, 12, 25)",
+      "n_samples": 640,
+      "length": 25,
+      "min_length": 25,
+      "max_length": 25,
+      "n_dimensions": 12,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.8719985041481481,
+          "std": 0.48373237195329644,
+          "min": -0.908599,
+          "max": 2.178902
+        },
+        {
+          "dimension": 1,
+          "mean": -0.5509287136296296,
+          "std": 0.38584798327022723,
+          "min": -1.879729,
+          "max": 0.68475
+        },
+        {
+          "dimension": 2,
+          "mean": 0.22938495125925926,
+          "std": 0.3041167674215959,
+          "min": -0.859026,
+          "max": 1.187994
+        },
+        {
+          "dimension": 3,
+          "mean": -0.26269515155555556,
+          "std": 0.30518034388063964,
+          "min": -1.09987,
+          "max": 0.720675
+        },
+        {
+          "dimension": 4,
+          "mean": 0.22554962637037038,
+          "std": 0.26286380569646517,
+          "min": -0.716399,
+          "max": 0.93066
+        },
+        {
+          "dimension": 5,
+          "mean": -0.216091852,
+          "std": 0.16711283127485171,
+          "min": -0.873092,
+          "max": 0.307366
+        },
+        {
+          "dimension": 6,
+          "mean": -0.1740796825185185,
+          "std": 0.16086704167770013,
+          "min": -0.601835,
+          "max": 0.42411
+        },
+        {
+          "dimension": 7,
+          "mean": -0.04807690237037037,
+          "std": 0.18714472896585152,
+          "min": -0.665052,
+          "max": 0.52233
+        },
+        {
+          "dimension": 8,
+          "mean": -0.20705247037037036,
+          "std": 0.18399070979307688,
+          "min": -0.622026,
+          "max": 0.398493
+        },
+        {
+          "dimension": 9,
+          "mean": -0.18079739585185184,
+          "std": 0.11552692349804312,
+          "min": -0.527205,
+          "max": 0.305152
+        },
+        {
+          "dimension": 10,
+          "mean": -0.019778104,
+          "std": 0.09648062667460239,
+          "min": -0.428019,
+          "max": 0.249188
+        },
+        {
+          "dimension": 11,
+          "mean": 0.0863742597037037,
+          "std": 0.12825891448847304,
+          "min": -0.388298,
+          "max": 0.457796
+        }
+      ],
+      "n_classes": 9,
+      "class_balance": 0.4576271186440678,
+      "train_size": 270,
+      "test_size": 370,
+      "has_benchmark": false,
+      "flattened_features": 300,
+      "is_flattenable": true
+    },
+    {
+      "name": "FreezerRegularTrain",
+      "shape": "(3000, 1, 301)",
+      "n_samples": 3000,
+      "length": 301,
+      "min_length": 301,
+      "max_length": 301,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 9.361462281383558e-11,
+          "std": 0.9983374884114626,
+          "min": -2.2294504,
+          "max": 5.0221355
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 1.0,
+      "train_size": 150,
+      "test_size": 2850,
+      "has_benchmark": false,
+      "flattened_features": 301,
+      "is_flattenable": true
+    },
+    {
+      "name": "FreezerSmallTrain",
+      "shape": "(2878, 1, 301)",
+      "n_samples": 2878,
+      "length": 301,
+      "min_length": 301,
+      "max_length": 301,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.1449928112109925e-10,
+          "std": 0.9983374885200851,
+          "min": -2.2269952,
+          "max": 1.4250062
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 1.0,
+      "train_size": 28,
+      "test_size": 2850,
+      "has_benchmark": false,
+      "flattened_features": 301,
+      "is_flattenable": true
+    },
+    {
+      "name": "UWaveGestureLibraryX",
+      "shape": "(4478, 1, 315)",
+      "n_samples": 4478,
+      "length": 315,
+      "min_length": 315,
+      "max_length": 315,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -4.7948358762894024e-11,
+          "std": 0.9984114366668961,
+          "min": -4.438255,
+          "max": 4.4340669
+        }
+      ],
+      "n_classes": 8,
+      "class_balance": 0.9982142857142857,
+      "train_size": 896,
+      "test_size": 3582,
+      "has_benchmark": false,
+      "flattened_features": 315,
+      "is_flattenable": true
+    },
+    {
+      "name": "UWaveGestureLibraryY",
+      "shape": "(4478, 1, 315)",
+      "n_samples": 4478,
+      "length": 315,
+      "min_length": 315,
+      "max_length": 315,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 6.399052827052474e-11,
+          "std": 0.9984114365492353,
+          "min": -4.1033687,
+          "max": 7.6540226
+        }
+      ],
+      "n_classes": 8,
+      "class_balance": 0.9982142857142857,
+      "train_size": 896,
+      "test_size": 3582,
+      "has_benchmark": false,
+      "flattened_features": 315,
+      "is_flattenable": true
+    },
+    {
+      "name": "UWaveGestureLibraryZ",
+      "shape": "(4478, 1, 315)",
+      "n_samples": 4478,
+      "length": 315,
+      "min_length": 315,
+      "max_length": 315,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.3608858962886884e-10,
+          "std": 0.998411436612854,
+          "min": -3.5483985,
+          "max": 4.7786018
+        }
+      ],
+      "n_classes": 8,
+      "class_balance": 0.9982142857142857,
+      "train_size": 896,
+      "test_size": 3582,
+      "has_benchmark": false,
+      "flattened_features": 315,
+      "is_flattenable": true
+    },
+    {
+      "name": "Lightning7",
+      "shape": "(143, 1, 319)",
+      "n_samples": 143,
+      "length": 319,
+      "min_length": 319,
+      "max_length": 319,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -9.10014355754912e-11,
+          "std": 0.9984313719893463,
+          "min": -1.781163,
+          "max": 17.413299
+        }
+      ],
+      "n_classes": 7,
+      "class_balance": 0.3684210526315789,
+      "train_size": 70,
+      "test_size": 73,
+      "has_benchmark": false,
+      "flattened_features": 319,
+      "is_flattenable": true
+    },
+    {
+      "name": "ToeSegmentation2",
+      "shape": "(166, 1, 343)",
+      "n_samples": 166,
+      "length": 343,
+      "min_length": 343,
+      "max_length": 343,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 2.587123466542747e-10,
+          "std": 0.9985412093869578,
+          "min": -2.63647,
+          "max": 3.9256072
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.3387096774193548,
+      "train_size": 36,
+      "test_size": 130,
+      "has_benchmark": false,
+      "flattened_features": 343,
+      "is_flattenable": true
+    },
+    {
+      "name": "DiatomSizeReduction",
+      "shape": "(322, 1, 345)",
+      "n_samples": 322,
+      "length": 345,
+      "min_length": 345,
+      "max_length": 345,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -2.565742780876525e-10,
+          "std": 0.9985496727877153,
+          "min": -1.7727836,
+          "max": 1.9848259
+        }
+      ],
+      "n_classes": 4,
+      "class_balance": 0.3434343434343434,
+      "train_size": 16,
+      "test_size": 306,
+      "has_benchmark": false,
+      "flattened_features": 345,
+      "is_flattenable": true
+    },
+    {
+      "name": "FaceFour",
+      "shape": "(112, 1, 350)",
+      "n_samples": 112,
+      "length": 350,
+      "min_length": 350,
+      "max_length": 350,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -5.1438571286020025e-11,
+          "std": 0.9985704076459477,
+          "min": -4.6875857,
+          "max": 5.908128
+        }
+      ],
+      "n_classes": 4,
+      "class_balance": 0.6470588235294118,
+      "train_size": 24,
+      "test_size": 88,
+      "has_benchmark": false,
+      "flattened_features": 350,
+      "is_flattenable": true
+    },
+    {
+      "name": "CharacterTrajectories",
+      "shape": "(2858, 3, 119)",
+      "n_samples": 2858,
+      "length": 119,
+      "min_length": 119,
+      "max_length": 119,
+      "n_dimensions": 3,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.13253276334668887,
+          "std": 0.9993176718428707,
+          "min": -4.282913,
+          "max": 3.679906
+        },
+        {
+          "dimension": 1,
+          "mean": -0.07731731341819428,
+          "std": 1.0081001085078571,
+          "min": -4.031342,
+          "max": 4.307083
+        },
+        {
+          "dimension": 2,
+          "mean": -0.30928179363897457,
+          "std": 1.0238677855446385,
+          "min": -3.668361,
+          "max": 2.35002
+        }
+      ],
+      "n_classes": 20,
+      "class_balance": 0.6397849462365591,
+      "train_size": 1422,
+      "test_size": 1436,
+      "has_benchmark": false,
+      "flattened_features": 357,
+      "is_flattenable": true
+    },
+    {
+      "name": "GestureMidAirD1",
+      "shape": "(338, 1, 360)",
+      "n_samples": 338,
+      "length": 360,
+      "min_length": 360,
+      "max_length": 360,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -4.730837447006805,
+          "std": 56.342411078096625,
+          "min": -207.213,
+          "max": 282.721
+        }
+      ],
+      "n_classes": 26,
+      "class_balance": 1.0,
+      "train_size": 208,
+      "test_size": 130,
+      "has_benchmark": false,
+      "flattened_features": 360,
+      "is_flattenable": true
+    },
+    {
+      "name": "GestureMidAirD2",
+      "shape": "(338, 1, 360)",
+      "n_samples": 338,
+      "length": 360,
+      "min_length": 360,
+      "max_length": 360,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 204.3179696542495,
+          "std": 49.93871044712205,
+          "min": 37.3463,
+          "max": 375.36
+        }
+      ],
+      "n_classes": 26,
+      "class_balance": 1.0,
+      "train_size": 208,
+      "test_size": 130,
+      "has_benchmark": false,
+      "flattened_features": 360,
+      "is_flattenable": true
+    },
+    {
+      "name": "GestureMidAirD3",
+      "shape": "(338, 1, 360)",
+      "n_samples": 338,
+      "length": 360,
+      "min_length": 360,
+      "max_length": 360,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 14.710157674964114,
+          "std": 60.73854194473355,
+          "min": -239.505,
+          "max": 225.744
+        }
+      ],
+      "n_classes": 26,
+      "class_balance": 1.0,
+      "train_size": 208,
+      "test_size": 130,
+      "has_benchmark": false,
+      "flattened_features": 360,
+      "is_flattenable": true
+    },
+    {
+      "name": "PickupGestureWiimoteZ",
+      "shape": "(100, 1, 361)",
+      "n_samples": 100,
+      "length": 361,
+      "min_length": 361,
+      "max_length": 361,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.8697702688022718,
+          "std": 0.2672185874008767,
+          "min": -0.346,
+          "max": 2.615
+        }
+      ],
+      "n_classes": 10,
+      "class_balance": 1.0,
+      "train_size": 50,
+      "test_size": 50,
+      "has_benchmark": false,
+      "flattened_features": 361,
+      "is_flattenable": true
+    },
+    {
+      "name": "ShakeGestureWiimoteZ",
+      "shape": "(100, 1, 385)",
+      "n_samples": 100,
+      "length": 385,
+      "min_length": 385,
+      "max_length": 385,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.6473610650031023,
+          "std": 0.5484479184027806,
+          "min": -4.577,
+          "max": 4.154
+        }
+      ],
+      "n_classes": 10,
+      "class_balance": 1.0,
+      "train_size": 50,
+      "test_size": 50,
+      "has_benchmark": false,
+      "flattened_features": 385,
+      "is_flattenable": true
+    },
+    {
+      "name": "Symbols",
+      "shape": "(1020, 1, 398)",
+      "n_samples": 1020,
+      "length": 398,
+      "min_length": 398,
+      "max_length": 398,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -2.900452329011195e-10,
+          "std": 0.9987429282038519,
+          "min": -2.3109018,
+          "max": 2.2048194
+        }
+      ],
+      "n_classes": 6,
+      "class_balance": 0.8950276243093923,
+      "train_size": 25,
+      "test_size": 995,
+      "has_benchmark": false,
+      "flattened_features": 398,
+      "is_flattenable": true
+    },
+    {
+      "name": "Yoga",
+      "shape": "(3300, 1, 426)",
+      "n_samples": 3300,
+      "length": 426,
+      "min_length": 426,
+      "max_length": 426,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 8.158807702819058e-11,
+          "std": 0.9988256015523244,
+          "min": -2.4192691,
+          "max": 2.4050119
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.864406779661017,
+      "train_size": 300,
+      "test_size": 3000,
+      "has_benchmark": false,
+      "flattened_features": 426,
+      "is_flattenable": true
+    },
+    {
+      "name": "OSULeaf",
+      "shape": "(442, 1, 427)",
+      "n_samples": 442,
+      "length": 427,
+      "min_length": 427,
+      "max_length": 427,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -7.597259897427508e-11,
+          "std": 0.998828353409954,
+          "min": -3.1572677,
+          "max": 3.6694938
+        }
+      ],
+      "n_classes": 6,
+      "class_balance": 0.3917525773195876,
+      "train_size": 200,
+      "test_size": 242,
+      "has_benchmark": false,
+      "flattened_features": 427,
+      "is_flattenable": true
+    },
+    {
+      "name": "Ham",
+      "shape": "(214, 1, 431)",
+      "n_samples": 214,
+      "length": 431,
+      "min_length": 431,
+      "max_length": 431,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -4.458198394628263e-11,
+          "std": 0.9988392334833713,
+          "min": -2.0538086,
+          "max": 8.0329202
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9279279279279279,
+      "train_size": 109,
+      "test_size": 105,
+      "has_benchmark": false,
+      "flattened_features": 431,
+      "is_flattenable": true
+    },
+    {
+      "name": "Meat",
+      "shape": "(120, 1, 448)",
+      "n_samples": 120,
+      "length": 448,
+      "min_length": 448,
+      "max_length": 448,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -1.0162054795531936e-11,
+          "std": 0.9988833047660322,
+          "min": -1.5424719,
+          "max": 3.3901895
+        }
+      ],
+      "n_classes": 3,
+      "class_balance": 1.0,
+      "train_size": 60,
+      "test_size": 60,
+      "has_benchmark": false,
+      "flattened_features": 448,
+      "is_flattenable": true
+    },
+    {
+      "name": "GesturePebbleZ1",
+      "shape": "(304, 1, 455)",
+      "n_samples": 304,
+      "length": 455,
+      "min_length": 455,
+      "max_length": 455,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -4.681074665589704,
+          "std": 5.797413173455767,
+          "min": -39.99,
+          "max": 39.99
+        }
+      ],
+      "n_classes": 6,
+      "class_balance": 0.8333333333333334,
+      "train_size": 132,
+      "test_size": 172,
+      "has_benchmark": false,
+      "flattened_features": 455,
+      "is_flattenable": true
+    },
+    {
+      "name": "GesturePebbleZ2",
+      "shape": "(304, 1, 455)",
+      "n_samples": 304,
+      "length": 455,
+      "min_length": 455,
+      "max_length": 455,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -4.49995371291006,
+          "std": 5.419560073635944,
+          "min": -39.99,
+          "max": 39.99
+        }
+      ],
+      "n_classes": 6,
+      "class_balance": 0.8333333333333334,
+      "train_size": 146,
+      "test_size": 158,
+      "has_benchmark": false,
+      "flattened_features": 455,
+      "is_flattenable": true
+    },
+    {
+      "name": "Handwriting",
+      "shape": "(1000, 3, 152)",
+      "n_samples": 1000,
+      "length": 152,
+      "min_length": 152,
+      "max_length": 152,
+      "n_dimensions": 3,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 6.662280701655261e-08,
+          "std": 0.9967054121561978,
+          "min": -5.8025,
+          "max": 9.2384
+        },
+        {
+          "dimension": 1,
+          "mean": 9.714912280684567e-08,
+          "std": 0.9967043887499457,
+          "min": -10.642,
+          "max": 5.2226
+        },
+        {
+          "dimension": 2,
+          "mean": 4.561403507539664e-09,
+          "std": 0.9967048646036171,
+          "min": -6.7539,
+          "max": 5.408
+        }
+      ],
+      "n_classes": 26,
+      "class_balance": 0.5094339622641509,
+      "train_size": 150,
+      "test_size": 850,
+      "has_benchmark": false,
+      "flattened_features": 456,
+      "is_flattenable": true
+    },
+    {
+      "name": "Fish",
+      "shape": "(350, 1, 463)",
+      "n_samples": 350,
+      "length": 463,
+      "min_length": 463,
+      "max_length": 463,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -5.1853564908582374e-11,
+          "std": 0.9989195028054384,
+          "min": -1.9505821,
+          "max": 2.1259017
+        }
+      ],
+      "n_classes": 7,
+      "class_balance": 1.0,
+      "train_size": 175,
+      "test_size": 175,
+      "has_benchmark": false,
+      "flattened_features": 463,
+      "is_flattenable": true
+    },
+    {
+      "name": "Beef",
+      "shape": "(60, 1, 470)",
+      "n_samples": 60,
+      "length": 470,
+      "min_length": 470,
+      "max_length": 470,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -3.5676235866242463e-11,
+          "std": 0.9989356032839469,
+          "min": -3.2899733,
+          "max": 3.7205283
+        }
+      ],
+      "n_classes": 5,
+      "class_balance": 1.0,
+      "train_size": 30,
+      "test_size": 30,
+      "has_benchmark": false,
+      "flattened_features": 470,
+      "is_flattenable": true
+    },
+    {
+      "name": "AllGestureWiimoteX",
+      "shape": "(1000, 1, 500)",
+      "n_samples": 1000,
+      "length": 500,
+      "min_length": 500,
+      "max_length": 500,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -0.009660995613706208,
+          "std": 0.4725445403533695,
+          "min": -4.846,
+          "max": 4.269
+        }
+      ],
+      "n_classes": 10,
+      "class_balance": 1.0,
+      "train_size": 300,
+      "test_size": 700,
+      "has_benchmark": false,
+      "flattened_features": 500,
+      "is_flattenable": true
+    },
+    {
+      "name": "AllGestureWiimoteY",
+      "shape": "(1000, 1, 500)",
+      "n_samples": 1000,
+      "length": 500,
+      "min_length": 500,
+      "max_length": 500,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.11484963849017467,
+          "std": 0.4166739326181726,
+          "min": -3.111,
+          "max": 4.222
+        }
+      ],
+      "n_classes": 10,
+      "class_balance": 1.0,
+      "train_size": 300,
+      "test_size": 700,
+      "has_benchmark": false,
+      "flattened_features": 500,
+      "is_flattenable": true
+    },
+    {
+      "name": "AllGestureWiimoteZ",
+      "shape": "(1000, 1, 500)",
+      "n_samples": 1000,
+      "length": 500,
+      "min_length": 500,
+      "max_length": 500,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 0.8847640645273649,
+          "std": 0.374362721569147,
+          "min": -4.808,
+          "max": 4.308
+        }
+      ],
+      "n_classes": 10,
+      "class_balance": 1.0,
+      "train_size": 300,
+      "test_size": 700,
+      "has_benchmark": false,
+      "flattened_features": 500,
+      "is_flattenable": true
+    },
+    {
+      "name": "FordA",
+      "shape": "(4921, 1, 500)",
+      "n_samples": 4921,
+      "length": 500,
+      "min_length": 500,
+      "max_length": 500,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -2.32319530773935e-11,
+          "std": 0.9989994995183201,
+          "min": -4.6176935,
+          "max": 5.0592276
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9473684210526315,
+      "train_size": 3601,
+      "test_size": 1320,
+      "has_benchmark": false,
+      "flattened_features": 500,
+      "is_flattenable": true
+    },
+    {
+      "name": "FordB",
+      "shape": "(4446, 1, 500)",
+      "n_samples": 4446,
+      "length": 500,
+      "min_length": 500,
+      "max_length": 500,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": -7.81334035095267e-12,
+          "std": 0.9989994995289054,
+          "min": -5.539048,
+          "max": 5.0896288
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 0.9663865546218487,
+      "train_size": 3636,
+      "test_size": 810,
+      "has_benchmark": false,
+      "flattened_features": 500,
+      "is_flattenable": true
+    },
+    {
+      "name": "ShapeletSim",
+      "shape": "(200, 1, 500)",
+      "n_samples": 200,
+      "length": 500,
+      "min_length": 500,
+      "max_length": 500,
+      "n_dimensions": 1,
+      "missing_pct": 0.0,
+      "has_variable_length": false,
+      "samples_with_missing": 0,
+      "dimension_stats": [
+        {
+          "dimension": 0,
+          "mean": 7.54400005575917e-11,
+          "std": 0.9989994994780705,
+          "min": -1.8113435,
+          "max": 1.8916875
+        }
+      ],
+      "n_classes": 2,
+      "class_balance": 1.0,
+      "train_size": 20,
+      "test_size": 180,
+      "has_benchmark": false,
+      "flattened_features": 500,
+      "is_flattenable": true
+    }
+  ]
+}

@@ -1,0 +1,339 @@
+{
+  "n_datasets": 20,
+  "seed": 2032,
+  "generator_version": "v3",
+  "real_stats": {
+    "n_samples": {
+      "min": 56,
+      "max": 10000,
+      "median": 600,
+      "mean": 9908.024691358025,
+      "p25": 211,
+      "p75": 1931
+    },
+    "n_features": {
+      "min": 1,
+      "max": 12,
+      "median": 1,
+      "mean": 1.3580246913580247,
+      "prob_univariate": 0.9382716049382716
+    },
+    "length": {
+      "min": 8,
+      "max": 500,
+      "median": 152,
+      "mean": 217.320987654321,
+      "p25": 80,
+      "p75": 319
+    },
+    "n_classes": {
+      "min": 2,
+      "max": 10,
+      "median": 3,
+      "mean": 4.345679012345679
+    },
+    "n_datasets": 81
+  },
+  "datasets": [
+    {
+      "id": 0,
+      "shape": [
+        2015,
+        1,
+        126
+      ],
+      "n_classes": 3,
+      "sample_mode": "iid",
+      "n_time_inputs": 2,
+      "n_state_inputs": "3",
+      "target_offset": 0,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.015901240807404356
+    },
+    {
+      "id": 1,
+      "shape": [
+        2885,
+        1,
+        92
+      ],
+      "n_classes": 3,
+      "sample_mode": "iid",
+      "n_time_inputs": 4,
+      "n_state_inputs": "10",
+      "target_offset": 1,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.0010787096392186892
+    },
+    {
+      "id": 2,
+      "shape": [
+        1562,
+        2,
+        146
+      ],
+      "n_classes": 2,
+      "sample_mode": "iid",
+      "n_time_inputs": 2,
+      "n_state_inputs": "3",
+      "target_offset": 0,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.001977850347574696
+    },
+    {
+      "id": 3,
+      "shape": [
+        2235,
+        3,
+        98
+      ],
+      "n_classes": 2,
+      "sample_mode": "iid",
+      "n_time_inputs": 2,
+      "n_state_inputs": 2,
+      "target_offset": 5,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.004247384626511633
+    },
+    {
+      "id": 4,
+      "shape": [
+        1453,
+        1,
+        137
+      ],
+      "n_classes": 2,
+      "sample_mode": "iid",
+      "n_time_inputs": 2,
+      "n_state_inputs": "5",
+      "target_offset": 2,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.06525942545600119
+    },
+    {
+      "id": 5,
+      "shape": [
+        2617,
+        1,
+        265
+      ],
+      "n_classes": 5,
+      "sample_mode": "iid",
+      "n_time_inputs": 5,
+      "n_state_inputs": "9",
+      "target_offset": 0,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.009102702066143692
+    },
+    {
+      "id": 6,
+      "shape": [
+        917,
+        3,
+        106
+      ],
+      "n_classes": 4,
+      "sample_mode": "iid",
+      "n_time_inputs": 2,
+      "n_state_inputs": 2,
+      "target_offset": 1,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.004244468794699737
+    },
+    {
+      "id": 7,
+      "shape": [
+        290,
+        1,
+        68
+      ],
+      "n_classes": 6,
+      "sample_mode": "sliding_window",
+      "n_time_inputs": 3,
+      "n_state_inputs": "8",
+      "target_offset": 0,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.001222572911316726
+    },
+    {
+      "id": 8,
+      "shape": [
+        630,
+        1,
+        216
+      ],
+      "n_classes": 2,
+      "sample_mode": "sliding_window",
+      "n_time_inputs": 2,
+      "n_state_inputs": 2,
+      "target_offset": 8,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.001375560836606252
+    },
+    {
+      "id": 9,
+      "shape": [
+        1006,
+        1,
+        70
+      ],
+      "n_classes": 4,
+      "sample_mode": "mixed",
+      "n_time_inputs": 2,
+      "n_state_inputs": "3",
+      "target_offset": 0,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.029430402145694062
+    },
+    {
+      "id": 10,
+      "shape": [
+        1614,
+        1,
+        92
+      ],
+      "n_classes": 3,
+      "sample_mode": "mixed",
+      "n_time_inputs": 2,
+      "n_state_inputs": 2,
+      "target_offset": 0,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.001031864014937266
+    },
+    {
+      "id": 11,
+      "shape": [
+        1386,
+        1,
+        93
+      ],
+      "n_classes": 5,
+      "sample_mode": "iid",
+      "n_time_inputs": 3,
+      "n_state_inputs": "8",
+      "target_offset": 0,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.004167627202795828
+    },
+    {
+      "id": 12,
+      "shape": [
+        60,
+        1,
+        294
+      ],
+      "n_classes": 3,
+      "sample_mode": "sliding_window",
+      "n_time_inputs": 2,
+      "n_state_inputs": "5",
+      "target_offset": 6,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.002816437118066654
+    },
+    {
+      "id": 13,
+      "shape": [
+        2300,
+        1,
+        213
+      ],
+      "n_classes": 5,
+      "sample_mode": "iid",
+      "n_time_inputs": 3,
+      "n_state_inputs": "8",
+      "target_offset": 2,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.0011088940935826811
+    },
+    {
+      "id": 14,
+      "shape": [
+        992,
+        1,
+        74
+      ],
+      "n_classes": 3,
+      "sample_mode": "iid",
+      "n_time_inputs": 2,
+      "n_state_inputs": "3",
+      "target_offset": 2,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.0013467037149864868
+    },
+    {
+      "id": 15,
+      "shape": [
+        1265,
+        3,
+        121
+      ],
+      "n_classes": 3,
+      "sample_mode": "mixed",
+      "n_time_inputs": 2,
+      "n_state_inputs": "3",
+      "target_offset": 4,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.002299588729775511
+    },
+    {
+      "id": 16,
+      "shape": [
+        2406,
+        1,
+        53
+      ],
+      "n_classes": 2,
+      "sample_mode": "iid",
+      "n_time_inputs": 2,
+      "n_state_inputs": "3",
+      "target_offset": 0,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.0023769075457613516
+    },
+    {
+      "id": 17,
+      "shape": [
+        20,
+        2,
+        217
+      ],
+      "n_classes": 2,
+      "sample_mode": "sliding_window",
+      "n_time_inputs": 2,
+      "n_state_inputs": "3",
+      "target_offset": 1,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.002396273247566064
+    },
+    {
+      "id": 18,
+      "shape": [
+        2680,
+        1,
+        143
+      ],
+      "n_classes": 6,
+      "sample_mode": "iid",
+      "n_time_inputs": 2,
+      "n_state_inputs": 2,
+      "target_offset": 0,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.003410462567558048
+    },
+    {
+      "id": 19,
+      "shape": [
+        1470,
+        2,
+        179
+      ],
+      "n_classes": 6,
+      "sample_mode": "iid",
+      "n_time_inputs": 2,
+      "n_state_inputs": "3",
+      "target_offset": 1,
+      "spatial_distance_alpha": 1.5,
+      "noise_scale": 0.004069034197654041
+    }
+  ]
+}

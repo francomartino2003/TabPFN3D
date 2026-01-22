@@ -1,0 +1,82 @@
+name,n_channels,length,flattened_features,n_classes,n_train_original,n_test_original,n_train_used,n_test_used,was_subsampled,accuracy,roc_auc,fit_time,predict_time,status,error
+SmoothSubspace,1.0,15.0,15.0,3.0,150.0,150.0,150.0,150.0,False,1.0,1.0,0.23119282722473145,2.1041500568389893,success,
+PenDigits,2.0,8.0,16.0,10.0,7494.0,3498.0,7494.0,3498.0,False,0.9814179531160663,0.999790936008686,0.1799330711364746,85.73126196861267,success,
+Chinatown,1.0,24.0,24.0,2.0,20.0,343.0,20.0,343.0,False,0.9854227405247813,0.9953003503375203,0.11802482604980469,1.776669979095459,success,
+ItalyPowerDemand,1.0,24.0,24.0,2.0,67.0,1029.0,67.0,1029.0,False,0.9708454810495627,0.9935211629418075,0.10177087783813477,2.051306962966919,success,
+MelbournePedestrian,1.0,24.0,24.0,10.0,1138.0,2319.0,1138.0,2319.0,False,0.9793014230271668,0.9995574503454542,0.11958694458007812,14.661574125289917,success,
+SharePriceIncrease,1.0,60.0,60.0,2.0,965.0,966.0,965.0,966.0,False,0.6987577639751553,0.663401181747134,0.1925830841064453,10.720343112945557,success,
+SyntheticControl,1.0,60.0,60.0,6.0,300.0,300.0,300.0,300.0,False,0.9866666666666667,0.9998933333333334,0.13732695579528809,2.849608898162842,success,
+SonyAIBORobotSurface2,1.0,65.0,65.0,2.0,27.0,953.0,27.0,953.0,False,0.8352570828961176,0.9096123380859195,0.11044001579284668,2.9206128120422363,success,
+SonyAIBORobotSurface1,1.0,70.0,70.0,2.0,20.0,601.0,20.0,601.0,False,0.8219633943427621,0.959149772865957,0.11378788948059082,2.279153347015381,success,
+DistalPhalanxOutlineAgeGroup,1.0,80.0,80.0,3.0,400.0,139.0,400.0,139.0,False,0.7482014388489209,0.9039679941538882,0.13208770751953125,3.415225028991699,success,
+DistalPhalanxOutlineCorrect,1.0,80.0,80.0,2.0,600.0,276.0,600.0,276.0,False,0.7862318840579711,0.8655144477450716,0.1357707977294922,5.42635178565979,success,
+DistalPhalanxTW,1.0,80.0,80.0,6.0,400.0,139.0,400.0,139.0,False,0.6906474820143885,0.9097714317355736,0.1418449878692627,3.161942958831787,success,
+MiddlePhalanxOutlineAgeGroup,1.0,80.0,80.0,3.0,400.0,154.0,400.0,154.0,False,0.6038961038961039,0.63891689667395,0.13098478317260742,3.3325748443603516,success,
+MiddlePhalanxOutlineCorrect,1.0,80.0,80.0,2.0,600.0,291.0,600.0,291.0,False,0.852233676975945,0.9287228915662651,0.14404821395874023,5.490675926208496,success,
+MiddlePhalanxTW,1.0,80.0,80.0,6.0,399.0,154.0,399.0,154.0,False,0.6038961038961039,0.8114393770900175,0.14129400253295898,3.4420769214630127,success,
+PhalangesOutlinesCorrect,1.0,80.0,80.0,2.0,1800.0,858.0,1800.0,858.0,False,0.8484848484848485,0.9220475056118009,0.17884516716003418,55.598453998565674,success,
+ProximalPhalanxOutlineAgeGroup,1.0,80.0,80.0,3.0,400.0,205.0,400.0,205.0,False,0.8585365853658536,0.9419905705938246,0.23529767990112305,3.643982172012329,success,
+ProximalPhalanxOutlineCorrect,1.0,80.0,80.0,2.0,600.0,291.0,600.0,291.0,False,0.9072164948453608,0.9649333624644963,0.1407310962677002,5.238196849822998,success,
+ProximalPhalanxTW,1.0,80.0,80.0,6.0,400.0,205.0,400.0,205.0,False,0.8146341463414634,0.9347341200451585,0.1672220230102539,3.2919809818267822,success,
+TwoLeadECG,1.0,82.0,82.0,2.0,23.0,1139.0,23.0,1139.0,False,0.9429323968393327,0.9879227946844263,0.1152791976928711,3.9937491416931152,success,
+MoteStrain,1.0,84.0,84.0,2.0,20.0,1252.0,20.0,1252.0,False,0.8857827476038339,0.9605777007510109,0.11625981330871582,4.407016277313232,success,
+ECG200,1.0,96.0,96.0,2.0,100.0,100.0,100.0,100.0,False,0.89,0.9388020833333333,0.14540815353393555,2.647859811782837,success,
+ElectricDevices,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 1.56 GiB, other allocations: 23.31 GiB, max allowed: 27.20 GiB). Tried to allocate 4.65 GiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+MedicalImages,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 1.05 GiB, other allocations: 26.14 GiB, max allowed: 27.20 GiB). Tried to allocate 23.22 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+BME,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 1.05 GiB, other allocations: 26.14 GiB, max allowed: 27.20 GiB). Tried to allocate 8.22 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+CBF,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 190.00 MiB, other allocations: 27.03 GiB, max allowed: 27.20 GiB). Tried to allocate 22.50 KiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+TwoPatterns,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 88.00 MiB, other allocations: 27.03 GiB, max allowed: 27.20 GiB). Tried to allocate 197.75 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+ECGFiveDays,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 190.00 MiB, other allocations: 27.03 GiB, max allowed: 27.20 GiB). Tried to allocate 22.25 KiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+ECG5000,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 2.12 GiB, other allocations: 25.15 GiB, max allowed: 27.20 GiB). Tried to allocate 26.37 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+Plane,1.0,144.0,144.0,7.0,105.0,105.0,105.0,105.0,False,0.9904761904761905,1.0,0.3568880558013916,2.8882148265838623,success,
+PowerCons,1.0,144.0,144.0,2.0,180.0,180.0,180.0,180.0,False,1.0,1.0,0.16103291511535645,3.4784061908721924,success,
+GunPoint,1.0,150.0,150.0,2.0,50.0,150.0,50.0,150.0,False,0.94,0.9882645803698435,0.1418449878692627,2.464259147644043,success,
+GunPointAgeSpan,1.0,150.0,150.0,2.0,135.0,316.0,135.0,316.0,False,0.9936708860759493,1.0,0.1369020938873291,3.643097162246704,success,
+GunPointMaleVersusFemale,1.0,150.0,150.0,2.0,135.0,316.0,135.0,316.0,False,1.0,1.0,0.14407920837402344,3.3903088569641113,success,
+GunPointOldVersusYoung,1.0,150.0,150.0,2.0,136.0,315.0,136.0,315.0,False,1.0,1.0,0.13802218437194824,3.5071330070495605,success,
+UMD,1.0,150.0,150.0,3.0,36.0,144.0,36.0,144.0,False,1.0,1.0,0.14036107063293457,2.1611180305480957,success,
+Wafer,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 2.75 GiB, other allocations: 25.11 GiB, max allowed: 27.20 GiB). Tried to allocate 40.63 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+ChlorineConcentration,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 636.00 MiB, other allocations: 26.45 GiB, max allowed: 27.20 GiB). Tried to allocate 210.01 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+Epilepsy2,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 584.00 MiB, other allocations: 26.45 GiB, max allowed: 27.20 GiB). Tried to allocate 472.50 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+Sleep,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 2.68 GiB, other allocations: 22.86 GiB, max allowed: 27.20 GiB). Tried to allocate 11.25 GiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+Colposcopy,1.0,180.0,180.0,6.0,99.0,101.0,99.0,101.0,False,0.32673267326732675,0.6050606498842214,0.2551310062408447,3.2675862312316895,success,
+RacketSports,6.0,30.0,180.0,4.0,151.0,152.0,151.0,152.0,False,0.875,0.9684996875857235,0.1709427833557129,3.539942979812622,success,
+Tiselac,,,,,,,,,,,,,,failed,Invalid buffer size: 14.62 GiB
+Wine,1.0,234.0,234.0,2.0,57.0,54.0,57.0,54.0,False,0.7592592592592593,0.8024691358024691,0.5372698307037354,2.4811041355133057,success,
+Strawberry,1.0,235.0,235.0,2.0,613.0,370.0,613.0,370.0,False,0.981081081081081,0.9950980392156863,0.21673917770385742,16.737831830978394,success,
+ArrowHead,1.0,251.0,251.0,3.0,36.0,175.0,36.0,175.0,False,0.7257142857142858,0.9105137090182612,0.16590523719787598,3.3653550148010254,success,
+ElectricDeviceDetection,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 2.90 GiB, other allocations: 24.39 GiB, max allowed: 27.20 GiB). Tried to allocate 38.64 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+ERing,4.0,65.0,260.0,6.0,30.0,270.0,30.0,270.0,False,0.9185185185185185,0.9946172839506174,0.5014400482177734,5.323554992675781,success,
+Trace,1.0,275.0,275.0,4.0,100.0,100.0,100.0,100.0,False,0.96,0.9977083913487422,0.17284703254699707,3.5892081260681152,success,
+ToeSegmentation1,1.0,277.0,277.0,2.0,40.0,228.0,40.0,228.0,False,0.5745614035087719,0.6113425925925926,0.16828107833862305,3.9514949321746826,success,
+Coffee,1.0,286.0,286.0,2.0,28.0,28.0,28.0,28.0,False,1.0,1.0,0.16286230087280273,2.8317439556121826,success,
+DodgerLoopDay,1.0,288.0,288.0,7.0,67.0,77.0,67.0,77.0,False,0.6363636363636364,0.909222135282176,0.16976499557495117,3.147292137145996,success,
+DodgerLoopGame,1.0,288.0,288.0,2.0,17.0,127.0,17.0,127.0,False,0.7480314960629921,0.8198511166253102,0.1591787338256836,2.600553274154663,success,
+DodgerLoopWeekend,1.0,288.0,288.0,2.0,18.0,126.0,18.0,126.0,False,0.9841269841269841,0.9868925831202047,0.1590430736541748,2.5847790241241455,success,
+JapaneseVowels,12.0,25.0,300.0,9.0,270.0,370.0,270.0,370.0,False,0.9891891891891892,0.9998001108899364,0.2504088878631592,10.826836109161377,success,
+FreezerRegularTrain,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 2.15 GiB, other allocations: 25.00 GiB, max allowed: 27.20 GiB). Tried to allocate 90.74 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+FreezerSmallTrain,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 2.15 GiB, other allocations: 24.99 GiB, max allowed: 27.20 GiB). Tried to allocate 215.01 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+UWaveGestureLibraryX,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 2.15 GiB, other allocations: 24.99 GiB, max allowed: 27.20 GiB). Tried to allocate 432.93 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+UWaveGestureLibraryY,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 2.15 GiB, other allocations: 24.99 GiB, max allowed: 27.20 GiB). Tried to allocate 432.93 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+UWaveGestureLibraryZ,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 2.15 GiB, other allocations: 24.99 GiB, max allowed: 27.20 GiB). Tried to allocate 432.93 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+Lightning7,1.0,319.0,319.0,7.0,70.0,73.0,70.0,73.0,False,0.6712328767123288,0.9432355067354106,0.19098496437072754,4.249833822250366,success,
+ToeSegmentation2,1.0,343.0,343.0,2.0,36.0,130.0,36.0,130.0,False,0.7076923076923077,0.7959905660377359,0.4578700065612793,3.7997288703918457,success,
+DiatomSizeReduction,1.0,345.0,345.0,4.0,16.0,306.0,16.0,306.0,False,0.9705882352941176,1.0,0.19753599166870117,5.191826820373535,success,
+FaceFour,1.0,350.0,350.0,4.0,24.0,88.0,24.0,88.0,False,0.9318181818181818,0.9909200185959717,0.18593382835388184,3.092872142791748,success,
+PickupGestureWiimoteZ,1.0,361.0,361.0,10.0,50.0,50.0,50.0,50.0,False,0.7,0.9231111111111112,0.18654298782348633,3.350419044494629,success,
+ShakeGestureWiimoteZ,1.0,385.0,385.0,10.0,50.0,50.0,50.0,50.0,False,0.74,0.9746666666666666,0.19521093368530273,3.5638222694396973,success,
+Symbols,1.0,398.0,398.0,6.0,25.0,995.0,25.0,995.0,False,0.8914572864321608,0.9824666475734812,0.19223809242248535,15.588971853256226,success,
+Yoga,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 3.05 GiB, other allocations: 24.32 GiB, max allowed: 27.20 GiB). Tried to allocate 43.95 MiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+OSULeaf,1.0,427.0,427.0,6.0,200.0,242.0,200.0,242.0,False,0.6198347107438017,0.9110483779479899,0.539417028427124,12.362108945846558,success,
+Ham,1.0,431.0,431.0,2.0,109.0,105.0,109.0,105.0,False,0.7428571428571429,0.8155410312273057,0.22141599655151367,6.150003910064697,success,
+Meat,1.0,448.0,448.0,3.0,60.0,60.0,60.0,60.0,False,1.0,1.0,0.21839022636413574,4.385052919387817,success,
+GesturePebbleZ1,1.0,455.0,455.0,6.0,132.0,172.0,132.0,172.0,False,0.8313953488372093,0.9835401959296681,0.5210011005401611,8.224849224090576,success,
+GesturePebbleZ2,1.0,455.0,455.0,6.0,146.0,158.0,146.0,158.0,False,0.7721518987341772,0.9541469992403134,0.23608899116516113,7.944131135940552,success,
+Fish,1.0,463.0,463.0,7.0,175.0,175.0,175.0,175.0,False,0.8914285714285715,0.9940925399301294,0.45156002044677734,11.045799970626831,success,
+Beef,1.0,470.0,470.0,5.0,30.0,30.0,30.0,30.0,False,0.9333333333333333,0.986111111111111,0.22053313255310059,3.35133695602417,success,
+AllGestureWiimoteX,1.0,500.0,500.0,10.0,300.0,700.0,300.0,700.0,False,0.5985714285714285,0.9248253968253966,0.31322598457336426,51.37941002845764,success,
+AllGestureWiimoteY,1.0,500.0,500.0,10.0,300.0,700.0,300.0,700.0,False,0.6642857142857143,0.9402018140589569,0.3380129337310791,28.995463132858276,success,
+AllGestureWiimoteZ,1.0,500.0,500.0,10.0,300.0,700.0,300.0,700.0,False,0.59,0.9191791383219954,0.27674102783203125,28.06269407272339,success,
+FordA,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 1.80 GiB, other allocations: 23.04 GiB, max allowed: 27.20 GiB). Tried to allocate 4.05 GiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+FordB,,,,,,,,,,,,,,failed,"MPS backend out of memory (MPS allocated: 5.87 GiB, other allocations: 17.28 GiB, max allowed: 27.20 GiB). Tried to allocate 4.13 GiB on private pool. Use PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0 to disable upper limit for memory allocations (may cause system failure)."
+ShapeletSim,1.0,500.0,500.0,2.0,20.0,180.0,20.0,180.0,False,0.48333333333333334,0.4676543209876543,0.5137150287628174,6.773138046264648,success,

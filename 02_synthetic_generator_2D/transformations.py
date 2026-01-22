@@ -178,9 +178,10 @@ class NNTransformation(EdgeTransformation):
         if inputs.ndim == 1:
             inputs = inputs.reshape(1, -1)
         
-        # Sanitize inputs - clip extreme values from upstream transformations
-        inputs = np.clip(inputs, -1e10, 1e10)
-        inputs = np.nan_to_num(inputs, nan=0.0, posinf=1e10, neginf=-1e10)
+        # Sanitize inputs - wider bounds to allow diversity
+        # The temporal propagator handles cross-timestep clipping
+        inputs = np.clip(inputs, -1e6, 1e6)
+        inputs = np.nan_to_num(inputs, nan=0.0, posinf=0, neginf=0)
         
         n_samples = inputs.shape[0]
         n_parents = inputs.shape[1]
@@ -208,9 +209,8 @@ class NNTransformation(EdgeTransformation):
         if self.noise_scale > 0:
             output = output + self.rng.normal(0, self.noise_scale, size=output.shape)
         
-        # Clip extreme values to prevent overflow in downstream processing
-        output = np.clip(output, -1e10, 1e10)
-        output = np.nan_to_num(output, nan=0.0, posinf=1e10, neginf=-1e10)
+        # Sanitize output - handle NaN/Inf from overflow
+        output = np.nan_to_num(output, nan=0.0, posinf=1e6, neginf=-1e6)
         
         return output.squeeze()
     
@@ -255,8 +255,7 @@ class TreeTransformation(EdgeTransformation):
             inputs = inputs.reshape(1, -1)
         
         # Sanitize inputs
-        inputs = np.clip(inputs, -1e10, 1e10)
-        inputs = np.nan_to_num(inputs, nan=0.0, posinf=1e10, neginf=-1e10)
+        inputs = np.nan_to_num(inputs, nan=0.0, posinf=1e6, neginf=-1e6)
         
         n_samples = inputs.shape[0]
         n_parents = inputs.shape[1]
@@ -287,9 +286,8 @@ class TreeTransformation(EdgeTransformation):
         if self.noise_scale > 0:
             outputs = outputs + self.rng.normal(0, self.noise_scale, size=outputs.shape)
         
-        # Clip extreme values to prevent overflow
-        outputs = np.clip(outputs, -1e10, 1e10)
-        outputs = np.nan_to_num(outputs, nan=0.0, posinf=1e10, neginf=-1e10)
+        # Sanitize output
+        outputs = np.nan_to_num(outputs, nan=0.0, posinf=1e6, neginf=-1e6)
         
         return outputs.squeeze()
     
@@ -328,8 +326,7 @@ class DiscretizationTransformation(EdgeTransformation):
             inputs = inputs.reshape(1, -1)
         
         # Sanitize inputs
-        inputs = np.clip(inputs, -1e10, 1e10)
-        inputs = np.nan_to_num(inputs, nan=0.0, posinf=1e10, neginf=-1e10)
+        inputs = np.nan_to_num(inputs, nan=0.0, posinf=1e6, neginf=-1e6)
         
         n_samples = inputs.shape[0]
         n_parents = inputs.shape[1]
@@ -365,10 +362,6 @@ class DiscretizationTransformation(EdgeTransformation):
         # Add Gaussian noise N(0, noise_scale²)
         if self.noise_scale > 0:
             output = output + self.rng.normal(0, self.noise_scale, size=output.shape)
-        
-        # Clip extreme values (shouldn't be needed but for safety)
-        output = np.clip(output, -1e10, 1e10)
-        output = np.nan_to_num(output, nan=0.0, posinf=1e10, neginf=-1e10)
         
         return output.squeeze()
     
@@ -446,9 +439,8 @@ class PassthroughTransformation(EdgeTransformation):
         if self.noise_scale > 0:
             output += self.rng.normal(0, self.noise_scale, size=output.shape)
         
-        # Clip and handle NaN
-        output = np.clip(output, -1e10, 1e10)
-        output = np.nan_to_num(output, nan=0.0, posinf=1e10, neginf=-1e10)
+        # Sanitize
+        output = np.nan_to_num(output, nan=0.0, posinf=1e6, neginf=-1e6)
         
         return output.squeeze()
     

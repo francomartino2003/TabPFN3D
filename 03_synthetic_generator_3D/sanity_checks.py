@@ -69,11 +69,10 @@ class DatasetStats3D:
     is_classification: bool
     n_classes: int
     sample_mode: str
-    target_offset_type: str
-    target_offset: int
-    n_noise_inputs: int
+    target_offset: int  # 0=within, >0=future, <0=past
     n_time_inputs: int
     n_state_inputs: int
+    spatial_distance_alpha: float = 1.5
     
     # Model performance
     baseline_acc: float
@@ -924,30 +923,25 @@ def sanity_check_8_input_type_impact(datasets: List[SyntheticDataset3D]) -> Dict
     
     for ds in datasets:
         cfg = ds.config
-        total_inputs = cfg.n_noise_inputs + cfg.n_time_inputs + cfg.n_state_inputs
+        total_inputs = cfg.n_time_inputs + cfg.n_state_inputs
         
         stats.append({
-            'n_noise': cfg.n_noise_inputs,
             'n_time': cfg.n_time_inputs,
             'n_state': cfg.n_state_inputs,
             'total': total_inputs,
-            'noise_ratio': cfg.n_noise_inputs / total_inputs if total_inputs > 0 else 0,
             'time_ratio': cfg.n_time_inputs / total_inputs if total_inputs > 0 else 0,
             'state_ratio': cfg.n_state_inputs / total_inputs if total_inputs > 0 else 0
         })
     
     results = {
         'n_datasets': len(stats),
-        'mean_noise': float(np.mean([s['n_noise'] for s in stats])),
         'mean_time': float(np.mean([s['n_time'] for s in stats])),
         'mean_state': float(np.mean([s['n_state'] for s in stats])),
-        'mean_noise_ratio': float(np.mean([s['noise_ratio'] for s in stats])),
         'mean_time_ratio': float(np.mean([s['time_ratio'] for s in stats])),
         'mean_state_ratio': float(np.mean([s['state_ratio'] for s in stats]))
     }
     
     print(f"\n  Mean input counts:")
-    print(f"    Noise inputs: {results['mean_noise']:.1f} ({results['mean_noise_ratio']*100:.0f}%)")
     print(f"    Time inputs:  {results['mean_time']:.1f} ({results['mean_time_ratio']*100:.0f}%)")
     print(f"    State inputs: {results['mean_state']:.1f} ({results['mean_state_ratio']*100:.0f}%)")
     
