@@ -265,12 +265,13 @@ def load_real_datasets(config: FinetuneConfig) -> List[Dict[str, Any]]:
         return []
     
     with open(pkl_path, 'rb') as f:
-        datasets_dict = pickle.load(f)
+        datasets_list = pickle.load(f)
     
     valid_datasets = []
     
-    for name, dataset in datasets_dict.items():
+    for dataset in datasets_list:
         try:
+            name = dataset.name
             # Get data
             X_train = dataset.X_train  # (n_samples, length, n_channels) or (n_samples, length)
             y_train = dataset.y_train
