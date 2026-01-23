@@ -1,43 +1,65 @@
-status,reason,dataset_id,dataset_name,sample_mode,shape,accuracy,roc_auc,train_time,n_train,n_test,n_features_flat,n_classes
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",0,synthetic_0000,iid,"(2015, 1, 126)",,,,,,,
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",1,synthetic_0001,iid,"(2885, 1, 92)",,,,,,,
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",2,synthetic_0002,iid,"(1562, 2, 146)",,,,,,,
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",3,synthetic_0003,iid,"(2235, 3, 98)",,,,,,,
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",4,synthetic_0004,iid,"(1453, 1, 137)",,,,,,,
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",5,synthetic_0005,iid,"(2617, 1, 265)",,,,,,,
-success,,6,synthetic_0006,iid,"(917, 3, 106)",0.9706959706959707,0.9993026103499559,98.1675910949707,644.0,273.0,318.0,4.0
-success,,7,synthetic_0007,sliding_window,"(290, 1, 68)",0.15476190476190477,0.5056122448979592,7.5257909297943115,206.0,84.0,68.0,6.0
-success,,8,synthetic_0008,sliding_window,"(630, 1, 216)",0.8138297872340425,0.8210728836577637,48.170027017593384,442.0,188.0,216.0,2.0
-success,,9,synthetic_0009,mixed,"(1006, 1, 70)",0.22333333333333333,0.47745185185185185,26.19102907180786,706.0,300.0,70.0,4.0
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",10,synthetic_0010,mixed,"(1614, 1, 92)",,,,,,,
-success,,11,synthetic_0011,iid,"(1386, 1, 93)",0.8265060240963855,0.9727101175787487,44.67563605308533,971.0,415.0,93.0,5.0
-success,,12,synthetic_0012,sliding_window,"(60, 1, 294)",1.0,1.0,8.83213996887207,42.0,18.0,294.0,3.0
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",13,synthetic_0013,iid,"(2300, 1, 213)",,,,,,,
-success,,14,synthetic_0014,iid,"(992, 1, 74)",0.6666666666666666,0.8244056728905212,26.061302185058594,695.0,297.0,74.0,3.0
-success,,15,synthetic_0015,mixed,"(1265, 3, 121)",0.48148148148148145,0.6453346770807089,165.5138499736786,887.0,378.0,363.0,3.0
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",16,synthetic_0016,iid,"(2406, 1, 53)",,,,,,,
-success,,17,synthetic_0017,sliding_window,"(20, 2, 217)",0.5,0.3333333333333333,8.487138986587524,14.0,6.0,434.0,2.0
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",18,synthetic_0018,iid,"(2680, 1, 143)",,,,,,,
-error,"Running on CPU with more than 1000 samples is not allowed by default due to slow performance.
-To override this behavior, set the environment variable TABPFN_ALLOW_CPU_LARGE_DATASET=1 or set ignore_pretraining_limits=True.
-Alternatively, consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client",19,synthetic_0019,iid,"(1470, 2, 179)",,,,,,,
+status,accuracy,roc_auc,train_time,n_train,n_test,n_features_flat,n_classes,dataset_id,dataset_name,sample_mode,shape
+success,0.8,0.95,2.9564552307128906,5,5,73,5,0,synthetic_0000,sliding_window,"(10, 1, 73)"
+success,0.08333333333333333,0.36111111111111116,3.1170730590820312,28,12,89,4,1,synthetic_0001,sliding_window,"(40, 1, 89)"
+success,0.3125,0.6744140625,20.332419872283936,200,80,217,5,2,synthetic_0002,sliding_window,"(280, 1, 217)"
+success,0.9496402877697842,0.9833859531080171,22.876724004745483,654,278,65,2,3,synthetic_0003,mixed,"(932, 1, 65)"
+success,0.9932885906040269,0.9991547289699123,131.02214336395264,702,298,327,3,4,synthetic_0004,iid,"(1000, 3, 109)"
+success,0.23,0.4915259259259259,133.39309906959534,700,300,314,4,5,synthetic_0005,mixed,"(1000, 2, 157)"
+success,0.6666666666666666,0.7736625514403292,3.8715641498565674,63,27,73,3,6,synthetic_0006,sliding_window,"(90, 1, 73)"
+success,0.3691275167785235,0.5117309140782211,22.8129940032959,702,298,54,3,7,synthetic_0007,iid,"(1000, 1, 54)"
+success,0.272,0.49672000000000005,12.842362880706787,305,125,54,5,8,synthetic_0008,sliding_window,"(430, 1, 54)"
+success,0.4666666666666667,0.45057777777777774,46.643815994262695,700,300,127,2,9,synthetic_0009,mixed,"(1000, 1, 127)"
+success,0.3673469387755102,0.5153061224489796,186.54576921463013,692,294,497,3,10,synthetic_0010,iid,"(986, 7, 71)"
+success,0.15476190476190477,0.5069727891156464,17.57421374320984,208,84,127,6,11,synthetic_0011,iid,"(292, 1, 127)"
+success,0.19666666666666666,0.5245416666666667,11.081265926361084,700,300,276,5,12,synthetic_0012,mixed,"(1000, 1, 276)"
+success,0.22377622377622378,0.46173876314063234,37.041632890701294,336,143,228,4,13,synthetic_0013,iid,"(479, 3, 76)"
+success,0.9228187919463087,0.9942553283060799,51.8089439868927,702,298,138,6,14,synthetic_0014,iid,"(1000, 1, 138)"
+success,0.6373626373626373,0.7907517221973257,31.41956901550293,428,182,168,3,15,synthetic_0015,iid,"(610, 1, 168)"
+success,0.5476190476190477,0.5511463844797178,151.4170298576355,590,252,498,2,16,synthetic_0016,iid,"(842, 3, 166)"
+success,0.9533333333333334,0.9976444444444444,92.10722208023071,700,300,201,2,17,synthetic_0017,iid,"(1000, 3, 67)"
+success,0.4666666666666667,0.8005050505050504,116.9711742401123,393,165,498,5,18,synthetic_0018,iid,"(558, 3, 166)"
+success,0.29457364341085274,0.464485307373355,58.70836400985718,306,129,436,3,19,synthetic_0019,iid,"(435, 4, 109)"
+success,0.16666666666666666,0.4680272108843538,25.577433109283447,108,42,500,6,20,synthetic_0020,sliding_window,"(150, 2, 250)"
+success,0.20833333333333334,0.39091435185185186,16.558167934417725,170,72,227,3,21,synthetic_0021,mixed,"(242, 1, 227)"
+success,0.15436241610738255,0.5327818092026039,94.35330891609192,702,298,201,6,22,synthetic_0022,iid,"(1000, 1, 201)"
+success,0.47,0.7147555555555556,498.89670395851135,700,300,500,4,23,synthetic_0023,iid,"(1000, 5, 100)"
+success,0.49,0.8337361111111112,22.005720138549805,700,300,51,5,24,synthetic_0024,mixed,"(1000, 1, 51)"
+success,0.5,0.8035601764335224,10.615228176116943,218,92,83,4,25,synthetic_0025,sliding_window,"(310, 1, 83)"
+success,0.7666666666666667,0.9719999999999999,4.302397966384888,80,30,60,6,26,synthetic_0026,sliding_window,"(110, 1, 60)"
+success,0.6677852348993288,0.7535783282216793,25.920167922973633,702,298,69,3,27,synthetic_0027,iid,"(1000, 1, 69)"
+success,0.20909090909090908,0.4982438016528926,28.20834493637085,270,110,215,5,28,synthetic_0028,sliding_window,"(380, 1, 215)"
+success,0.22413793103448276,0.5199910820451843,29.206870079040527,681,290,77,5,29,synthetic_0029,mixed,"(971, 1, 77)"
+success,0.6610738255033557,0.7950896949665962,109.37322306632996,702,298,252,3,30,synthetic_0030,mixed,"(1000, 1, 252)"
+success,0.16161616161616163,0.5006427915518824,35.45248484611511,472,198,152,6,31,synthetic_0031,iid,"(670, 1, 152)"
+success,0.9827586206896551,0.9991082045184305,28.895474195480347,274,116,222,2,32,synthetic_0032,sliding_window,"(390, 1, 222)"
+success,0.3523489932885906,0.5084752792502952,141.60731315612793,702,298,364,3,33,synthetic_0033,iid,"(1000, 2, 182)"
+success,0.10416666666666667,0.44739583333333327,7.886621952056885,122,48,109,6,34,synthetic_0034,sliding_window,"(170, 1, 109)"
+success,0.7915057915057915,,13.797251224517822,606,259,87,4,35,synthetic_0035,sliding_window,"(865, 1, 87)"
+success,0.13333333333333333,0.4444444444444445,9.641309976577759,35,15,344,5,36,synthetic_0036,sliding_window,"(50, 4, 86)"
+success,0.7752293577981652,0.9353589765171283,100.64360499382019,514,218,316,2,37,synthetic_0037,iid,"(732, 2, 158)"
+success,0.9536423841059603,1.0,38.227344036102295,359,151,261,5,38,synthetic_0038,sliding_window,"(510, 3, 87)"
+success,0.18456375838926176,0.5044878039979793,56.450599908828735,702,298,160,6,39,synthetic_0039,mixed,"(1000, 2, 80)"
+success,0.30333333333333334,0.5725185185185185,41.67989206314087,700,300,118,4,40,synthetic_0040,iid,"(1000, 1, 118)"
+success,0.8533333333333334,0.9706222222222223,101.23719191551208,700,300,226,4,41,synthetic_0041,iid,"(1000, 2, 113)"
+success,0.2916666666666667,0.5563586545729402,35.359379053115845,392,168,185,4,42,synthetic_0042,sliding_window,"(560, 1, 185)"
+success,0.5133333333333333,0.5214222222222222,28.863415718078613,351,150,171,2,43,synthetic_0043,mixed,"(501, 1, 171)"
+success,0.18120805369127516,0.5194739229705138,14.31675386428833,702,298,80,6,44,synthetic_0044,mixed,"(1000, 1, 80)"
+success,0.6161616161616161,0.8137434955616774,51.93523192405701,231,99,498,3,45,synthetic_0045,sliding_window,"(330, 3, 166)"
+success,0.4866666666666667,0.7139851851851852,52.010642290115356,700,300,153,4,46,synthetic_0046,iid,"(1000, 1, 153)"
+success,0.6363636363636364,0.8306988806988808,17.212631702423096,135,55,289,3,47,synthetic_0047,sliding_window,"(190, 1, 289)"
+success,0.32608695652173914,0.7496626180836706,4.849602937698364,114,46,55,6,48,synthetic_0048,sliding_window,"(160, 1, 55)"
+success,0.3389261744966443,0.6699896033582262,153.6878218650818,702,298,344,6,49,synthetic_0049,iid,"(1000, 4, 86)"
+success,0.475,0.7974609375,11.655958890914917,200,80,99,5,50,synthetic_0050,sliding_window,"(280, 1, 99)"
+success,0.6984126984126984,0.7482993197278912,14.48615574836731,155,63,208,3,51,synthetic_0051,iid,"(218, 1, 208)"
+success,0.9630872483221476,0.9986064087482209,27.67369294166565,702,298,68,6,52,synthetic_0052,iid,"(1000, 1, 68)"
+success,0.17114093959731544,0.4925681835373536,30.456578016281128,702,298,70,6,53,synthetic_0053,iid,"(1000, 1, 70)"
+success,0.24333333333333335,0.49260740740740744,6.965565919876099,700,300,156,4,54,synthetic_0054,iid,"(1000, 1, 156)"
+success,0.17037037037037037,0.5244115226337448,39.679466009140015,630,270,106,6,55,synthetic_0055,iid,"(900, 1, 106)"
+success,0.5555555555555556,0.8833333333333333,9.725976943969727,105,45,161,5,56,synthetic_0056,sliding_window,"(150, 1, 161)"
+success,0.5,0.49704142011834324,35.83633899688721,182,78,500,2,57,synthetic_0057,sliding_window,"(260, 4, 125)"
+success,0.64,0.9,9.947647094726562,130,50,174,5,58,synthetic_0058,sliding_window,"(180, 3, 58)"
+success,0.2916666666666667,0.5393518518518519,7.665373802185059,66,24,178,4,59,synthetic_0059,sliding_window,"(90, 2, 89)"
+success,0.7361111111111112,0.7932098765432098,23.358099222183228,171,72,328,2,60,synthetic_0060,sliding_window,"(243, 2, 164)"
+success,0.3724832214765101,0.5008201471052639,35.8732328414917,702,298,81,3,61,synthetic_0061,iid,"(1000, 1, 81)"
+success,0.6710526315789473,0.7736611265004617,153.71370315551758,534,228,500,3,62,synthetic_0062,iid,"(762, 4, 125)"
+success,0.2222222222222222,0.5247147512479177,30.653305768966675,550,234,98,5,63,synthetic_0063,iid,"(784, 1, 98)"

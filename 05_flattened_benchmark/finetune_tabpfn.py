@@ -65,7 +65,7 @@ class FinetuneConfig:
     """Configuration for fine-tuning TabPFN."""
     
     # Training
-    lr: float = 1e-5  # Very low LR to not destroy pretrained weights
+    lr: float = 3e-5  # Low LR to not destroy pretrained weights (was 1e-5)
     weight_decay: float = 0.01
     batch_size: int = 64  # Number of datasets per gradient update
     n_steps: int = 1000  # Number of optimizer steps
@@ -177,7 +177,10 @@ class SyntheticDataGenerator:
     def generate_one(self, max_retries: int = 10) -> Dict[str, Any]:
         """Generate one synthetic dataset (flattened, train/test split).
         
-        Uses stratified split to ensure all classes are in both train and test.
+        Split strategy depends on sample_mode:
+        - IID: Stratified random split (samples are independent)
+        - Sliding window / Mixed: Temporal split (to avoid data leakage from overlapping windows)
+        
         Validates that features are not constant.
         """
         from sklearn.model_selection import train_test_split
@@ -195,6 +198,9 @@ class SyntheticDataGenerator:
                 X_3d = dataset.X  # (n_samples, n_features, length)
                 y = dataset.y
                 
+                # Get sample mode from metadata
+                sample_mode = dataset.metadata.get('sample_mode', 'iid')
+                
                 # Flatten
                 n_samples, n_features, length = X_3d.shape
                 X_flat = X_3d.reshape(n_samples, -1)
@@ -210,23 +216,50 @@ class SyntheticDataGenerator:
                 if n_classes < 2:
                     continue  # Need at least 2 classes
                 
-                # Check that we have enough samples per class for stratified split
-                class_counts = np.bincount(y.astype(int))
-                min_samples_per_class = class_counts[class_counts > 0].min()
-                if min_samples_per_class < 2:
-                    continue  # Need at least 2 samples per class for stratified split
-                
-                # Stratified train/test split (ensures all classes in both sets)
-                try:
-                    X_train, X_test, y_train, y_test = train_test_split(
-                        X_flat, y, 
-                        test_size=0.3, 
-                        stratify=y,
-                        random_state=self.seed + self.dataset_count
-                    )
-                except ValueError:
-                    # Stratified split failed (e.g., class with only 1 sample)
-                    continue
+                # Split strategy based on sample_mode
+                if sample_mode == 'iid':
+                    # IID mode: stratified random split is OK
+                    # Check that we have enough samples per class
+                    class_counts = np.bincount(y.astype(int))
+                    min_samples_per_class = class_counts[class_counts > 0].min()
+                    if min_samples_per_class < 2:
+                        continue
+                    
+                    try:
+                        X_train, X_test, y_train, y_test = train_test_split(
+                            X_flat, y, 
+                            test_size=0.3, 
+                            stratify=y,
+                            random_state=self.seed + self.dataset_count
+                        )
+                    except ValueError:
+                        continue
+                else:
+                    # Sliding window or Mixed: TEMPORAL split to avoid data leakage
+                    # First 70% of samples for train, last 30% for test
+                    # (samples are ordered temporally in these modes)
+                    n_train = int(0.7 * n_samples)
+                    
+                    if n_train < 10 or (n_samples - n_train) < 5:
+                        continue  # Not enough samples
+                    
+                    X_train = X_flat[:n_train]
+                    X_test = X_flat[n_train:]
+                    y_train = y[:n_train]
+                    y_test = y[n_train:]
+                    
+                    # Check that both splits have at least 2 classes
+                    train_classes = set(np.unique(y_train))
+                    test_classes = set(np.unique(y_test))
+                    
+                    if len(train_classes) < 2 or len(test_classes) < 2:
+                        continue
+                    
+                    # Check that test classes are subset of train classes
+                    # (otherwise LabelEncoder will fail)
+                    if not test_classes.issubset(train_classes):
+                        # Some test classes not in train - skip this dataset
+                        continue
                 
                 X_train = X_train.astype(np.float32)
                 X_test = X_test.astype(np.float32)
@@ -235,7 +268,7 @@ class SyntheticDataGenerator:
                 
                 # Encode labels to be contiguous (0, 1, 2, ...)
                 le = LabelEncoder()
-                le.fit(y_train)  # Now y_test is guaranteed to have same classes
+                le.fit(y_train)
                 y_train = le.transform(y_train)
                 y_test = le.transform(y_test)
                 
@@ -266,6 +299,7 @@ class SyntheticDataGenerator:
                     'n_classes': len(le.classes_),
                     'n_features': X_flat.shape[1],
                     'n_samples': n_samples,
+                    'sample_mode': sample_mode,
                     'metadata': dataset.metadata,
                 }
                 

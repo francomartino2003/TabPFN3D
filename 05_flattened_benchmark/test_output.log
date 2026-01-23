@@ -1,0 +1,33 @@
+============================================================
+COMPARING n_estimators EFFECT ON ACCURACY
+============================================================
+
+synthetic_0000: 2015 samples, 126 features, 3 classes
+  n_estimators=1:  Acc = 0.3686
+  n_estimators=4:  Acc = 0.3769
+  n_estimators=16: Acc = 0.3702
+  Difference (16 vs 1): +0.0017
+
+synthetic_0001: 2885 samples, 92 features, 3 classes
+  n_estimators=1:  Acc = 0.6663
+  n_estimators=4:  Acc = 0.6663
+  n_estimators=16: Acc = 0.6674
+  Difference (16 vs 1): +0.0012
+
+synthetic_0002: 1562 samples, 292 features, 2 classes
+  n_estimators=1:  Acc = 0.7591
+  n_estimators=4:  Acc = 0.7591
+  n_estimators=16: Acc = 0.7591
+  Difference (16 vs 1): +0.0000
+
+synthetic_0003: 2235 samples, 294 features, 2 classes
+  n_estimators=1:  Acc = 0.4829
+  n_estimators=4:  Acc = 0.4963
+  n_estimators=16: Acc = 0.4933
+  Difference (16 vs 1): +0.0104
+
+synthetic_0004: 270 samples, 160 features, 6 classes
+  n_estimators=1:  Acc = 0.1605
+  n_estimators=4:  Acc = 0.1481
+  n_estimators=16: Acc = 0.1358
+  Difference (16 vs 1): -0.0247

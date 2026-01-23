@@ -252,8 +252,9 @@ class StateInputManager:
             key = (t_source, state_config.source_node_id)
             if key in history:
                 raw_value = history[key]
-                # Normalize with tanh
-                return np.tanh(self.alpha * raw_value)
+                # Return raw value without tanh normalization
+                # This preserves the original signal structure
+                return raw_value
             else:
                 # Fallback: noise (shouldn't happen if history is built correctly)
                 return self.noise_gen.generate(n_samples)

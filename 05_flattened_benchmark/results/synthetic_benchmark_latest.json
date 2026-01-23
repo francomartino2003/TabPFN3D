@@ -1,11 +1,11 @@
 {
-  "total_datasets": 20,
-  "successful": 9,
+  "total_datasets": 64,
+  "successful": 64,
   "skipped": 0,
-  "errors": 11,
-  "mean_accuracy": 0.6263639075855316,
-  "std_accuracy": 0.3075699070633016,
-  "mean_roc_auc": 0.7310248212934269,
-  "std_roc_auc": 0.25004310606427355,
-  "mean_train_time": 48.1805005868276
+  "errors": 0,
+  "mean_accuracy": 0.47067104275076543,
+  "std_accuracy": 0.2679100542730992,
+  "mean_roc_auc": 0.6715362487107476,
+  "std_roc_auc": 0.1971422306424906,
+  "mean_train_time": 52.984485402703285
 }

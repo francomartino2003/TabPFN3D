@@ -522,7 +522,7 @@ def train(
             if multi_gpu_trainer:
                 multi_gpu_trainer.zero_grad()
             else:
-                optimizer.zero_grad()
+            optimizer.zero_grad()
             
             # Accumulate gradients over multiple forward passes
             step_loss = 0.0
@@ -539,30 +539,30 @@ def train(
             else:
                 # Single GPU: process samples sequentially
                 for accum_idx, samples in enumerate(step_batches):
-                    
-                    # Forward and backward for each sample in batch
-                    for sample in samples:
-                        try:
-                            output = forward_backward_step(
-                                model, sample, config, 
-                                accumulation_steps=effective_batch
-                            )
-                            step_loss += output["loss"]
-                            step_acc += output["accuracy"]
-                            n_processed += 1
+                
+                # Forward and backward for each sample in batch
+                for sample in samples:
+                    try:
+                        output = forward_backward_step(
+                            model, sample, config, 
+                            accumulation_steps=effective_batch
+                        )
+                        step_loss += output["loss"]
+                        step_acc += output["accuracy"]
+                        n_processed += 1
                         except (RuntimeError, ValueError) as e:
                             error_msg = str(e).lower()
                             if "out of memory" in error_msg:
-                                # Clear CUDA cache and skip this sample
-                                torch.cuda.empty_cache()
-                                print(f"  [OOM] Skipped dataset with shape {sample.X_full.shape}")
-                                continue
+                            # Clear CUDA cache and skip this sample
+                            torch.cuda.empty_cache()
+                            print(f"  [OOM] Skipped dataset with shape {sample.X_full.shape}")
+                            continue
                             elif "cannot reshape" in error_msg or "size 0" in error_msg:
                                 # Skip empty or invalid datasets
                                 print(f"  [Invalid] Skipped dataset with shape {sample.X_full.shape}: {str(e)[:100]}")
                                 continue
-                            else:
-                                raise e
+                        else:
+                            raise e
             
             # Optimizer step after accumulation
             optimizer_step(model, optimizer, config)
@@ -641,19 +641,19 @@ def train(
                 
                 # Evaluate on real (only if enabled)
                 if config.training.eval_real_datasets:
-                    val_real_size = getattr(config.training, 'val_real_size', 20)
-                    real_result = evaluate_on_real(model, config, n_datasets=val_real_size)
-                    if real_result.n_datasets > 0:
-                        print(f"Real Val ({real_result.n_datasets} datasets): "
-                              f"Acc={real_result.mean_accuracy:.4f} | "
-                              f"F1={real_result.mean_macro_f1:.4f}")
-                        val_real_accs.append(real_result.mean_accuracy)
-                    else:
-                        print("Real Val: No datasets available")
-                        val_real_accs.append(0.0)
-                    
-                    # Add to metrics
-                    metrics.add_val_metrics(synth_result, real_result)
+                val_real_size = getattr(config.training, 'val_real_size', 20)
+                real_result = evaluate_on_real(model, config, n_datasets=val_real_size)
+                if real_result.n_datasets > 0:
+                    print(f"Real Val ({real_result.n_datasets} datasets): "
+                          f"Acc={real_result.mean_accuracy:.4f} | "
+                          f"F1={real_result.mean_macro_f1:.4f}")
+                    val_real_accs.append(real_result.mean_accuracy)
+                else:
+                    print("Real Val: No datasets available")
+                    val_real_accs.append(0.0)
+                
+                # Add to metrics
+                metrics.add_val_metrics(synth_result, real_result)
                 else:
                     # Skip real dataset evaluation
                     real_result = BatchEvaluationResult(

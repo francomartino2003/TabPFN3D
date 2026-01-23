@@ -126,11 +126,11 @@ class TemporalPropagator:
             timestep_values = self._propagate_single_timestep(root_inputs, n_samples)
             
             # Store values in history with safety clipping
-            # This prevents explosion accumulation across timesteps
+            # Store values in history, only handling extreme overflow
             for node_id, values in timestep_values.items():
-                # Clip to reasonable range and handle NaN/Inf
-                clipped = np.clip(values, -100, 100)
-                clipped = np.nan_to_num(clipped, nan=0.0, posinf=100, neginf=-100)
+                # Only clip extreme values to prevent numerical overflow
+                clipped = np.clip(values, -1e6, 1e6)
+                clipped = np.nan_to_num(clipped, nan=0.0, posinf=1e6, neginf=-1e6)
                 history[(t, node_id)] = clipped
         
         return TemporalPropagatedValues(
@@ -352,11 +352,10 @@ class BatchTemporalPropagator:
                         weights = weights / (np.linalg.norm(weights) + 1e-8)
                         values[idx, :, t] = parent_vals @ weights
                 
-                # Safety clip to prevent explosion across timesteps
-                # Clip values before storing in array and history
+                # Only clip extreme values to prevent numerical overflow
                 node_values = values[idx, :, t]
-                node_values = np.clip(node_values, -100, 100)
-                node_values = np.nan_to_num(node_values, nan=0.0, posinf=100, neginf=-100)
+                node_values = np.clip(node_values, -1e6, 1e6)
+                node_values = np.nan_to_num(node_values, nan=0.0, posinf=1e6, neginf=-1e6)
                 values[idx, :, t] = node_values
                 
                 # Store in history for state lookups

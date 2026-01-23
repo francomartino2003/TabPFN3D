@@ -122,7 +122,7 @@ def create_matching_prior(real_stats: Dict):
     
     prior = PriorConfig3D(
         # === Size constraints ===
-        max_samples=10000,
+        max_samples=1000,  # Match finetuning constraint
         max_features=12,  # Max features (will be constrained by 500 rule)
         max_t_subseq=500,
         max_T_total=600,
@@ -149,18 +149,18 @@ def create_matching_prior(real_stats: Dict):
         t_subseq_range=(50, min(300, length['p75'])),  # Adjusted for multivariate
         t_subseq_log_uniform=True,
         
-        # === Graph structure (v3: distance preference controls complexity) ===
-        n_nodes_range=(8, 30),
+        # === Graph structure (v4: smaller DAGs, fewer inputs) ===
+        n_nodes_range=(5, 15),  # Smaller DAGs
         n_nodes_log_uniform=True,
         density_range=(0.1, 0.6),
-        n_roots_range=(4, 18),
+        n_roots_range=(2, 6),   # FEW root inputs (2-6)
         min_roots_fraction=0.25,
         max_roots_fraction=0.60,
         
-        # === Root input distribution (v3: favor state inputs) ===
-        min_time_inputs=2,
-        min_state_inputs=2,
-        time_fraction_range=(0.20, 0.40),  # Less time = more state inputs
+        # === Root input distribution (v4: fully random mix) ===
+        min_time_inputs=0,      # No minimum - can be all state
+        min_state_inputs=0,     # No minimum - can be all time
+        time_fraction_range=(0.0, 1.0),  # FULLY RANDOM: 0% to 100% time
         
         # === State input parameters ===
         state_lag_range=(1, 8),
