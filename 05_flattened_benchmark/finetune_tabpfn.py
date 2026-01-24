@@ -108,7 +108,7 @@ class FinetuneConfig:
 # ============================================================================
 
 def create_synthetic_generator_prior(config: FinetuneConfig):
-    """Create PriorConfig3D that matches our constraints."""
+    """Create PriorConfig3D that matches our constraints (v5: optimized t_ratio)."""
     from config import PriorConfig3D
     
     prior = PriorConfig3D(
@@ -116,10 +116,11 @@ def create_synthetic_generator_prior(config: FinetuneConfig):
         max_samples=config.max_samples,
         max_features=10,
         max_t_subseq=500,
+        max_T_total=600,  # Will be optimized per sample_mode
         max_classes=config.max_classes,
         
         # Sample ranges
-        n_samples_range=(50, config.max_samples),
+        n_samples_range=(100, config.max_samples),
         
         # Feature count - mix of univariate and multivariate
         prob_univariate=0.65,
@@ -127,18 +128,26 @@ def create_synthetic_generator_prior(config: FinetuneConfig):
         n_features_beta_b=4.0,
         n_features_range=(2, 8),
         
-        # Temporal parameters
-        T_total_range=(30, 400),
-        t_subseq_range=(20, 300),
+        # Temporal parameters - T_total optimized in config.py
+        T_total_range=(50, 400),
+        t_subseq_range=(30, 300),
         
-        # Higher i.i.d. probability as requested
-        prob_iid_mode=config.prob_iid_mode,
-        prob_sliding_window_mode=config.prob_sliding_window,
-        prob_mixed_mode=config.prob_mixed,
+        # v5: More IID (better AUC, no temporal leakage)
+        prob_iid_mode=0.60,
+        prob_sliding_window_mode=0.25,
+        prob_mixed_mode=0.15,
         
-        # Graph structure
-        n_nodes_range=(8, 25),
+        # v5: Smaller DAGs, fewer inputs
+        n_nodes_range=(5, 15),
         density_range=(0.1, 0.5),
+        n_roots_range=(2, 6),
+        min_time_inputs=0,
+        min_state_inputs=0,  # IID mode forces >=1 state (in config.py)
+        time_fraction_range=(0.0, 1.0),  # Random mix
+        
+        # v5: Shorter lags
+        state_lag_range=(1, 5),
+        state_lag_geometric_p=0.6,
         
         # Transformations - more tree for complexity
         prob_nn_transform=0.40,
@@ -149,11 +158,15 @@ def create_synthetic_generator_prior(config: FinetuneConfig):
         force_classification=True,
         prob_classification=1.0,
         min_samples_per_class=25,
+        max_target_offset=15,  # Smaller for better t_ratio
         
-        # Low noise for cleaner signals
+        # v5: REDUCED noise for cleaner signals
         prob_edge_noise=0.03,
-        noise_scale_range=(0.001, 0.03),
-        prob_low_noise_dataset=0.5,
+        noise_scale_range=(0.001, 0.02),
+        prob_low_noise_dataset=0.4,
+        low_noise_scale_max=0.003,
+        init_sigma_range=(0.05, 0.5),
+        init_a_range=(0.2, 0.6),
     )
     
     return prior
@@ -627,14 +640,18 @@ class TabPFNFineTuner:
             # Compute loss
             loss = F.cross_entropy(logits_QL, y_test_t)
             
-            # Compute accuracy
+            # Compute accuracy and probabilities for AUC
             with torch.no_grad():
                 preds = logits_QL.argmax(dim=-1)
                 acc = (preds == y_test_t).float().mean()
+                # Probabilities for AUC calculation
+                probs = F.softmax(logits_QL, dim=-1)
             
             return {
                 'loss': loss,
                 'accuracy': acc,
+                'probs': probs.detach().cpu().numpy(),
+                'y_true': y_test_t.detach().cpu().numpy(),
             }
             
         except Exception as e:
@@ -646,6 +663,8 @@ class TabPFNFineTuner:
             return {
                 'loss': torch.tensor(0.0, device=self.device, requires_grad=True),
                 'accuracy': torch.tensor(0.0),
+                'probs': None,
+                'y_true': None,
             }
     
     def train_step(self, batch: List[Dict]) -> Dict[str, float]:
@@ -655,6 +674,8 @@ class TabPFNFineTuner:
         
         total_loss = 0.0
         total_acc = 0.0
+        all_probs = []
+        all_y_true = []
         n_valid = 0
         
         for data in batch:
@@ -674,6 +695,12 @@ class TabPFNFineTuner:
                     
                     total_loss += output['loss'].item()
                     total_acc += output['accuracy'].item()
+                    
+                    # Collect for AUC calculation
+                    if output['probs'] is not None:
+                        all_probs.append(output['probs'])
+                        all_y_true.append(output['y_true'])
+                    
                     n_valid += 1
                 
                 # Clear intermediate tensors to free memory
@@ -703,9 +730,27 @@ class TabPFNFineTuner:
         avg_loss = total_loss / max(1, n_valid)
         avg_acc = total_acc / max(1, n_valid)
         
+        # Calculate mean AUC across datasets in batch
+        avg_auc = 0.0
+        if all_probs and all_y_true:
+            aucs = []
+            for probs, y_true in zip(all_probs, all_y_true):
+                try:
+                    n_classes = probs.shape[1]
+                    if n_classes == 2:
+                        auc = roc_auc_score(y_true, probs[:, 1])
+                    else:
+                        auc = roc_auc_score(y_true, probs, multi_class='ovr', average='weighted')
+                    aucs.append(auc)
+                except Exception:
+                    pass
+            if aucs:
+                avg_auc = np.mean(aucs)
+        
         return {
             'loss': avg_loss,
             'accuracy': avg_acc,
+            'auc': avg_auc,
             'n_valid': n_valid,
             'lr': self.scheduler.get_last_lr()[0],
         }
@@ -925,8 +970,8 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
         
         # Log progress
         print(f"Step {step:5d} | Loss: {result['loss']:.4f} | "
-              f"Acc: {result['accuracy']:.4f} | LR: {result['lr']:.2e} | "
-              f"Time: {step_time:.2f}s")
+              f"Acc: {result['accuracy']:.4f} | AUC: {result['auc']:.4f} | "
+              f"LR: {result['lr']:.2e} | Time: {step_time:.2f}s")
         
         # Evaluation
         if (step + 1) % config.eval_every == 0 and real_datasets:

@@ -157,42 +157,46 @@ def create_matching_prior(real_stats: Dict):
         min_roots_fraction=0.25,
         max_roots_fraction=0.60,
         
-        # === Root input distribution (v4: fully random mix) ===
-        min_time_inputs=0,      # No minimum - can be all state
-        min_state_inputs=0,     # No minimum - can be all time
-        time_fraction_range=(0.0, 1.0),  # FULLY RANDOM: 0% to 100% time
+        # === Root input distribution (v5: random mix, but IID forces state) ===
+        # Note: For IID mode, config.py forces at least 1 state input
+        # because time-only inputs produce identical samples in IID
+        min_time_inputs=0,      # No minimum - can be all state  
+        min_state_inputs=0,     # No minimum (but IID will force >=1)
+        time_fraction_range=(0.0, 1.0),  # Random mix
         
         # === State input parameters ===
-        state_lag_range=(1, 8),
+        state_lag_range=(1, 5),  # Shorter lags
         state_lag_distribution='geometric',
-        state_lag_geometric_p=0.4,
-        state_alpha_range=(0.3, 0.8),  # Reduced to preserve information
+        state_lag_geometric_p=0.6,  # Higher p = shorter lags more probable
+        state_alpha_range=(0.3, 0.8),  # Legacy - not used (tanh removed)
         
         # === Transformations ===
         prob_nn_transform=0.40,
         prob_tree_transform=0.45,
-        prob_discretization=0.20,
+        prob_discretization=0.15,
         prob_identity_activation=0.5,
         
-        # === Noise (v3: variable per dataset) ===
-        prob_edge_noise=0.05,
-        noise_scale_range=(0.001, 0.08),
-        prob_low_noise_dataset=0.3,  # 30% clean datasets
-        low_noise_scale_max=0.005,
+        # === Noise (v5: further reduced for cleaner signals) ===
+        prob_edge_noise=0.03,
+        noise_scale_range=(0.001, 0.02),  # Reduced max
+        prob_low_noise_dataset=0.4,  # 40% clean datasets
+        low_noise_scale_max=0.003,
+        init_sigma_range=(0.05, 0.5),  # Reduced init noise
+        init_a_range=(0.2, 0.6),
         
         # === Distance preference (v3: unified for spatial and temporal) ===
         distance_alpha=1.5,  # Controls preference for closer distances
         
-        # === Sample generation mode ===
-        prob_iid_mode=0.5,
-        prob_sliding_window_mode=0.3,
-        prob_mixed_mode=0.2,
+        # === Sample generation mode (v5: more IID) ===
+        prob_iid_mode=0.60,  # Increased for better AUC
+        prob_sliding_window_mode=0.25,
+        prob_mixed_mode=0.15,
         
         # === Target (classification only) ===
         prob_classification=1.0,
         force_classification=True,
         min_samples_per_class=25,
-        max_target_offset=20,
+        max_target_offset=15,  # Reduced for better t_ratio
         prob_future=0.75,  # 75% future, 25% past for non-zero offsets
         
         # === Post-processing (minimal) ===

@@ -141,8 +141,8 @@ class PriorConfig3D:
     
     # === Noise for initialization (when t-k < 0) ===
     noise_types: List[str] = field(default_factory=lambda: ['normal', 'uniform', 'mixed'])
-    init_sigma_range: Tuple[float, float] = (0.1, 0.8)  # Reduced (was 0.1, 2.0)
-    init_a_range: Tuple[float, float] = (0.3, 0.8)      # Reduced (was 0.5, 2.0)
+    init_sigma_range: Tuple[float, float] = (0.05, 0.5)  # Reduced further for cleaner signals
+    init_a_range: Tuple[float, float] = (0.2, 0.6)       # Reduced further
     
     # === Edge transformations ===
     # Removed passthrough, higher tree probability for non-linear relationships
@@ -197,9 +197,10 @@ class PriorConfig3D:
     distance_alpha: float = 1.5
     
     # === Sample generation mode ===
-    prob_iid_mode: float = 0.35
-    prob_sliding_window_mode: float = 0.45
-    prob_mixed_mode: float = 0.20
+    # Increased IID probability (better AUC, no temporal leakage)
+    prob_iid_mode: float = 0.55
+    prob_sliding_window_mode: float = 0.30
+    prob_mixed_mode: float = 0.15
     
     # Sliding window parameters
     window_stride_range: Tuple[int, int] = (1, 10)
@@ -489,9 +490,18 @@ class DatasetConfig3D:
         mode_probs = np.array(mode_probs) / sum(mode_probs)
         sample_mode = rng.choice(['iid', 'sliding_window', 'mixed'], p=mode_probs)
         
-        if sample_mode in ['iid', 'mixed']:
-            burn_in = rng.integers(10, 50)
-            T_total = t_subseq + burn_in
+        # CRITICAL: For IID mode, we MUST have state inputs!
+        # Time inputs are deterministic functions of t, so without state inputs,
+        # all IID samples would have identical features/targets.
+        # State inputs get initialized with noise when t-lag < 0, creating variability.
+        if sample_mode == 'iid' and n_state == 0:
+            # Force at least 1 state input by converting a time input
+            if n_time > 1:
+                n_time -= 1
+                n_state = 1
+            else:
+                # If only 1 time input, add 1 state input (increase roots)
+                n_state = 1
         
         window_stride = rng.integers(*prior.window_stride_range) if sample_mode != 'iid' else 1
         n_sequences = rng.integers(2, 10) if sample_mode == 'mixed' else 1
@@ -509,12 +519,13 @@ class DatasetConfig3D:
         else:
             n_classes = 0
         
-        # Target offset - distance-weighted sampling
-        # prob(offset=k) ∝ 1 / (1 + |k|^alpha)
-        max_offset = min(prior.max_target_offset, T_total - t_subseq - 1)
-        max_offset = max(1, max_offset)
+        # === Sample target offset FIRST (to optimize T_total) ===
+        # Use a fixed reasonable max_offset, not dependent on T_total
+        # This way we can then compute optimal T_total
+        max_offset = min(prior.max_target_offset, 15)  # Cap at 15 for reasonable t_ratio
         
         # Generate possible offsets and their probabilities
+        # prob(offset=k) ∝ 1 / (1 + |k|^alpha)
         possible_offsets = list(range(-min(5, t_subseq - 1), max_offset + 1))
         alpha = prior.distance_alpha
         
@@ -532,6 +543,34 @@ class DatasetConfig3D:
         offset_probs = offset_probs / offset_probs.sum()
         
         target_offset = int(rng.choice(possible_offsets, p=offset_probs))
+        
+        # === OPTIMIZE T_total to maximize t_ratio ===
+        # For IID: we only need t_subseq + |offset| + minimal burn_in
+        # For sliding_window: need more room for window extraction
+        # For mixed: similar to sliding_window
+        
+        if sample_mode == 'iid':
+            # Minimal T_total: just what we need
+            # burn_in is for state initialization (states need some history)
+            max_state_lag = max([sc[1] for sc in state_configs]) if state_configs else 1
+            burn_in = max(5, max_state_lag + 2)  # Small burn-in
+            T_total = t_subseq + abs(target_offset) + burn_in
+        elif sample_mode == 'sliding_window':
+            # Need more room for multiple windows, but still optimize
+            # Estimate: need at least n_samples windows of size t_subseq
+            # With stride, need: t_subseq + (n_windows - 1) * stride
+            # But cap it to keep t_ratio reasonable
+            estimated_windows = min(n_samples, 100)  # Cap window count estimation
+            min_T_for_windows = t_subseq + estimated_windows * window_stride + abs(target_offset)
+            # But cap T_total to keep t_ratio > 0.3 at least
+            max_T_for_ratio = int(t_subseq / 0.25)  # t_ratio >= 0.25
+            T_total = min(min_T_for_windows, max_T_for_ratio)
+            T_total = max(T_total, t_subseq + abs(target_offset) + 10)
+        else:  # mixed
+            # Multiple independent sequences, each shorter
+            max_state_lag = max([sc[1] for sc in state_configs]) if state_configs else 1
+            burn_in = max(10, max_state_lag + 5)
+            T_total = t_subseq + abs(target_offset) + burn_in + 20  # Small extra
         
         # === Post-processing ===
         apply_warping = rng.random() < prior.prob_warping
