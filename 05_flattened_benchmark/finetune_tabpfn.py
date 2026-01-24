@@ -640,6 +640,10 @@ class TabPFNFineTuner:
             # Compute loss
             loss = F.cross_entropy(logits_QL, y_test_t)
             
+            # DEBUG: Check if gradients are enabled
+            if self.current_step < 2:
+                print(f"  DEBUG: logits.requires_grad={logits.requires_grad}, loss.requires_grad={loss.requires_grad}")
+            
             # Compute accuracy and probabilities for AUC
             with torch.no_grad():
                 preds = logits_QL.argmax(dim=-1)
@@ -655,13 +659,11 @@ class TabPFNFineTuner:
             }
             
         except Exception as e:
-            import traceback
-            import sys
-            print(f"  Forward error: {e}", flush=True)
-            traceback.print_exc(file=sys.stdout)
-            sys.stdout.flush()
+            # Short error message (avoid long CUDA OOM tracebacks)
+            print(f"  Skip: {type(e).__name__}", flush=True)
+            # Return loss WITHOUT requires_grad so it's not counted
             return {
-                'loss': torch.tensor(0.0, device=self.device, requires_grad=True),
+                'loss': torch.tensor(0.0, device=self.device, requires_grad=False),
                 'accuracy': torch.tensor(0.0),
                 'probs': None,
                 'y_true': None,
@@ -693,6 +695,11 @@ class TabPFNFineTuner:
                     scaled_loss = output['loss'] / len(batch)
                     scaled_loss.backward()
                     
+                    # DEBUG: Check gradients after first backward
+                    if self.current_step == 0 and n_valid == 0:
+                        grad_norms = [p.grad.norm().item() for p in self.model.parameters() if p.grad is not None]
+                        print(f"  DEBUG: grad_norm after backward = {sum(grad_norms):.6f}, n_params_with_grad={len(grad_norms)}")
+                    
                     total_loss += output['loss'].item()
                     total_acc += output['accuracy'].item()
                     
@@ -707,7 +714,7 @@ class TabPFNFineTuner:
                 del output
                     
             except Exception as e:
-                print(f"  Batch item error: {e}")
+                print(f"  Skip: {type(e).__name__}", flush=True)
                 continue
         
         # Gradient clipping
@@ -717,8 +724,20 @@ class TabPFNFineTuner:
                 self.config.grad_clip
             )
         
+        # DEBUG: Check weights before/after optimizer step
+        if self.current_step == 0:
+            param_sample = next(iter(self.model.parameters()))
+            before = param_sample.flatten()[:3].clone()
+        
         # Optimizer step
         self.optimizer.step()
+        
+        # DEBUG: Check if weights changed after optimizer step
+        if self.current_step == 0:
+            after = param_sample.flatten()[:3]
+            print(f"  DEBUG: param BEFORE = {before.tolist()}")
+            print(f"  DEBUG: param AFTER  = {after.tolist()}")
+            print(f"  DEBUG: param DIFF   = {(after - before).tolist()}")
         
         # Clear CUDA cache periodically to prevent memory fragmentation
         if self.device == 'cuda' and self.current_step % 10 == 0:
@@ -797,7 +816,7 @@ class TabPFNFineTuner:
                         pass
                         
                 except Exception as e:
-                    print(f"  Eval error on {data.get('name', 'synthetic')}: {e}")
+                    # Short error (avoid long messages)
                     continue
         
         return {
