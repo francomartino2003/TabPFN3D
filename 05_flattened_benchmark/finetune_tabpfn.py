@@ -760,22 +760,23 @@ class TabPFNFineTuner:
         all_aucs = []
         all_accs = []
         
-        # Create evaluation classifier (fresh, shares weights)
-        eval_clf = TabPFNClassifier(
-            device=self.device,
-            n_estimators=self.config.n_estimators_eval,
-            ignore_pretraining_limits=True,
-        )
-        # Copy model weights
-        eval_clf._initialize_model_variables()
-        eval_clf.model_.load_state_dict(self.model.state_dict())
-        eval_clf.model_.eval()
-        
         with torch.no_grad():
             for data in datasets:
                 try:
-                    # Use standard fit/predict for evaluation
+                    # Create fresh classifier for each dataset
+                    # (fit() re-initializes weights, so we must copy AFTER fit sets up the model)
+                    eval_clf = TabPFNClassifier(
+                        device=self.device,
+                        n_estimators=self.config.n_estimators_eval,
+                        ignore_pretraining_limits=True,
+                    )
+                    
+                    # Call fit to set up preprocessing and inference engine
                     eval_clf.fit(data['X_train'], data['y_train'])
+                    
+                    # NOW copy the finetuned weights (after fit initialized everything)
+                    eval_clf.model_.load_state_dict(self.model.state_dict())
+                    eval_clf.model_.eval()
                     
                     proba = eval_clf.predict_proba(data['X_test'])
                     preds = proba.argmax(axis=1)
@@ -1066,7 +1067,7 @@ def main():
     parser.add_argument('--batch-size', type=int, default=64, help='Batch size (datasets)')
     parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate')
     parser.add_argument('--eval-every', type=int, default=50, help='Eval frequency')
-    parser.add_argument('--n-eval-real', type=int, default=20, help='Number of real datasets to evaluate')
+    parser.add_argument('--n-eval-real', type=int, default=55, help='Number of real datasets to evaluate (all 55)')
     
     # Device
     parser.add_argument('--device', type=str, default='auto', help='Device (auto/cuda/mps/cpu)')
