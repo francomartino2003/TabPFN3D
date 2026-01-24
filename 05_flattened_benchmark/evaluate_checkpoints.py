@@ -23,7 +23,7 @@ from tabpfn import TabPFNClassifier
 
 def load_real_datasets(max_samples=1000, max_flat_features=500, max_classes=10):
     """Load and filter real datasets."""
-    datasets_path = Path(__file__).parent.parent / "01_real_data" / "data" / "classification_datasets.pkl"
+    datasets_path = Path(__file__).parent.parent / "01_real_data" / "AEON" / "data" / "classification_datasets.pkl"
     
     src_path = str(Path(__file__).parent.parent / "01_real_data" / "src")
     sys.path.insert(0, src_path)
