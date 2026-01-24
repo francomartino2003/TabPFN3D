@@ -74,7 +74,7 @@ class FinetuneConfig:
     
     # Evaluation
     eval_every: int = 50  # Evaluate on real datasets every N steps
-    n_eval_real: int = 20  # Number of real datasets to evaluate on
+    n_eval_real: int = 55  # Number of real datasets to evaluate (all available)
     
     # Data constraints
     max_samples: int = 1000
