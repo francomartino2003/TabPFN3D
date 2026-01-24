@@ -65,11 +65,11 @@ class FinetuneConfig:
     """Configuration for fine-tuning TabPFN."""
     
     # Training
-    lr: float = 3e-5  # Low LR to not destroy pretrained weights (was 1e-5)
+    lr: float = 3e-5  # Low LR to not destroy pretrained weights
     weight_decay: float = 0.01
     batch_size: int = 64  # Number of datasets per gradient update
     n_steps: int = 1000  # Number of optimizer steps
-    warmup_steps: int = 50
+    # No warmup needed - AdamW's adaptive moments provide natural stabilization
     grad_clip: float = 1.0
     
     # Evaluation
@@ -512,14 +512,14 @@ class TabPFNFineTuner:
         print(f"  Trainable: {n_trainable:,}")
     
     def _create_scheduler(self):
-        """Create learning rate scheduler with warmup + cosine decay."""
-        def lr_lambda(step):
-            if step < self.config.warmup_steps:
-                return step / max(1, self.config.warmup_steps)
-            progress = (step - self.config.warmup_steps) / max(1, self.config.n_steps - self.config.warmup_steps)
-            return max(0.01, 0.5 * (1 + np.cos(np.pi * progress)))
+        """Create learning rate scheduler.
         
-        return torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+        For fine-tuning with AdamW and low LR, we use CONSTANT LR.
+        AdamW's adaptive moments already provide natural stabilization,
+        making warmup redundant. Cosine decay is also optional for fine-tuning.
+        """
+        # Constant LR (factor = 1.0 always)
+        return torch.optim.lr_scheduler.LambdaLR(self.optimizer, lambda step: 1.0)
     
     
     def forward_single_dataset(
