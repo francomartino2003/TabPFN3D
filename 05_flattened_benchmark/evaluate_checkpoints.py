@@ -136,7 +136,8 @@ def evaluate_checkpoint(checkpoint_path, datasets, device='cuda'):
                 pass
                 
         except Exception as e:
-            print(f"  Error on {data['name']}: {type(e).__name__}")
+            err_name = type(e).__name__
+            print(f"  Error on {data['name']}: {err_name}")
             continue
     
     return {
