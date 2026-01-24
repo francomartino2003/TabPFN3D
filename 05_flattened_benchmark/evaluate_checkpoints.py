@@ -95,7 +95,7 @@ def load_real_datasets(max_samples=1000, max_flat_features=500, max_classes=10):
 def evaluate_checkpoint(checkpoint_path, datasets, device='cuda'):
     """Evaluate a single checkpoint on all datasets."""
     
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model_state = checkpoint['model_state_dict']
     step = checkpoint.get('step', 0)
     
