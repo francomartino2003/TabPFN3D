@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=eval_ckpt
-#SBATCH --partition=pi_dberts
+#SBATCH --partition=pi_dbertsim
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
