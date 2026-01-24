@@ -67,7 +67,7 @@ else
     echo "Running full training..."
     python -u finetune_tabpfn.py \
         --n-steps 1000 \
-        --batch-size 64 \
+        --batch-size 128 \
         --lr 1e-5 \
         --eval-every 50
 fi
