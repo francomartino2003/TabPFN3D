@@ -18,18 +18,19 @@ echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo ""
 
-# Load modules
-module load cuda/12.1
-module load anaconda3/2023.09
-
-# Activate environment
-source activate tabpfn3d
-
 # Go to project directory
-cd /home/fhernand/TabPFN3D
+cd $HOME/TabPFN3D
+
+# Activate conda environment
+source ~/.bashrc
+conda activate tabpfn3d
+
+# Check Python and CUDA
+echo "Python: $(which python)"
+echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
+echo ""
 
 # Run full finetuning
-# 1000 steps, batch size 64, eval every 50 steps
 python 07_finetuning/finetune_tabpfn.py \
     --n-steps 1000 \
     --batch-size 64 \

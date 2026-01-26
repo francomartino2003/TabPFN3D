@@ -11,22 +11,19 @@
 #SBATCH --mem=32G
 
 echo "============================================"
-echo "EVALUATE ALL CHECKPOINTS ON ALL REAL DATASETS"
+echo "EVALUATE ALL CHECKPOINTS"
 echo "============================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo ""
 
-# Load modules
-module load cuda/12.1
-module load anaconda3/2023.09
-
-# Activate environment
-source activate tabpfn3d
-
 # Go to project directory
-cd /home/fhernand/TabPFN3D
+cd $HOME/TabPFN3D
+
+# Activate conda environment
+source ~/.bashrc
+conda activate tabpfn3d
 
 # Run evaluation
 python 07_finetuning/evaluate_checkpoints.py \

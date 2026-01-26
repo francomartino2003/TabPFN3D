@@ -18,15 +18,17 @@ echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo ""
 
-# Load modules
-module load cuda/12.1
-module load anaconda3/2023.09
+# Go to project directory (adjust path as needed)
+cd $HOME/TabPFN3D
 
-# Activate environment
-source activate tabpfn3d
+# Activate conda environment (adjust name as needed)
+source ~/.bashrc
+conda activate tabpfn3d
 
-# Go to project directory
-cd /home/fhernand/TabPFN3D
+# Check Python and CUDA
+echo "Python: $(which python)"
+echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
+echo ""
 
 # Run debug finetuning
 python 07_finetuning/finetune_tabpfn.py \

@@ -9,9 +9,9 @@ Training approach:
 - Evaluate on ALL real datasets at checkpoints
 
 Constraints (for both synthetic and real):
-- n_samples ≤ 1000
-- n_features × length ≤ 500
-- n_classes ≤ 10
+- n_samples <= 1000
+- n_features * length <= 500
+- n_classes <= 10
 
 Usage:
     python finetune_tabpfn.py --n-steps 1000 --eval-every 50
