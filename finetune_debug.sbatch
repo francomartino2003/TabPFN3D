@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=eval_checkpoints
-#SBATCH --output=eval_checkpoints_%j.out
-#SBATCH --error=eval_checkpoints_%j.err
-#SBATCH --time=02:00:00
+#SBATCH --job-name=finetune_debug
+#SBATCH --output=finetune_debug_%j.out
+#SBATCH --error=finetune_debug_%j.err
+#SBATCH --time=00:30:00
 #SBATCH --partition=sched_mit_hill
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -11,7 +11,7 @@
 #SBATCH --mem=32G
 
 echo "============================================"
-echo "EVALUATE ALL CHECKPOINTS ON ALL REAL DATASETS"
+echo "FINETUNE TABPFN - DEBUG RUN"
 echo "============================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
@@ -28,12 +28,13 @@ source activate tabpfn3d
 # Go to project directory
 cd /home/fhernand/TabPFN3D
 
-# Run evaluation
-python 07_finetuning/evaluate_checkpoints.py \
-    --checkpoint-dir 07_finetuning/checkpoints \
-    --output-dir 07_finetuning/eval_results \
+# Run debug finetuning
+python 07_finetuning/finetune_tabpfn.py \
+    --n-steps 20 \
+    --batch-size 8 \
+    --eval-every 10 \
     --device cuda \
-    --n-estimators 8
+    --seed 42
 
 echo ""
 echo "End time: $(date)"
