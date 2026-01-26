@@ -570,7 +570,7 @@ class TabPFNFineTuner:
             'lr': self.scheduler.get_last_lr()[0],
         }
     
-    def evaluate_all(self, datasets: List[Dict], verbose: bool = True) -> List[Dict]:
+    def evaluate_all(self, datasets: List[Dict], verbose: bool = False) -> List[Dict]:
         """Evaluate on ALL datasets, return per-dataset results."""
         self.model.eval()
         
@@ -578,9 +578,6 @@ class TabPFNFineTuner:
         
         with torch.no_grad():
             for i, data in enumerate(datasets):
-                if verbose:
-                    print(f"  Evaluating [{i+1}/{len(datasets)}] {data['name']}...", end=" ", flush=True)
-                
                 result = {'name': data['name'], 'n_classes': data['n_classes']}
                 try:
                     eval_clf = TabPFNClassifier(
@@ -609,17 +606,12 @@ class TabPFNFineTuner:
                         result['auc'] = None
                     
                     result['status'] = 'success'
-                    if verbose:
-                        auc_str = f"AUC={result['auc']:.3f}" if result['auc'] else "AUC=N/A"
-                        print(f"OK ({auc_str})", flush=True)
                         
                 except Exception as e:
                     result['accuracy'] = None
                     result['auc'] = None
                     result['status'] = 'failed'
                     result['error'] = str(e)[:100]
-                    if verbose:
-                        print(f"FAILED: {str(e)[:50]}", flush=True)
                 
                 results.append(result)
         
@@ -774,30 +766,18 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
         trainer.load_checkpoint(Path(resume_from))
     
     # Initial evaluation on ALL datasets
-    print(f"\n{'='*70}")
-    print(f"INITIAL EVALUATION (step 0) on ALL {len(real_datasets)} real datasets")
-    print(f"{'='*70}")
+    print(f"\nInitial evaluation on {len(real_datasets)} real datasets...")
     if real_datasets:
-        eval_results = trainer.evaluate_all(real_datasets)
-        
-        # Print per-dataset results
-        print(f"{'Dataset':<35} | {'AUC':>8} | {'Acc':>8} | {'Status':<8}")
-        print("-" * 70)
-        for r in eval_results:
-            auc_str = f"{r['auc']:.4f}" if r.get('auc') is not None else "N/A"
-            acc_str = f"{r['accuracy']:.4f}" if r.get('accuracy') is not None else "N/A"
-            status = r.get('status', 'unknown')
-            print(f"{r['name']:<35} | {auc_str:>8} | {acc_str:>8} | {status:<8}")
+        eval_results = trainer.evaluate_all(real_datasets, verbose=False)
         
         aucs = [r['auc'] for r in eval_results if r.get('auc') is not None]
         accs = [r['accuracy'] for r in eval_results if r.get('accuracy') is not None]
         
-        print("-" * 70)
-        print(f"{'SUMMARY':<35} | {np.mean(aucs):.4f}   | {np.mean(accs):.4f}   | {len(aucs)}/{len(real_datasets)} OK")
-        print(f"{'='*70}\n")
+        print(f"  BASELINE: AUC={np.mean(aucs):.4f}, Acc={np.mean(accs):.4f} ({len(aucs)}/{len(real_datasets)} OK)\n")
         
         trainer.eval_steps.append(trainer.current_step)
         trainer.eval_results.append(eval_results)
+        trainer.baseline_auc = np.mean(aucs)  # Store for comparison
         
         save_eval_results_json(trainer, log_dir)
     
@@ -841,66 +821,47 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
               f"LR: {result['lr']:.2e} | Valid: {result['n_valid']}/{len(batch)} | "
               f"Time: {step_time:.2f}s")
         
-        # Evaluation on ALL datasets
+        # Evaluation on ALL datasets (every step)
         if (step + 1) % config.eval_every == 0 and real_datasets:
-            print(f"\n{'='*70}")
-            print(f"EVALUATION at step {step + 1} on ALL {len(real_datasets)} datasets")
-            print(f"{'='*70}")
-            
-            eval_results = trainer.evaluate_all(real_datasets)
-            
-            # Print per-dataset results
-            print(f"{'Dataset':<35} | {'AUC':>8} | {'Acc':>8} | {'Status':<8}")
-            print("-" * 70)
-            for r in eval_results:
-                auc_str = f"{r['auc']:.4f}" if r.get('auc') is not None else "N/A"
-                acc_str = f"{r['accuracy']:.4f}" if r.get('accuracy') is not None else "N/A"
-                status = r.get('status', 'unknown')
-                print(f"{r['name']:<35} | {auc_str:>8} | {acc_str:>8} | {status:<8}")
+            eval_results = trainer.evaluate_all(real_datasets, verbose=False)
             
             aucs = [r['auc'] for r in eval_results if r.get('auc') is not None]
             accs = [r['accuracy'] for r in eval_results if r.get('accuracy') is not None]
+            mean_auc = np.mean(aucs) if aucs else 0
+            mean_acc = np.mean(accs) if accs else 0
             
-            print("-" * 70)
-            print(f"{'SUMMARY':<35} | {np.mean(aucs):.4f}   | {np.mean(accs):.4f}   | {len(aucs)}/{len(real_datasets)} OK")
-            print(f"{'='*70}\n")
+            # Compact output: just the mean
+            print(f"  >> REAL EVAL: AUC={mean_auc:.4f}, Acc={mean_acc:.4f} ({len(aucs)}/{len(real_datasets)} OK)")
             
             trainer.eval_steps.append(step + 1)
             trainer.eval_results.append(eval_results)
             
-            # Save checkpoint
-            trainer.save_checkpoint(
-                checkpoint_dir / f"checkpoint_step{step+1}.pt",
-                extra={'step_eval_results': eval_results}
-            )
+            # Save checkpoint only every 50 steps to save disk
+            if (step + 1) % 50 == 0:
+                trainer.save_checkpoint(
+                    checkpoint_dir / f"checkpoint_step{step+1}.pt",
+                    extra={'step_eval_results': eval_results}
+                )
             
-            # Save eval results and plots
+            # Save eval results
             save_eval_results_json(trainer, log_dir)
-            plot_training_curves(trainer, log_dir)
     
     # Final evaluation
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 50)
     print("FINAL EVALUATION")
-    print("=" * 70)
+    print("=" * 50)
     
     if real_datasets:
-        final_results = trainer.evaluate_all(real_datasets)
-        
-        # Print per-dataset results table
-        print(f"\n{'Dataset':<35} | {'AUC':>8} | {'Acc':>8} | {'Status':<8}")
-        print("-" * 70)
-        for r in final_results:
-            auc_str = f"{r['auc']:.4f}" if r.get('auc') is not None else "N/A"
-            acc_str = f"{r['accuracy']:.4f}" if r.get('accuracy') is not None else "N/A"
-            status = r.get('status', 'unknown')
-            print(f"{r['name']:<35} | {auc_str:>8} | {acc_str:>8} | {status:<8}")
+        final_results = trainer.evaluate_all(real_datasets, verbose=False)
         
         aucs = [r['auc'] for r in final_results if r.get('auc') is not None]
         accs = [r['accuracy'] for r in final_results if r.get('accuracy') is not None]
         
-        print("-" * 70)
-        print(f"{'FINAL MEAN':<35} | {np.mean(aucs):.4f}   | {np.mean(accs):.4f}   | {len(aucs)}/{len(real_datasets)} OK")
-        print("=" * 70)
+        baseline_auc = getattr(trainer, 'baseline_auc', np.mean(aucs))
+        delta = np.mean(aucs) - baseline_auc
+        
+        print(f"  FINAL: AUC={np.mean(aucs):.4f} (delta={delta:+.4f}), Acc={np.mean(accs):.4f}")
+        print("=" * 50)
     
     # Save final checkpoint
     trainer.save_checkpoint(

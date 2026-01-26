@@ -40,12 +40,12 @@ echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
 echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
 echo ""
 
-# Run full finetuning
+# Run full finetuning with lower LR, eval every step
 python -u 07_finetuning/finetune_tabpfn.py \
     --n-steps 1000 \
     --batch-size 64 \
-    --eval-every 50 \
-    --lr 1e-5 \
+    --eval-every 1 \
+    --lr 1e-6 \
     --device cuda \
     --seed 42
 
