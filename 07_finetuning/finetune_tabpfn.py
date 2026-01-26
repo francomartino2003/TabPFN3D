@@ -522,6 +522,7 @@ class TabPFNFineTuner:
         total_acc = 0.0
         n_valid = 0
         
+        # Accumulate gradients without scaling
         for data in batch:
             try:
                 output = self.forward_single_dataset(
@@ -533,8 +534,8 @@ class TabPFNFineTuner:
                 )
                 
                 if output['loss'].requires_grad:
-                    scaled_loss = output['loss'] / len(batch)
-                    scaled_loss.backward()
+                    # Backward without scaling - we'll scale by n_valid at the end
+                    output['loss'].backward()
                     
                     total_loss += output['loss'].item()
                     total_acc += output['accuracy'].item()
@@ -544,6 +545,12 @@ class TabPFNFineTuner:
                     
             except Exception as e:
                 continue
+        
+        # Scale gradients by n_valid (correct averaging over successful datasets)
+        if n_valid > 0:
+            for param in self.model.parameters():
+                if param.grad is not None:
+                    param.grad /= n_valid
         
         if self.config.grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(
