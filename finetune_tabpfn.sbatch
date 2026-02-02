@@ -45,7 +45,7 @@ echo "PyTorch: $(python -c 'import torch; print(torch.__version__)')"
 echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
 if python -c 'import torch; exit(0 if torch.cuda.is_available() else 1)' 2>/dev/null; then
     echo "GPU: $(python -c 'import torch; print(torch.cuda.get_device_name(0))')"
-    echo "Memory: $(python -c 'import torch; print(f\"{torch.cuda.get_device_properties(0).total_memory/1e9:.1f} GB\")')"
+    echo "Memory: $(python -c 'import torch; print(round(torch.cuda.get_device_properties(0).total_memory/1e9, 1), "GB")')"
 fi
 echo ""
 

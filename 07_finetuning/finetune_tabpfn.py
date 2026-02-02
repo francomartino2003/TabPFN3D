@@ -444,7 +444,32 @@ class TabPFNFineTuner:
             else:
                 raise ValueError(f"Unexpected logits shape: {logits.shape}")
             
-            loss = F.cross_entropy(logits_QL, y_test_t)
+            n_logit_classes = logits_QL.shape[-1]
+            # Skip if targets are out of range (avoids CUDA assert t >= 0 && t < n_classes)
+            if y_test_t.min() < 0 or y_test_t.max() >= n_logit_classes:
+                if getattr(self, '_warned_skip_labels', 0) < 3:
+                    print(f"[Skip] Labels out of range: min={y_test_t.min().item()}, max={y_test_t.max().item()}, n_logit_classes={n_logit_classes}")
+                    self._warned_skip_labels = getattr(self, '_warned_skip_labels', 0) + 1
+                return {
+                    'loss': torch.tensor(0.0, device=self.device, requires_grad=False),
+                    'accuracy': torch.tensor(0.0),
+                    'probs': None,
+                    'y_true': None,
+                }
+            
+            try:
+                loss = F.cross_entropy(logits_QL, y_test_t)
+            except RuntimeError as ce_err:
+                # Catch CUDA assertion (e.g. t >= 0 && t < n_classes) if it still occurs
+                if getattr(self, '_warned_skip_labels', 0) < 5:
+                    print(f"[Skip] cross_entropy failed (dataset skipped): {ce_err}")
+                    self._warned_skip_labels = getattr(self, '_warned_skip_labels', 0) + 1
+                return {
+                    'loss': torch.tensor(0.0, device=self.device, requires_grad=False),
+                    'accuracy': torch.tensor(0.0),
+                    'probs': None,
+                    'y_true': None,
+                }
             
             with torch.no_grad():
                 preds = logits_QL.argmax(dim=-1)
@@ -459,6 +484,9 @@ class TabPFNFineTuner:
             }
             
         except Exception as e:
+            if getattr(self, '_warned_exception', 0) < 5:
+                print(f"[Skip] forward_single_dataset exception (dataset skipped): {type(e).__name__}: {e}")
+                self._warned_exception = getattr(self, '_warned_exception', 0) + 1
             return {
                 'loss': torch.tensor(0.0, device=self.device, requires_grad=False),
                 'accuracy': torch.tensor(0.0),
@@ -505,14 +533,19 @@ class TabPFNFineTuner:
                 if param.grad is not None:
                     param.grad /= n_valid
         
-        if self.config.grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), 
-                self.config.grad_clip
-            )
-        
-        self.optimizer.step()
-        self.scheduler.step()
+        if n_valid > 0:
+            if self.config.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config.grad_clip
+                )
+            self.optimizer.step()
+            self.scheduler.step()
+        else:
+            # All datasets in batch were skipped; do not step optimizer to avoid bad state
+            if getattr(self, '_warned_empty_batch', 0) < 3:
+                print(f"[Warning] Step {self.current_step}: all {len(batch)} datasets skipped (n_valid=0), optimizer not stepped")
+                self._warned_empty_batch = getattr(self, '_warned_empty_batch', 0) + 1
         
         self.current_step += 1
         
