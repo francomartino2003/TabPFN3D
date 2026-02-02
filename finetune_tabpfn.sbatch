@@ -56,8 +56,8 @@ if [ -z "$HF_TOKEN" ]; then
     echo "Warning: HF_TOKEN not set. TabPFN may fail to download weights."
 fi
 
-# Change to benchmark directory
-cd 05_flattened_benchmark
+# Change to finetuning directory
+cd 07_finetuning
 
 # Check if debug mode
 if [ "${DEBUG:-0}" == "1" ]; then
@@ -65,9 +65,10 @@ if [ "${DEBUG:-0}" == "1" ]; then
     python -u finetune_tabpfn.py --debug
 else
     echo "Running full training..."
+    # Config comes from dataset_generator_v2.py (single source of truth)
     python -u finetune_tabpfn.py \
         --n-steps 1000 \
-        --batch-size 128 \
+        --batch-size 64 \
         --lr 1e-5 \
         --eval-every 50
 fi
