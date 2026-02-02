@@ -70,7 +70,7 @@ else
         --n-steps 1000 \
         --batch-size 64 \
         --lr 1e-5 \
-        --eval-every 50
+        --eval-every 1
 fi
 
 echo "=========================================="
