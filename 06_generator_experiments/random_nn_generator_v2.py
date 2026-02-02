@@ -25,9 +25,17 @@ class RandomNNConfig:
     # Memory dimension range
     memory_dim_range: Tuple[int, int] = (3, 32)
     memory_init: str = 'uniform'  # 'uniform' or 'normal'
+    memory_normal_std_range: Tuple[float, float] = (0.1, 1.0)  # log-uniform: std for normal init
+    
+    # Discrete memory dimensions
+    # Probability that each memory dim is discrete (uniform categorical)
+    memory_discrete_prob: float = 0.3
+    # Range for number of classes in discrete dims (2 classes: -1,1; 3: -1,0,1; etc)
+    memory_discrete_classes_range: Tuple[int, int] = (2, 10)
     
     # Stochastic input (random at each time step)
     stochastic_input_dim_range: Tuple[int, int] = (0, 5)
+    stochastic_input_std_range: Tuple[float, float] = (0.001, 0.1)  # log-uniform: std for stochastic input
     
     # Time input options - will randomly select a subset
     # Each is a tuple of (name, function, probability of inclusion)
@@ -100,7 +108,9 @@ class SampledConfig:
     """Configuration that was sampled for a specific network."""
     memory_dim: int
     memory_init: str
+    memory_normal_std: float  # Sampled std for normal memory init
     stochastic_input_dim: int
+    stochastic_input_std: float  # Sampled std for stochastic input
     time_transforms: List[Dict[str, Any]]  # List of {name, func, params}
     n_hidden_layers: int
     nodes_per_layer: List[int]  # Can vary per layer
@@ -109,6 +119,8 @@ class SampledConfig:
     weight_init: str = 'xavier_normal'
     weight_scale: float = 1.0
     bias_std: float = 0.0
+    # Discrete dims: which dims are discrete and how many classes each has
+    memory_discrete_info: List[Tuple[int, int]] = None  # List of (dim_idx, n_classes)
     # Per-node noise: List[List[NodeNoiseConfig]] - one list per layer, one config per node
     node_noise: List[List[NodeNoiseConfig]] = None
     node_noise_prob: float = 0.0  # The sampled noise probability for this network
@@ -166,6 +178,11 @@ class RandomNNGenerator:
     
     def _log_uniform_float(self, low: float, high: float) -> float:
         """Sample float from log-uniform distribution (favors smaller values)."""
+        # Handle special cases
+        if high <= 0:
+            return 0.0  # Return 0 when range is effectively zero
+        if low >= high:
+            return low  # Return low when range is degenerate
         if low <= 0:
             low = 1e-10  # Avoid log(0)
         log_low = np.log(low)
@@ -177,8 +194,28 @@ class RandomNNGenerator:
         """Sample all configuration parameters for this network."""
         cfg = self.config
         
-        # Sample memory dimension (log-uniform to favor smaller)
-        memory_dim = self._log_uniform_int(max(1, cfg.memory_dim_range[0]), cfg.memory_dim_range[1])
+        # Sample memory dimension (uniform)
+        memory_dim = self.rng.integers(cfg.memory_dim_range[0], cfg.memory_dim_range[1] + 1)
+        
+        # Sample which memory dims are discrete
+        memory_discrete_info = []
+        for dim_idx in range(memory_dim):
+            if self.rng.random() < cfg.memory_discrete_prob:
+                # Log-uniform for n_classes (favor fewer classes)
+                n_classes = self._log_uniform_int(
+                    cfg.memory_discrete_classes_range[0],
+                    cfg.memory_discrete_classes_range[1]
+                )
+                memory_discrete_info.append((dim_idx, n_classes))
+        
+        # Force at least 1 discrete dim (for labels)
+        if len(memory_discrete_info) == 0:
+            dim_idx = self.rng.integers(0, memory_dim)
+            n_classes = self._log_uniform_int(
+                cfg.memory_discrete_classes_range[0],
+                cfg.memory_discrete_classes_range[1]
+            )
+            memory_discrete_info.append((dim_idx, n_classes))
         
         # Sample stochastic input dimension
         stochastic_dim = self.rng.integers(
@@ -186,8 +223,20 @@ class RandomNNGenerator:
             cfg.stochastic_input_dim_range[1] + 1
         )
         
-        # Sample time transforms (log-uniform to favor smaller)
-        n_transforms = self._log_uniform_int(max(1, cfg.n_time_transforms_range[0]), cfg.n_time_transforms_range[1])
+        # Sample memory normal std (log-uniform)
+        memory_normal_std = self._log_uniform_float(
+            cfg.memory_normal_std_range[0],
+            cfg.memory_normal_std_range[1]
+        )
+        
+        # Sample stochastic input std (log-uniform)
+        stochastic_input_std = self._log_uniform_float(
+            cfg.stochastic_input_std_range[0],
+            cfg.stochastic_input_std_range[1]
+        )
+        
+        # Sample time transforms (uniform)
+        n_transforms = self.rng.integers(cfg.n_time_transforms_range[0], cfg.n_time_transforms_range[1] + 1)
         
         # ONLY linear transforms (t) - no sin/cos/etc
         selected_transforms = []
@@ -220,7 +269,11 @@ class RandomNNGenerator:
         bias_std = self.rng.uniform(cfg.bias_std_range[0], cfg.bias_std_range[1])
         
         # Sample noise probability for this network (log-uniform to favor smaller)
-        node_noise_prob = self._log_uniform_float(max(0.001, cfg.node_noise_prob_range[0]), cfg.node_noise_prob_range[1])
+        # Sample noise probability (handle 0 range specially)
+        if cfg.node_noise_prob_range[1] <= 0:
+            node_noise_prob = 0.0
+        else:
+            node_noise_prob = self._log_uniform_float(max(0.001, cfg.node_noise_prob_range[0]), cfg.node_noise_prob_range[1])
         
         # Calculate input dimensions for each layer (needed for quantization prototypes)
         # Input to layer 0: total_input_dim = time_transforms + memory + stochastic
@@ -272,7 +325,9 @@ class RandomNNGenerator:
         return SampledConfig(
             memory_dim=memory_dim,
             memory_init=cfg.memory_init,
+            memory_normal_std=memory_normal_std,
             stochastic_input_dim=stochastic_dim,
+            stochastic_input_std=stochastic_input_std,
             time_transforms=selected_transforms,
             n_hidden_layers=n_layers,
             nodes_per_layer=nodes_per_layer,
@@ -281,6 +336,7 @@ class RandomNNGenerator:
             weight_init=weight_init,
             weight_scale=weight_scale,
             bias_std=bias_std,
+            memory_discrete_info=memory_discrete_info,
             node_noise=node_noise,
             node_noise_prob=node_noise_prob,
             node_quantization=node_quantization,
@@ -464,22 +520,50 @@ class RandomNNGenerator:
         return np.array(inputs)  # (n_time_inputs, T)
     
     def _generate_memory(self, n_samples: int) -> np.ndarray:
-        """Generate memory vectors for each sample."""
+        """Generate memory vectors for each sample.
+        
+        Some dims may be discrete (uniform categorical), determined by memory_discrete_info.
+        Discrete dims with n classes use values: linspace(-1, 1, n)
+        e.g., 2 classes: [-1, 1], 3 classes: [-1, 0, 1], 4 classes: [-1, -0.33, 0.33, 1]
+        """
         cfg = self.sampled_config
+        
+        # Start with continuous values
         if cfg.memory_init == 'uniform':
-            return self.rng.uniform(-1, 1, (n_samples, cfg.memory_dim))
-        else:  # normal
-            return np.clip(self.rng.normal(0, 0.5, (n_samples, cfg.memory_dim)), -1, 1)
+            memory = self.rng.uniform(-1, 1, (n_samples, cfg.memory_dim))
+        else:  # normal - use sampled std
+            memory = np.clip(
+                self.rng.normal(0, cfg.memory_normal_std, (n_samples, cfg.memory_dim)), 
+                -1, 1
+            )
+        
+        # Override discrete dims
+        if cfg.memory_discrete_info:
+            for dim_idx, n_classes in cfg.memory_discrete_info:
+                # Generate discrete values: linspace(-1, 1, n_classes)
+                discrete_values = np.linspace(-1, 1, n_classes)
+                # Sample uniformly from these values
+                sampled_indices = self.rng.integers(0, n_classes, n_samples)
+                memory[:, dim_idx] = discrete_values[sampled_indices]
+        
+        return memory
     
     def _generate_stochastic_inputs(self, n_samples: int, T: int) -> Optional[np.ndarray]:
         """Generate random inputs that vary at each time step."""
-        if self.sampled_config.stochastic_input_dim == 0:
+        cfg = self.sampled_config
+        if cfg.stochastic_input_dim == 0:
             return None
-        return self.rng.normal(0, 0.005, (n_samples, self.sampled_config.stochastic_input_dim, T))
+        # Use sampled std (log-uniform per dataset)
+        return self.rng.normal(0, cfg.stochastic_input_std, (n_samples, cfg.stochastic_input_dim, T))
     
-    def propagate(self, n_samples: int = 5) -> Tuple[np.ndarray, List[np.ndarray]]:
+    def propagate(self, n_samples: int = 5, memory: Optional[np.ndarray] = None) -> Tuple[np.ndarray, List[np.ndarray]]:
         """
         Propagate inputs through the network.
+        
+        Args:
+            n_samples: Number of samples to generate
+            memory: Optional pre-generated memory array (n_samples, memory_dim).
+                    If None, generates new memory internally.
         
         Returns:
             output: Final layer output (n_samples, n_output_nodes, T)
@@ -490,7 +574,8 @@ class RandomNNGenerator:
         
         # Generate inputs
         time_inputs = self._generate_time_inputs(T)  # (time_dim, T)
-        memory = self._generate_memory(n_samples)    # (n_samples, mem_dim)
+        if memory is None:
+            memory = self._generate_memory(n_samples)  # (n_samples, mem_dim)
         stochastic = self._generate_stochastic_inputs(n_samples, T)
         
         # Build input layer
@@ -762,7 +847,7 @@ def main():
         seq_length=200,
     )
     
-    output_dir = "/Users/franco/Documents/TabPFN3D/06_generator_experiments/random_all"
+    output_dir = "/Users/franco/Documents/TabPFN3D/06_generator_experiments/random_all_v2"
     
     n_networks = 8
     print(f"\nGenerating {n_networks} networks with random configurations...")
@@ -782,3 +867,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

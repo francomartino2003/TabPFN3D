@@ -51,11 +51,12 @@ from tabpfn import TabPFNClassifier
 from tabpfn.finetuning.data_util import ClassifierBatch
 from tabpfn.preprocessing import fit_preprocessing, EnsembleConfig
 
-# Import generator from 06
-from dataset_generator import (
+# Import generator from 06 (v2 version)
+from dataset_generator_v2 import (
     generate_dataset, GeneratedDataset,
-    RandomNNConfig, DatasetConfig
+    get_default_nn_config, get_default_dataset_params
 )
+from random_nn_generator_v2 import RandomNNConfig
 
 # Global for signal handling
 _trainer_instance = None
@@ -101,69 +102,15 @@ class FinetuneConfig:
 
 
 # ============================================================================
-# Synthetic Data Generation (using 06_generator_experiments)
+# Synthetic Data Generation (using 06_generator_experiments/dataset_generator_v2)
 # ============================================================================
 
-def create_nn_config():
-    """Create config matching the random_all experiments."""
-    return RandomNNConfig(
-        # Memory - RANDOM 1-8 dimensions
-        memory_dim_range=(1, 8),
-        memory_init='uniform',
-        
-        # Stochastic inputs - none
-        stochastic_input_dim_range=(0, 0),
-        
-        # Time transforms - RANDOM 1-5 (all linear)
-        n_time_transforms_range=(1, 5),
-        
-        # Architecture - shallow networks (2-5 layers)
-        n_hidden_layers_range=(2, 5),
-        n_nodes_per_layer_range=(4, 16),
-        
-        # Activations - diverse per-node activations (12 types)
-        activation_choices=(
-            'identity', 'log', 'sigmoid', 'abs', 'sin', 'tanh',
-            'rank', 'square', 'power', 'softplus', 'step', 'modulo',
-        ),
-        
-        # Initialization
-        weight_init_choices=('xavier_normal',),
-        weight_scale_range=(0.9, 1.1),
-        bias_std_range=(0.0, 0.1),
-        
-        # Per-node noise - 5-30% of nodes, higher std
-        node_noise_prob_range=(0.05, 0.30),
-        node_noise_std_range=(0.01, 0.1),
-        noise_dist_choices=('normal',),
-        
-        per_layer_activation=True,
-        
-        # NO quantization nodes - will apply quantization to target later
-        quantization_node_prob=0.0,
-        quantization_n_classes_range=(2, 8),
-        
-        seq_length=200,  # Will be overwritten per dataset
-    )
-
-
-def create_dataset_config():
-    """Create dataset config for finetuning."""
-    return DatasetConfig(
-        max_samples=1000,
-        max_features=8,
-        max_timesteps=1000,
-        max_m_times_t=500,
-        max_target_offset=15,
-        prob_iid=1.0,  # All IID
-        prob_sliding=0.0,
-        prob_mixed=0.0,
-        train_ratio=0.8,
-    )
+# Config is imported from dataset_generator_v2.py (single source of truth)
+# Edit get_default_nn_config() and get_default_dataset_params() there to change hyperparameters
 
 
 class SyntheticDataGenerator:
-    """Generates synthetic flattened datasets using generator from 06."""
+    """Generates synthetic flattened datasets using dataset_generator_v2."""
     
     def __init__(self, config: FinetuneConfig, seed: int = 42):
         self.config = config
@@ -171,8 +118,9 @@ class SyntheticDataGenerator:
         self.rng = np.random.default_rng(seed)
         self.dataset_count = 0
         
-        self.nn_config = create_nn_config()
-        self.ds_config = create_dataset_config()
+        # Get configs from dataset_generator_v2 (single source of truth)
+        self.nn_config = get_default_nn_config(seq_length=200)
+        self.ds_params = get_default_dataset_params()
     
     def generate_one(self, max_retries: int = 10) -> Dict[str, Any]:
         """Generate one synthetic dataset (flattened, train/test split)."""
@@ -183,8 +131,14 @@ class SyntheticDataGenerator:
             
             try:
                 dataset = generate_dataset(
-                    self.nn_config, 
-                    self.ds_config, 
+                    nn_config=self.nn_config,
+                    max_samples=self.ds_params['max_samples'],
+                    max_features=self.ds_params['max_features'],
+                    feature_geometric_p=self.ds_params['feature_geometric_p'],
+                    t_subseq_range=self.ds_params['t_subseq_range'],
+                    t_excess_range=self.ds_params['t_excess_range'],
+                    max_m_times_t=self.ds_params['max_m_times_t'],
+                    train_ratio=self.ds_params['train_ratio'],
                     seed=current_seed
                 )
                 
@@ -226,7 +180,6 @@ class SyntheticDataGenerator:
                     'n_classes': n_classes,
                     'n_features': X_train.shape[1],
                     'n_samples': n_train + n_test,
-                    'sample_mode': dataset.sample_mode,
                 }
                 
             except Exception as e:

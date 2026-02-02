@@ -27,7 +27,7 @@ class DatasetConfig:
     
     # Constraints
     max_samples: int = 1000
-    max_features: int = 8
+    max_features: int = 12
     max_timesteps: int = 1000
     max_m_times_t: int = 500
     
