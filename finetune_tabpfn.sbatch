@@ -59,10 +59,30 @@ fi
 # Change to finetuning directory
 cd 07_finetuning
 
+# Resume from checkpoint (optional): use ALL, so RESUME is added to inherited env
+# Example: sbatch --export=ALL,RESUME=checkpoints/checkpoint_step500.pt finetune_tabpfn.sbatch
+# Or latest: sbatch --export=ALL,RESUME=latest finetune_tabpfn.sbatch
+RESUME_ARGS=""
+echo "RESUME=${RESUME:-not set}"
+if [ -n "${RESUME:-}" ]; then
+    if [ "$RESUME" = "latest" ]; then
+        LATEST=$(ls -t checkpoints/checkpoint_*.pt 2>/dev/null | head -1)
+        if [ -n "$LATEST" ]; then
+            RESUME_ARGS="--resume $LATEST"
+            echo "Resuming from latest checkpoint: $LATEST"
+        else
+            echo "No checkpoint found in checkpoints/; starting from scratch"
+        fi
+    else
+        RESUME_ARGS="--resume $RESUME"
+        echo "Resuming from checkpoint: $RESUME"
+    fi
+fi
+
 # Check if debug mode
 if [ "${DEBUG:-0}" == "1" ]; then
     echo "Running in DEBUG mode..."
-    python -u finetune_tabpfn.py --debug
+    python -u finetune_tabpfn.py --debug $RESUME_ARGS
 else
     echo "Running full training..."
     # Config comes from dataset_generator_v2.py (single source of truth)
@@ -70,7 +90,8 @@ else
         --n-steps 1000 \
         --batch-size 64 \
         --lr 1e-5 \
-        --eval-every 1
+        --eval-every 1 \
+        $RESUME_ARGS
 fi
 
 echo "=========================================="
