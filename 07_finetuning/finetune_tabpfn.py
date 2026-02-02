@@ -78,7 +78,7 @@ class FinetuneConfig:
     grad_clip: float = 1.0
     
     # Evaluation
-    eval_every: int = 50  # Evaluate on real datasets every N steps
+    eval_every: int = 1  # Evaluate on real datasets every N steps (1 = every step)
     
     # Data constraints (matching our generator)
     max_samples: int = 1000
@@ -774,17 +774,19 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
               f"LR: {result['lr']:.2e} | Valid: {result['n_valid']}/{len(batch)} | "
               f"Time: {step_time:.2f}s")
         
-        # Evaluation on ALL datasets (every step)
+        # Evaluation on ALL real datasets (every eval_every steps)
         if (step + 1) % config.eval_every == 0 and real_datasets:
             eval_results = trainer.evaluate_all(real_datasets, verbose=False)
             
             aucs = [r['auc'] for r in eval_results if r.get('auc') is not None]
             accs = [r['accuracy'] for r in eval_results if r.get('accuracy') is not None]
-            mean_auc = np.mean(aucs) if aucs else 0
-            mean_acc = np.mean(accs) if accs else 0
+            mean_auc = np.mean(aucs) if aucs else 0.0
+            mean_acc = np.mean(accs) if accs else 0.0
+            n_ok = len(aucs)
+            n_total = len(real_datasets)
             
-            # Compact output: just the mean
-            print(f"  >> REAL EVAL: AUC={mean_auc:.4f}, Acc={mean_acc:.4f} ({len(aucs)}/{len(real_datasets)} OK)")
+            # Print Acc and AUC ROC at each eval step (over all real datasets)
+            print(f"  >> REAL EVAL step {step+1}: Acc = {mean_acc:.4f}, AUC ROC = {mean_auc:.4f}  ({n_ok}/{n_total} datasets OK)")
             
             trainer.eval_steps.append(step + 1)
             trainer.eval_results.append(eval_results)
@@ -871,7 +873,7 @@ def main():
     parser.add_argument('--n-steps', type=int, default=1000, help='Number of training steps')
     parser.add_argument('--batch-size', type=int, default=64, help='Batch size (datasets)')
     parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate')
-    parser.add_argument('--eval-every', type=int, default=50, help='Eval frequency')
+    parser.add_argument('--eval-every', type=int, default=1, help='Eval on real datasets every N steps (1=every step)')
     
     # Device
     parser.add_argument('--device', type=str, default='auto', help='Device (auto/cuda/mps/cpu)')
