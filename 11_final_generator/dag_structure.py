@@ -114,7 +114,7 @@ def build_dag(
     # ── 1. Global parameters ──────────────────────────────────────────────
 
     root_d = _log_uniform_int(rng, *dag_hp.root_d_range)
-    n_layers = _log_uniform_int(rng, *dag_hp.n_layers_range)       # log-uniform → favors smaller
+    n_layers = int(rng.integers(dag_hp.n_layers_range[0], dag_hp.n_layers_range[1] + 1))
     connection_drop_prob = rng.uniform(*dag_hp.connection_drop_prob_range)
     series_node_prob = rng.uniform(*dag_hp.series_node_prob_range)
     discrete_node_prob = rng.uniform(*dag_hp.discrete_node_prob_range)
@@ -130,7 +130,7 @@ def build_dag(
     # ── 3. Hidden layers ──────────────────────────────────────────────────
 
     for l_idx in range(1, n_layers + 1):
-        n_nodes = _log_uniform_int(rng, *dag_hp.nodes_per_layer_range)  # favors smaller
+        n_nodes = int(rng.integers(dag_hp.nodes_per_layer_range[0], dag_hp.nodes_per_layer_range[1] + 1))
         layer_ids = []
         for _ in range(n_nodes):
             if rng.random() < series_node_prob:
@@ -197,12 +197,12 @@ def build_dag(
     assert nodes[target_id].node_type == 'discrete', \
         f'BUG: target node {target_id} is {nodes[target_id].node_type}, expected discrete'
 
-    # Features: geometric number of series nodes
-    n_features = min(
-        rng.geometric(p=role_hp.n_features_geometric_p),
-        role_hp.max_features,
-        len(series_ids),
-    )
+    # Features: 75% univariate, otherwise log-uniform in range
+    if rng.random() < role_hp.univariate_prob:
+        n_features = 1
+    else:
+        n_features = _log_uniform_int(rng, *role_hp.n_features_range)
+    n_features = min(n_features, len(series_ids))
     feature_ids = rng.choice(series_ids, size=n_features, replace=False)
     for fid in feature_ids:
         nodes[fid].role = 'feature'

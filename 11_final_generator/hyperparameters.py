@@ -20,24 +20,25 @@ class DAGHyperparameters:
     """Hyperparameters that control the DAG topology."""
 
     # Root latent dimension d  (log-uniform int)
-    root_d_range: Tuple[int, int] = (2, 64)
+    root_d_range: Tuple[int, int] = (2, 8)
 
     # Number of hidden layers (log-uniform int — favors smaller)
-    n_layers_range: Tuple[int, int] = (1, 3)
+    # Number of hidden layers (uniform int)
+    n_layers_range: Tuple[int, int] = (2, 6)
 
-    # Number of nodes per hidden layer (log-uniform int per layer — favors smaller)
-    nodes_per_layer_range: Tuple[int, int] = (2, 4)
+    # Number of nodes per hidden layer (uniform int per layer)
+    nodes_per_layer_range: Tuple[int, int] = (2, 6)
 
     # Probability that a node is "series" (vs tabular/discrete)
     # Sampled uniform float once per DAG
-    series_node_prob_range: Tuple[float, float] = (0.3, 0.9)
+    series_node_prob_range: Tuple[float, float] = (0.5, 1)
 
     # Among non-series nodes, probability that a node is "discrete" (vs continuous tabular)
     # Sampled uniform float once per DAG
-    discrete_node_prob_range: Tuple[float, float] = (0.1, 0.5)
+    discrete_node_prob_range: Tuple[float, float] = (0.1, 1)
 
     # Probability of DROPPING a connection (uniform float, once per DAG)
-    connection_drop_prob_range: Tuple[float, float] = (0.0, 0.5)
+    connection_drop_prob_range: Tuple[float, float] = (0.0, 0.8)
 
     # Minimum parents per non-root node after dropping
     min_parents: int = 1
@@ -49,11 +50,11 @@ class DAGHyperparameters:
 class RoleHyperparameters:
     """Hyperparameters that control feature / target assignment."""
 
-    # Number of feature nodes: geometric(p), capped at n_series_nodes and max_features
-    n_features_geometric_p: float = 0.7
+    # Probability of univariate (1 feature)
+    univariate_prob: float = 0.75
 
-    # Maximum features
-    max_features: int = 12
+    # If not univariate: log-uniform range for n_features (can still be 1)
+    n_features_range: Tuple[int, int] = (1, 12)
 
 
 # ── Propagation (operations per node) ─────────────────────────────────────────
@@ -66,26 +67,36 @@ class PropagationHyperparameters:
     root_init_choices: Tuple[str, ...] = ('normal', 'uniform')
 
     # N(0, std):  std sampled uniform in range
-    root_normal_std_range: Tuple[float, float] = (1, 1)
+    root_normal_std_range: Tuple[float, float] = (0.5, 2)
 
     # U(-a, a):  a sampled uniform in range
-    root_uniform_a_range: Tuple[float, float] = (1, 1)
+    root_uniform_a_range: Tuple[float, float] = (0.5, 2)
 
-    # Causal convolution kernel size per series node (uniform int)
-    kernel_size_range: Tuple[int, int] = (3, 11)
+    # Number of causal conv layers per series node (log-uniform int)
+    n_conv_layers_range: Tuple[int, int] = (1, 2)
 
-    # Optional smoothing conv: a second causal conv with positive L1-normalised
-    # kernel applied after the main conv and before the activation.
-    # Probability (per-DAG) that each series node gets a smoothing conv.
-    smoothing_conv_prob_range: Tuple[float, float] = (0.0, 0.8)
-    # Kernel size for the smoothing conv (uniform int per node)
-    smoothing_kernel_size_range: Tuple[int, int] = (3, 11)
+    # Hidden channels in intermediate conv layers (log-uniform int)
+    hidden_channels_range: Tuple[int, int] = (1, 4)
 
-    # Series nodes without series parents: minimum input dim before PE
-    min_series_input_dim: int = 8
+    # Causal convolution kernel size per layer (log-uniform int, sampled per layer)
+    kernel_size_range: Tuple[int, int] = (3, 100)
 
-    # Discrete nodes: number of classes k per node (uniform int)
+    # Per-node output noise: std sampled log-uniform (favors small values)
+    noise_std_range: Tuple[float, float] = (1e-4, 0.5)
+
+    # Discrete nodes: number of classes k per node (log-uniform int — favors fewer)
     discrete_classes_range: Tuple[int, int] = (2, 10)
+
+    # Continuous activations for time index channel (no step)
+    time_activation_choices: Tuple[str, ...] = (
+        'identity',   # f(t) = t
+        'sin',        # f(t) = sin(t)
+        'tanh',       # f(t) = tanh(t)
+        'sigmoid',    # f(t) = 1/(1+exp(-t))
+        'square',     # f(t) = t^2
+        'power',      # f(t) = sign(t)*|t|^0.5
+        'abs',        # f(t) = |t|
+    )
 
     # Activation bank (same as folder 10)
     activation_choices: Tuple[str, ...] = (
@@ -98,7 +109,6 @@ class PropagationHyperparameters:
         'square',     # f(x) = x^2
         'power',      # f(x) = sign(x) * |x|^0.5
         'softplus',   # f(x) = log(1 + exp(x))
-        'step',       # f(x) = 0 if x<0 else 1
         'modulo',     # f(x) = x mod 1
     )
 

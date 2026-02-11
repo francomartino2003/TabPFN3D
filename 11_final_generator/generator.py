@@ -3,12 +3,14 @@ Dataset generator: builds DAG, assigns per-node operations, propagates, extracts
 
 Node types and computation:
   ROOT:      dimension d, sampled N(0,std) or U(-a,a) per observation.
-  TABULAR:   dim 1 (continuous).  flatten parents → W·x + b + activation → scalar.
+  TABULAR:   dim 1 (continuous).  flatten parents → W·x + b + activation → scalar + noise.
   DISCRETE:  dim 1 (discrete→continuous).  flatten parents → nearest-prototype →
-             class index → continuous class_value for downstream propagation.
+             class index → continuous class_value + noise for downstream propagation.
   SERIES:    dim 1×T.
-    - With series parents: stack channels (pad/replicate) → causal conv → activation.
-    - Without series parents: concat scalars → project if small → replicate + PE → conv.
+    All series nodes use the same logic:
+    - Parent inputs → (n_parents, L), non-series parents are replicated along time.
+    - Concatenate normalized time index → (n_parents+1, L).
+    - Causal 1D conv (n_parents+1 → 1) + activation → (1, T) + iid noise.
 """
 
 from __future__ import annotations
@@ -43,42 +45,30 @@ def apply_activation(z: np.ndarray, name: str) -> np.ndarray:
     return z
 
 
-# ── Positional encoding ───────────────────────────────────────────────────────
-
-def positional_encoding(T: int, d: int) -> np.ndarray:
-    pe = np.zeros((d, T))
-    t = np.arange(T, dtype=np.float64)
-    for i in range(d // 2):
-        freq = 1.0 / (10000.0 ** (2.0 * i / d))
-        pe[2 * i, :]     = np.sin(t * freq)
-        pe[2 * i + 1, :] = np.cos(t * freq)
-    if d % 2 == 1:
-        freq = 1.0 / (10000.0 ** (2.0 * (d // 2) / d))
-        pe[d - 1, :] = np.sin(t * freq)
-    return pe
-
-
 # ── Batch causal convolution ──────────────────────────────────────────────────
 
 def batch_causal_conv(x: np.ndarray, kernel: np.ndarray) -> np.ndarray:
-    """x: (N,C,L), kernel: (C,K) → (N, L-K+1)."""
-    N, C, L = x.shape
-    K = kernel.shape[1]
+    """
+    Multi-channel causal conv supporting multi-channel output.
+
+    x:      (N, C_in, L)
+    kernel: (C_out, C_in, K)  or  (C_in, K) for single-output (legacy)
+    output: (N, C_out, L-K+1)  or  (N, L-K+1) if kernel was 2D
+    """
+    squeeze = False
+    if kernel.ndim == 2:
+        kernel = kernel[None, :, :]   # (1, C_in, K)
+        squeeze = True
+    C_out, C_in, K = kernel.shape
+    N = x.shape[0]
+    L = x.shape[2]
     out_len = L - K + 1
-    y = np.zeros((N, out_len))
+    y = np.zeros((N, C_out, out_len))
     for t in range(out_len):
-        y[:, t] = np.einsum('nck,ck->n', x[:, :, t:t + K], kernel)
-    return y
-
-
-def batch_smooth_conv(x: np.ndarray, kernel: np.ndarray) -> np.ndarray:
-    """1-channel smoothing: x (N, L), kernel (Ks,) → (N, L-Ks+1)."""
-    N, L = x.shape
-    Ks = len(kernel)
-    out_len = L - Ks + 1
-    y = np.zeros((N, out_len))
-    for t in range(out_len):
-        y[:, t] = x[:, t:t + Ks] @ kernel
+        # x[:, :, t:t+K] → (N, C_in, K);  kernel → (C_out, C_in, K)
+        y[:, :, t] = np.einsum('nck,ock->no', x[:, :, t:t + K], kernel)
+    if squeeze:
+        return y[:, 0, :]   # (N, out_len)
     return y
 
 
@@ -127,9 +117,6 @@ class DatasetGenerator:
         # n_samples
         self.n_samples = int(self.rng.integers(hp_d.min_samples, hp_d.max_samples + 1))
 
-        # Smoothing conv probability (sampled once per DAG/dataset)
-        self.smoothing_prob = float(self.rng.uniform(*hp_p.smoothing_conv_prob_range))
-
         # Root init
         self.root_init = str(self.rng.choice(hp_p.root_init_choices))
         if self.root_init == 'normal':
@@ -138,6 +125,18 @@ class DatasetGenerator:
             self.root_a = float(self.rng.uniform(*hp_p.root_uniform_a_range))
 
     # ── 3. Build per-node operations ─────────────────────────────────────
+
+    def _log_uniform_int(self, lo: int, hi: int) -> int:
+        """Sample int from log-uniform distribution (favors smaller values)."""
+        if lo == hi:
+            return lo
+        val = np.exp(self.rng.uniform(np.log(lo), np.log(hi)))
+        return int(np.clip(np.round(val), lo, hi))
+
+    def _sample_noise_std(self):
+        """Sample per-node noise std, log-uniform to favor small values."""
+        lo, hi = self.hp.propagation.noise_std_range
+        return float(np.exp(self.rng.uniform(np.log(lo), np.log(hi))))
 
     def _build_operations(self):
         hp_p = self.hp.propagation
@@ -152,7 +151,6 @@ class DatasetGenerator:
                 continue
 
             parent_types = [self.dag.nodes[p].node_type for p in node.parents]
-            has_series_parent = 'series' in parent_types
 
             if node.node_type == 'tabular':
                 self._build_tabular_ops(node, parent_types, d, T, acts)
@@ -161,11 +159,7 @@ class DatasetGenerator:
                 self._build_discrete_ops(node, parent_types, d, T, hp_p)
 
             elif node.node_type == 'series':
-                K = int(self.rng.integers(*hp_p.kernel_size_range))
-                if has_series_parent:
-                    self._build_series_with_series(node, parent_types, K, acts)
-                else:
-                    self._build_series_pe(node, parent_types, d, T, K, hp_p, acts)
+                self._build_series_ops(node, parent_types, d, acts)
 
     def _input_dim(self, parent_types, d, T):
         """Total flattened input dimension for a scalar (tabular/discrete) node."""
@@ -182,70 +176,65 @@ class DatasetGenerator:
             'W': self.rng.normal(0, std, size=(dim,)),
             'b': float(self.rng.normal(0, 0.1)),
             'act': str(self.rng.choice(acts)),
+            'noise_std': self._sample_noise_std(),
         }
 
     def _build_discrete_ops(self, node, parent_types, d, T, hp_p):
         dim = self._input_dim(parent_types, d, T)
-        k = int(self.rng.integers(*hp_p.discrete_classes_range))
-        # k prototype vectors of dimension dim
-        prototypes = self.rng.normal(0, 1.0, size=(k, dim))
-        # Continuous class values for downstream propagation
+        k = self._log_uniform_int(*hp_p.discrete_classes_range)
+
+        # Well-separated prototypes: sample random directions and normalize
+        # to unit sphere, then scale by sqrt(dim) so they sit on a sphere
+        # with radius proportional to expected norm of inputs.
+        raw = self.rng.normal(0, 1.0, size=(k, dim))
+        norms = np.linalg.norm(raw, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-8)
+        prototypes = raw / norms * np.sqrt(dim)
+
         class_values = self.rng.normal(0, 1.0, size=(k,))
         self.node_ops[node.id] = {
             'kind': 'discrete',
             'k': k,
             'prototypes': prototypes,
             'class_values': class_values,
+            'noise_std': self._sample_noise_std(),
         }
 
-    def _sample_smooth_kernel(self, hp_p):
-        """Optionally sample a smoothing kernel. Returns kernel (Ks,) or None."""
-        if self.rng.random() < self.smoothing_prob:
-            Ks = int(self.rng.integers(*hp_p.smoothing_kernel_size_range))
-            raw = self.rng.dirichlet(np.ones(Ks))    # positive, sums to 1
-            return raw
-        return None
+    def _build_series_ops(self, node, parent_types, d, acts):
+        """
+        Unified series node builder — mini CNN with L layers.
 
-    def _smooth_extra(self, smooth_kernel):
-        """Extra length the input must have to accommodate the smoothing conv."""
-        if smooth_kernel is None:
-            return 0
-        return len(smooth_kernel) - 1
+        Each series node is a stack of causal conv layers:
+          Layer 0: (n_parents+1, L_in) → (h, L_in-K0+1) + activation
+          Layer 1: (h, ...) → (h, ...) + activation
+          ...
+          Layer L-1: (h, ...) → (1, T) + activation
 
-    def _build_series_with_series(self, node, parent_types, K, acts):
+        Each layer has its own kernel (with independently sampled size)
+        and its own activation. The time index channel gets a random
+        continuous activation applied before entering the first layer.
+        """
         hp_p = self.hp.propagation
-        smooth_kernel = self._sample_smooth_kernel(hp_p)
-        n_ch = len(parent_types)
-        std = np.sqrt(2.0 / (n_ch * K))
-        self.node_ops[node.id] = {
-            'kind': 'series_conv',
-            'kernel': self.rng.normal(0, std, size=(n_ch, K)),
-            'smooth_kernel': smooth_kernel,
-            'act': str(self.rng.choice(acts)),
-        }
+        n_layers = self._log_uniform_int(*hp_p.n_conv_layers_range)
+        hidden = self._log_uniform_int(*hp_p.hidden_channels_range)
+        c_in = len(parent_types) + 1  # +1 for time index channel
 
-    def _build_series_pe(self, node, parent_types, d, T, K, hp_p, acts):
-        smooth_kernel = self._sample_smooth_kernel(hp_p)
-        extra_s = self._smooth_extra(smooth_kernel)
-        d_total = sum(d if pt == 'root' else 1 for pt in parent_types)
-        d_in = d_total
-        proj_W, proj_b = None, None
-        if d_total < hp_p.min_series_input_dim:
-            d_in = hp_p.min_series_input_dim
-            std_proj = np.sqrt(2.0 / (d_total + d_in))
-            proj_W = self.rng.normal(0, std_proj, size=(d_total, d_in))
-            proj_b = self.rng.normal(0, 0.1, size=(d_in,))
-        pe = positional_encoding(T + K - 1 + extra_s, d_in)
-        std_k = np.sqrt(2.0 / (d_in * K))
+        kernels = []
+        layer_acts = []
+        for i in range(n_layers):
+            ci = c_in if i == 0 else hidden
+            co = 1 if i == n_layers - 1 else hidden
+            K = self._log_uniform_int(*hp_p.kernel_size_range)
+            std = np.sqrt(2.0 / (ci * K))
+            kernels.append(self.rng.normal(0, std, size=(co, ci, K)))
+            layer_acts.append(str(self.rng.choice(acts)))
+
         self.node_ops[node.id] = {
-            'kind': 'series_pe',
-            'kernel': self.rng.normal(0, std_k, size=(d_in, K)),
-            'smooth_kernel': smooth_kernel,
-            'act': str(self.rng.choice(acts)),
-            'd_in': d_in,
-            'proj_W': proj_W,
-            'proj_b': proj_b,
-            'pe': pe,
+            'kind': 'series',
+            'kernels': kernels,
+            'acts': layer_acts,
+            'time_act': str(self.rng.choice(hp_p.time_activation_choices)),
+            'noise_std': self._sample_noise_std(),
         }
 
     # ── Propagation ──────────────────────────────────────────────────────
@@ -284,13 +273,8 @@ class DatasetGenerator:
                     vals[nid] = cont
                     disc[nid] = idx
 
-                elif ops['kind'] == 'series_conv':
-                    K = ops['kernel'].shape[1]
-                    vals[nid] = self._prop_series_conv(node, ops, vals, n, T, K)
-
-                elif ops['kind'] == 'series_pe':
-                    K = ops['kernel'].shape[1]
-                    vals[nid] = self._prop_series_pe(node, ops, vals, n, T, K)
+                elif ops['kind'] == 'series':
+                    vals[nid] = self._prop_series(node, ops, vals, n, T)
 
         return vals, disc
 
@@ -315,24 +299,40 @@ class DatasetGenerator:
     def _prop_tabular(self, node, ops, vals, n):
         x = self._gather_flat(node, vals, n)
         out = np.sum(x * ops['W'][None, :], axis=1) + ops['b']
-        return apply_activation(out, ops['act'])
+        out = apply_activation(out, ops['act'])
+        out += self.rng.normal(0, ops['noise_std'], size=(n,))
+        return out
 
     # ── Discrete propagation ──────────────────────────────────────────────
 
     def _prop_discrete(self, node, ops, vals, n):
         x = self._gather_flat(node, vals, n)              # (n, input_dim)
         prototypes = ops['prototypes']                     # (k, input_dim)
-        # Squared distances (no sqrt needed for argmin)
         dists = np.sum((x[:, None, :] - prototypes[None, :, :]) ** 2, axis=2)  # (n, k)
         indices = np.argmin(dists, axis=1)                 # (n,) int
         cont_vals = ops['class_values'][indices]           # (n,)
+        cont_vals = cont_vals + self.rng.normal(0, ops['noise_std'], size=(n,))
         return cont_vals, indices
 
-    # ── Series propagation (with series parents) ──────────────────────────
+    # ── Series propagation (unified mini CNN) ──────────────────────────────
 
-    def _prop_series_conv(self, node, ops, vals, n, T, K):
-        extra_s = self._smooth_extra(ops.get('smooth_kernel'))
-        L_in = T + K - 1 + extra_s
+    def _prop_series(self, node, ops, vals, n, T):
+        """
+        Unified series propagation — mini CNN with L conv layers.
+
+        1. Compute total shrinkage from all layers to determine L_in.
+        2. Gather parent channels → (n, n_parents, L_in).
+        3. Append time index channel (with activation) → (n, n_parents+1, L_in).
+        4. Apply conv layers: conv + activation at each layer.
+        5. Final output: (n, T) + iid noise.
+        """
+        kernels = ops['kernels']
+        layer_acts = ops['acts']
+
+        # Total shrinkage = sum of (K_i - 1) across all layers
+        total_shrink = sum(k.shape[2] - 1 for k in kernels)
+        L_in = T + total_shrink
+
         channels = []
         for pid in node.parents:
             pt = self.dag.nodes[pid].node_type
@@ -344,37 +344,32 @@ class DatasetGenerator:
             elif pt == 'root':
                 channels.append(
                     np.tile(v.mean(axis=1, keepdims=True), (1, L_in)))
-        stack = np.stack(channels, axis=1)
-        out = batch_causal_conv(stack, ops['kernel'])       # (n, T + extra_s)
-        if ops.get('smooth_kernel') is not None:
-            out = batch_smooth_conv(out, ops['smooth_kernel'])  # (n, T)
-        return apply_activation(out, ops['act'])
 
-    # ── Series propagation (PE route, no series parents) ──────────────────
+        # Normalized time index channel with activation
+        t_channel = np.linspace(-1.0, 1.0, L_in)
+        t_channel = apply_activation(t_channel, ops['time_act'])
+        t_batch = np.tile(t_channel[None, :], (n, 1))
+        channels.append(t_batch)
 
-    def _prop_series_pe(self, node, ops, vals, n, T, K):
-        extra_s = self._smooth_extra(ops.get('smooth_kernel'))
-        L_pe = T + K - 1 + extra_s
-        parts = []
-        for pid in node.parents:
-            pt = self.dag.nodes[pid].node_type
-            v = vals[pid]
-            if pt == 'root':
-                parts.append(v)
-            elif pt in ('tabular', 'discrete'):
-                parts.append(v[:, None])
-        x = np.concatenate(parts, axis=1)
+        # x: (n, n_parents+1, L_in)
+        x = np.stack(channels, axis=1)
 
-        if ops['proj_W'] is not None:
-            x = x @ ops['proj_W'] + ops['proj_b'][None, :]
+        # Apply mini CNN layers
+        for kernel, act in zip(kernels, layer_acts):
+            x = batch_causal_conv(x, kernel)        # (n, C_out, L') or (n, L') for last
+            x = apply_activation(x, act)
+            # If output is 2D (last layer, C_out=1, squeezed), break
+            if x.ndim == 2:
+                break
+            # Otherwise keep going as 3D
 
-        x_rep = np.tile(x[:, :, None], (1, 1, L_pe))
-        x_rep = x_rep + ops['pe'][None, :, :]
+        # x should be (n, T) at this point
+        if x.ndim == 3:
+            x = x[:, 0, :]  # squeeze channel dim if still 3D
 
-        out = batch_causal_conv(x_rep, ops['kernel'])       # (n, T + extra_s)
-        if ops.get('smooth_kernel') is not None:
-            out = batch_smooth_conv(out, ops['smooth_kernel'])  # (n, T)
-        return apply_activation(out, ops['act'])
+        out = x
+        out += self.rng.normal(0, ops['noise_std'], size=(n, T))
+        return out
 
     # ── Dataset extraction ────────────────────────────────────────────────
 
@@ -382,8 +377,10 @@ class DatasetGenerator:
         """
         Generate a complete classification dataset.
 
+        - Propagate 3× the requested n_samples to increase chance of balanced classes.
         - Labels come directly from the target discrete node.
         - Classes with < min_samples_per_class observations are dropped.
+        - Subsample back to n_samples after filtering.
         - If fewer than 2 classes survive, returns **None** (caller should skip).
         - Stratified split guarantees all test labels exist in train.
         """
@@ -391,7 +388,9 @@ class DatasetGenerator:
         feat_ids = [n.id for n in self.dag.feature_nodes]
         target_id = self.dag.target_node.id
 
-        vals, disc = self.propagate(self.n_samples)
+        # Oversample: propagate 3× more, then trim
+        n_propagate = min(self.n_samples * 3, 3000)
+        vals, disc = self.propagate(n_propagate)
         X = np.stack([vals[fid] for fid in feat_ids], axis=1)
         y = disc[target_id].astype(int)
 
@@ -405,10 +404,24 @@ class DatasetGenerator:
         mask = np.isin(y, keep_classes)
         X, y = X[mask], y[mask]
 
+        # ── Subsample back to n_samples ───────────────────────────────────
+        if len(y) > self.n_samples:
+            idx = self.rng.choice(len(y), size=self.n_samples, replace=False)
+            X, y = X[idx], y[idx]
+
+        # Re-check after subsample
+        unique2, counts2 = np.unique(y, return_counts=True)
+        keep2 = unique2[counts2 >= min_per_class]
+        if len(keep2) < 2:
+            return None
+
+        mask2 = np.isin(y, keep2)
+        X, y = X[mask2], y[mask2]
+
         # Re-index classes to 0..k'-1
-        class_map = {c: i for i, c in enumerate(sorted(keep_classes))}
+        class_map = {c: i for i, c in enumerate(sorted(keep2))}
         y = np.array([class_map[c] for c in y])
-        n_classes = len(keep_classes)
+        n_classes = len(keep2)
 
         # ── Stratified train / test split ─────────────────────────────────
         train_ratio = self.hp.dataset.train_ratio
@@ -447,26 +460,22 @@ class DatasetGenerator:
             'Node operations:',
         ]
         for nid, ops in sorted(self.node_ops.items()):
+            noise = f', noise_std={ops["noise_std"]:.1e}'
             if ops['kind'] == 'tabular':
                 lines.append(
-                    f'  node {nid} (tabular): W({len(ops["W"])}), act={ops["act"]}')
+                    f'  node {nid} (tabular): W({len(ops["W"])}), '
+                    f'act={ops["act"]}{noise}')
             elif ops['kind'] == 'discrete':
                 lines.append(
                     f'  node {nid} (discrete): k={ops["k"]}, '
-                    f'proto({ops["prototypes"].shape})')
-            elif ops['kind'] == 'series_conv':
-                sk = ops.get('smooth_kernel')
-                smooth_str = f', smooth_K={len(sk)}' if sk is not None else ''
+                    f'proto({ops["prototypes"].shape}){noise}')
+            elif ops['kind'] == 'series':
+                kshapes = [f'{k.shape}' for k in ops['kernels']]
+                acts_str = '→'.join(ops['acts'])
                 lines.append(
-                    f'  node {nid} (series_conv): kernel{ops["kernel"].shape}'
-                    f'{smooth_str}, act={ops["act"]}')
-            elif ops['kind'] == 'series_pe':
-                proj = 'yes' if ops['proj_W'] is not None else 'no'
-                sk = ops.get('smooth_kernel')
-                smooth_str = f', smooth_K={len(sk)}' if sk is not None else ''
-                lines.append(
-                    f'  node {nid} (series_pe): kernel{ops["kernel"].shape}, '
-                    f'proj={proj}{smooth_str}, act={ops["act"]}')
+                    f'  node {nid} (series): {len(ops["kernels"])}L '
+                    f'kernels={kshapes}, acts=[{acts_str}], '
+                    f't_act={ops["time_act"]}{noise}')
         return '\n'.join(lines)
 
 

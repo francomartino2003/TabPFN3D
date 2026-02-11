@@ -36,7 +36,7 @@ from hyperparameters import GeneratorHyperparameters
 _HP = GeneratorHyperparameters()
 
 MAX_SAMPLES   = _HP.dataset.max_samples          # 1000
-MAX_FEATURES  = _HP.roles.max_features            # 12
+MAX_FEATURES  = _HP.roles.n_features_range[1]      # 12
 MAX_FEAT_T    = _HP.dataset.max_feat_times_t       # 500
 MAX_CLASSES   = 10
 MAX_TIMESTEPS = _HP.dataset.t_range[1]             # 500
