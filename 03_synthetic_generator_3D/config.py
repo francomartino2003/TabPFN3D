@@ -5,26 +5,18 @@ This module defines:
 - PriorConfig3D: Distributions for sampling dataset configurations
 - DatasetConfig3D: Concrete configuration for a single 3D dataset
 
-Key design decisions (v3):
-- Nodos raíz: solo temporales y estados (nodo X en t-k)
-- Ruido solo como inicialización cuando t-k < 0
-- Sin passthrough, más probabilidad de árboles
-- DAG más pequeño
-- Selección de features con preferencia por cercanía espacial (DAG)
-- Selección de target_offset con preferencia por cercanía temporal
-- distance_alpha controla ambas preferencias de forma unificada
+Key design decisions (v4):
+- Nodos raíz: 1 TIME (u = t/T normalizado) + 1 vector MEMORY (1-8 dims)
+- MEMORY se samplea UNA VEZ por secuencia T (da variabilidad entre samples)
+- Sin state inputs (no observan nodos en t-k)
+- Ruido solo al final de cada transformación
+- Target siempre de discretización (clasificación)
+- Al menos 1 feature relevante y 1 continua
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Tuple, Optional
 import numpy as np
-
-
-@dataclass
-class StateInputConfig:
-    """Configuration for a state input (node X at t-k)."""
-    source_node: int  # Which node's past value to use
-    lag: int          # How many timesteps back (k in t-k)
 
 
 @dataclass
@@ -32,11 +24,10 @@ class PriorConfig3D:
     """
     Prior distributions for sampling 3D temporal dataset configurations.
     
-    Limits:
-    - max 10,000 samples (train + test)
-    - max 15 features
-    - max 1000 timesteps
-    - max 10 classes
+    v4 Design:
+    - 1 TIME input: u = t/T (normalized, no activation)
+    - 1 MEMORY vector: sampled once per sequence, provides sample variability
+    - No state inputs
     """
     
     # === Size constraints ===
@@ -51,153 +42,93 @@ class PriorConfig3D:
     n_samples_range: Tuple[int, int] = (100, 10000)
     
     # === Feature count ===
-    # Probability of univariate series (1 feature only)
-    prob_univariate: float = 0.4
-    
-    # Beta distribution for feature count when multivariate, scaled to [2, max_features]
+    # Real datasets: ~94% univariate, so we prioritize univariate
+    prob_univariate: float = 0.70
     n_features_beta_a: float = 1.5
     n_features_beta_b: float = 4.0
     n_features_range: Tuple[int, int] = (2, 15)
     
     # === Temporal parameters ===
-    # Total sequence length T (before extracting subsequences)
     T_total_range: Tuple[int, int] = (30, 2000)
     T_total_log_uniform: bool = True
-    
-    # Subsequence length for features (the 't' in n×m×t)
     t_subseq_range: Tuple[int, int] = (10, 1000)
     t_subseq_log_uniform: bool = True
     
-    # === Graph structure - Distance preference controls complexity ===
-    n_nodes_range: Tuple[int, int] = (8, 30)  # Larger DAGs, complexity controlled by distance
+    # === Graph structure ===
+    # Larger DAGs for more stability (distributes impact across more nodes)
+    n_nodes_range: Tuple[int, int] = (8, 20)
     n_nodes_log_uniform: bool = True
-    
-    # Edge density (0.0 = minimal tree, 1.0 = complete DAG)
-    density_range: Tuple[float, float] = (0.1, 0.6)
-    
-    # Number of root/input nodes (nodes without parents)
-    # Now only time + state inputs (no noise roots)
-    # More roots = richer temporal dynamics
-    n_roots_range: Tuple[int, int] = (4, 18)  # More roots allowed
-    min_roots_fraction: float = 0.25
-    max_roots_fraction: float = 0.60
+    density_range: Tuple[float, float] = (0.2, 0.5)
     
     # Disconnected subgraphs for irrelevant features
-    prob_disconnected_subgraph: float = 0.2  # Reduced (less relevant for univariate)
+    prob_disconnected_subgraph: float = 0.2
     n_disconnected_subgraphs_range: Tuple[int, int] = (1, 3)
     
-    # === Root input type distribution ===
-    # Only TIME and STATE inputs as roots (no noise roots)
-    # Noise only used as initialization when t-k < 0
-    min_time_inputs: int = 1    # At least 1 time input (linear always included)
-    min_state_inputs: int = 1   # At least 1 state input
+    # === Root inputs (v5 - inspired by random_nn_generator) ===
+    # TIME inputs: 1 base linear (u = t/T) + extra transforms
+    # Each transform can appear multiple times (linear gets more copies)
+    # MEMORY vector: log-uniform dimension, sampled once per sequence
     
-    # Distribution of roots between time and state
-    # Reduced time fraction = more state inputs (state inputs correlate with better AUC)
-    time_fraction_range: Tuple[float, float] = (0.2, 0.45)  # 20-45% time inputs → 55-80% state
+    # Number of time transforms (log-uniform to favor smaller)
+    n_time_transforms_range: Tuple[int, int] = (1, 16)
+    n_time_transforms_log_uniform: bool = True
     
-    # === State input parameters ===
-    # Lag range for state inputs (the k in t-k)
-    state_lag_range: Tuple[int, int] = (1, 5)   # Reduced max lag (was 10)
-    state_lag_distribution: str = 'geometric'   # 'uniform' or 'geometric' (favors smaller lags)
-    state_lag_geometric_p: float = 0.6          # Higher p = smaller lags more probable (was 0.4)
+    # Extra copies of linear (to give it more weight)
+    linear_extra_copies_range: Tuple[int, int] = (0, 3)
     
-    # Spatial preference for state source nodes
-    # State inputs prefer to observe nodes closer to the target in the DAG
-    state_source_distance_alpha: float = 2.0    # prob ∝ 1/(1 + distance^alpha)
-    
-    # α for tanh(α·s_{t-k}) to normalize state to [-1, 1]
-    # Reduced range to preserve more information (high alpha → info loss)
-    state_alpha_range: Tuple[float, float] = (0.3, 0.8)
-    
-    # === Time-dependent input activations ===
-    # Available time activation functions (sampled with weights)
-    time_activations: List[str] = field(default_factory=lambda: [
-        'linear',        # u
-        'quadratic',     # u^2
-        'cubic',         # u^3
-        'tanh',          # tanh(β(2u-1))
-        'sin_1', 'sin_2', 'sin_3', 'sin_5',  # sin(2πku)
-        'cos_1', 'cos_2', 'cos_3', 'cos_5',  # cos(2πku)
-        'exp_decay',     # exp(-γu)
-        'log'            # log(u + 0.1)
+    # Available time transforms (like random_nn_generator)
+    time_transforms: List[str] = field(default_factory=lambda: [
+        'linear',       # u (always included)
+        'quadratic',    # u^2
+        'cubic',        # u^3
+        'sin_k1',       # sin(2πu)
+        'cos_k1',       # cos(2πu)
+        'sin_k2',       # sin(4πu)
+        'cos_k2',       # cos(4πu)
+        'sin_k3',       # sin(6πu)
+        'cos_k3',       # cos(6πu)
+        'sin_k5',       # sin(10πu)
+        'cos_k5',       # cos(10πu)
+        'tanh_trend',   # tanh(β(2u-1)), β ~ LogUniform(0.5, 3.0)
+        'exp_decay',    # exp(-γu), γ ~ LogUniform(0.5, 5.0)
+        'exp_growth',   # exp(γu), γ ~ LogUniform(0.1, 1.0)
+        'log',          # log(1+u) normalized
+        'sqrt',         # sqrt(u) normalized
     ])
     
-    # Weights for time activation sampling (all similar, slight preference for simple)
-    time_activation_weights: Dict[str, float] = field(default_factory=lambda: {
-        'linear': 1.5,      # Slight preference
-        'quadratic': 1.2,
-        'cubic': 1.0,
-        'tanh': 1.0,
-        'sin_1': 1.0, 'sin_2': 1.0, 'sin_3': 0.8, 'sin_5': 0.6,
-        'cos_1': 1.0, 'cos_2': 1.0, 'cos_3': 0.8, 'cos_5': 0.6,
-        'exp_decay': 1.0,
-        'log': 1.0
-    })
+    # MEMORY vector dimensions (log-uniform to favor smaller)
+    memory_dim_range: Tuple[int, int] = (1, 64)
+    memory_dim_log_uniform: bool = True
     
-    # Parameters for time activations
-    tanh_beta_range: Tuple[float, float] = (0.5, 3.0)
-    exp_gamma_range: Tuple[float, float] = (0.5, 5.0)
+    # MEMORY initialization
+    memory_init: str = 'uniform'  # 'uniform' or 'normal'
     
-    # === Noise for initialization (when t-k < 0) ===
-    noise_types: List[str] = field(default_factory=lambda: ['normal', 'uniform', 'mixed'])
-    init_sigma_range: Tuple[float, float] = (0.05, 0.5)  # Reduced further for cleaner signals
-    init_a_range: Tuple[float, float] = (0.2, 0.6)       # Reduced further
+    # === Edge transformations (v5 - inspired by random_nn_generator) ===
+    # Almost all NN with smooth activations, some discretization per-node
     
-    # === Edge transformations ===
-    # Removed passthrough, higher tree probability for non-linear relationships
-    prob_nn_transform: float = 0.40   # Neural network-like transformation
-    prob_tree_transform: float = 0.45  # Decision tree - higher for complex patterns
-    prob_discretization: float = 0.15  # Discretization (categorical)
-    # No passthrough - removed
-    
-    # Probability of using identity activation in NN
-    prob_identity_activation: float = 0.4
-    
-    # Available activation functions for NN transformation
-    activations: List[str] = field(default_factory=lambda: [
-        # === Bounded activations ===
-        'identity',    # Linear (no activation) - unbounded but stable with Xavier init
-        'tanh',        # Hyperbolic tangent: tanh(x) → [-1, 1]
-        'sigmoid',     # Sigmoid: 1/(1+exp(-x)) → [0, 1]
-        'sin',         # Sine: sin(x) → [-1, 1]
-        'cos',         # Cosine: cos(x) → [-1, 1]
-        'step',        # Step function: 1 if x>0 else 0 → {0, 1}
-        'rank',        # Rank operation: percentile ranks → [0, 1]
-        # === Unbounded activations ===
-        'relu',        # ReLU: max(0, x) → [0, ∞)
-        'leaky_relu',  # Leaky ReLU: x if x>0 else 0.01x → (-∞, ∞)
-        'elu',         # ELU: x if x>0 else exp(x)-1 → (-1, ∞)
-        'softplus',    # Smooth ReLU: log(1+exp(x)) → (0, ∞)
-        'abs',         # Absolute value: |x| → [0, ∞)
-        'square',      # Squaring: x^2 → [0, ∞)
-        'log',         # Logarithm: log(|x| + eps) → (-∞, ∞)
-        'power',       # Power function: sign(x)*|x|^p with random p
-        'mod',         # Modulo operation: x mod 2 → [0, 2)
-    ])
+    # Per-node discretization probability (not global %)
+    discretization_node_prob: float = 0.15
     
     # Discretization parameters
     n_categories_range: Tuple[int, int] = (2, 10)
     
-    # Decision tree parameters
-    tree_depth_range: Tuple[int, int] = (1, 5)
-    tree_max_features_fraction: float = 0.7
+    # NN activation - smooth activations only (no dying neurons)
+    nn_activations: List[str] = field(default_factory=lambda: [
+        'softplus',    # Smooth ReLU (primary)
+        'tanh',        # Hyperbolic tangent
+        'elu',         # ELU
+    ])
     
-    # === Edge noise - Variable per dataset (REDUCED) ===
-    prob_edge_noise: float = 0.03      # Reduced (was 0.05)
-    noise_scale_range: Tuple[float, float] = (0.001, 0.03)  # Reduced max (was 0.08)
-    noise_scale_log_uniform: bool = True
-    # More datasets are "clean" with minimal noise
-    prob_low_noise_dataset: float = 0.5  # Increased (was 0.3)
-    low_noise_scale_max: float = 0.002   # Reduced (was 0.005)
+    # Probability of identity activation (linear, no activation)
+    prob_identity_activation: float = 0.3
     
-    # === Distance preference (unified for spatial and temporal) ===
-    # prob(distance=d) ∝ 1 / (1 + d^alpha)
-    # Higher alpha = stronger preference for closer distances
-    distance_alpha: float = 1.5
+    # === Per-node noise (v5 - inspired by random_nn_generator) ===
+    # Each node can have noise with different probability and distribution
+    node_noise_prob_range: Tuple[float, float] = (0.01, 0.5)  # Log-uniform
+    node_noise_std_range: Tuple[float, float] = (0.0001, 0.02)  # Log-uniform
+    noise_distributions: List[str] = field(default_factory=lambda: ['normal', 'uniform', 'laplace'])
     
     # === Sample generation mode ===
-    # Increased IID probability (better AUC, no temporal leakage)
     prob_iid_mode: float = 0.55
     prob_sliding_window_mode: float = 0.30
     prob_mixed_mode: float = 0.15
@@ -205,16 +136,18 @@ class PriorConfig3D:
     # Sliding window parameters
     window_stride_range: Tuple[int, int] = (1, 10)
     
-    # === Target configuration ===
-    prob_classification: float = 0.5
-    force_classification: Optional[bool] = None
-    min_samples_per_class: int = 25  # Increased for more robust learning
+    # === Target configuration (v4) ===
+    # Target is ALWAYS classification (from discretization node)
+    min_samples_per_class: int = 25
     
-    # Target temporal offset - distance-based (uses distance_alpha)
-    # prob(offset=k) ∝ 1 / (1 + |k|^distance_alpha)
-    # This naturally favors offset=0, then ±1, ±2, etc.
-    max_target_offset: int = 20       # Maximum temporal offset
-    prob_future: float = 0.75         # Probability of future (vs past) when offset != 0
+    # Target temporal offset - balanced probabilities
+    # prob(offset=k) ∝ 1 / (1 + |k|^alpha)
+    max_target_offset: int = 20
+    # Balanced between future and past (50/50)
+    prob_future: float = 0.50
+    
+    # === Distance preference ===
+    distance_alpha: float = 1.5
     
     # === Post-processing ===
     prob_warping: float = 0.3
@@ -235,36 +168,32 @@ class DatasetConfig3D:
     """
     Configuration for a specific 3D temporal dataset instance.
     
-    Sampled from PriorConfig3D.
+    v4 Design:
+    - 1 TIME root (u = t/T)
+    - memory_dim MEMORY roots (sampled once per sequence)
+    - Target always from discretization
     """
     
     # === Size ===
     n_samples: int
     n_features: int
-    T_total: int          # Total sequence length
-    t_subseq: int         # Feature subsequence length
+    T_total: int
+    t_subseq: int
     
     # === Graph structure ===
     n_nodes: int
     density: float
     n_disconnected_subgraphs: int
     
-    # === Root input configuration (NEW DESIGN) ===
-    # No n_noise_inputs - noise only for initialization
-    n_time_inputs: int
-    n_state_inputs: int
-    
-    # State input configurations: list of (source_node_idx, lag) tuples
-    # source_node_idx is the index in the non-root nodes (assigned after DAG build)
-    # lag is the k in t-k
-    state_configs: List[Tuple[int, int]]  # List of (source_node_relative_idx, lag)
-    
-    # Time input activations (one per time input)
-    time_activations: List[str]
-    time_activation_params: Dict[str, float]
-    
-    # State normalization parameter
-    state_alpha: float
+    # === Root configuration (v4) ===
+    # TIME inputs
+    n_extra_time_inputs: int      # Extra TIME inputs (0-7)
+    time_input_activations: List[str]  # Activations for extra TIME inputs
+    # MEMORY inputs
+    memory_dim: int           # Number of MEMORY inputs (1-8)
+    memory_noise_type: str    # 'normal' or 'uniform'
+    memory_sigma: float       # For normal initialization
+    memory_a: float           # For uniform initialization [-a, a]
     
     # === Edge transformations ===
     transform_probs: Dict[str, float]
@@ -274,12 +203,8 @@ class DatasetConfig3D:
     tree_depth: int
     tree_max_features_fraction: float
     
-    # === Noise settings (for initialization only) ===
-    noise_type: str
-    noise_scale: float      # For edge noise (very small)
-    edge_noise_prob: float
-    init_sigma: float       # For state initialization
-    init_a: float
+    # === Noise (v4 - simplified) ===
+    noise_scale: float  # Applied at end of each transformation
     
     # === Sample generation mode ===
     sample_mode: str  # 'iid', 'sliding_window', 'mixed'
@@ -289,10 +214,10 @@ class DatasetConfig3D:
     # === Target configuration ===
     is_classification: bool
     n_classes: int
-    target_offset: int  # Temporal distance: 0=within, >0=future, <0=past
+    target_offset: int
     
-    # === Distance preference (for feature selection) ===
-    spatial_distance_alpha: float  # Controls preference for spatially closer features
+    # === Distance preference ===
+    spatial_distance_alpha: float
     
     # === Post-processing ===
     apply_warping: bool
@@ -323,7 +248,6 @@ class DatasetConfig3D:
         t_subseq = min(t_subseq, prior.max_t_subseq)
         t_subseq = max(t_subseq, 5)
         
-        # T_total must be larger than t_subseq
         min_T = t_subseq + 10
         if prior.T_total_log_uniform:
             T_total = int(log_uniform(max(min_T, prior.T_total_range[0]), prior.T_total_range[1]))
@@ -343,20 +267,40 @@ class DatasetConfig3D:
         # === Enforce flattened feature limit (n_features * t_subseq < 500) ===
         max_t_for_features = 500 // n_features
         if t_subseq > max_t_for_features:
-            t_subseq = max(50, max_t_for_features)  # Keep at least 50 timesteps
-            T_total = max(t_subseq + 10, T_total)   # Ensure T_total > t_subseq
+            t_subseq = max(50, max_t_for_features)
+            T_total = max(t_subseq + 10, T_total)
         
         # === Sample sample count ===
         n_samples = rng.integers(*prior.n_samples_range)
         n_samples = min(n_samples, prior.max_samples)
         
-        # === Sample graph structure (REDUCED) ===
+        # === Sample extra TIME inputs (v4) ===
+        n_extra_time_inputs = rng.integers(prior.n_extra_time_inputs_range[0], 
+                                            prior.n_extra_time_inputs_range[1] + 1)
+        
+        # Sample activations for extra TIME inputs
+        if n_extra_time_inputs > 0:
+            time_input_activations = list(rng.choice(
+                prior.time_activations, 
+                size=n_extra_time_inputs, 
+                replace=False
+            ))
+        else:
+            time_input_activations = []
+        
+        # === Sample MEMORY dimension (v4) ===
+        memory_dim = rng.integers(*prior.memory_dim_range)
+        
+        # Total roots = 1 (base TIME) + n_extra_time_inputs + memory_dim (MEMORY)
+        n_roots = 1 + n_extra_time_inputs + memory_dim
+        
+        # === Sample graph structure ===
         if prior.n_nodes_log_uniform:
             n_nodes = int(log_uniform(*prior.n_nodes_range))
         else:
             n_nodes = rng.integers(*prior.n_nodes_range)
-        # Ensure enough nodes for features + target + some latent
-        n_nodes = max(n_nodes, n_features + 3)
+        # Ensure enough nodes for roots + features + target
+        n_nodes = max(n_nodes, n_roots + n_features + 2)
         
         # === Enforce complexity limit ===
         for _ in range(10):
@@ -366,93 +310,28 @@ class DatasetConfig3D:
             scale = (prior.max_complexity / complexity) ** (1/3)
             n_samples = max(100, int(n_samples * scale))
             T_total = max(t_subseq + 10, int(T_total * scale))
-            n_nodes = max(n_features + 3, int(n_nodes * scale))
+            n_nodes = max(n_roots + n_features + 2, int(n_nodes * scale))
         
-        # Edge density
         density = rng.uniform(*prior.density_range)
         
-        # Disconnected subgraphs (less likely for small graphs)
+        # Disconnected subgraphs
         n_disconnected = 0
-        if n_nodes >= 8 and rng.random() < prior.prob_disconnected_subgraph:
-            max_disconnected = min(prior.n_disconnected_subgraphs_range[1], (n_nodes - 5) // 3)
+        if n_nodes >= 10 and rng.random() < prior.prob_disconnected_subgraph:
+            max_disconnected = min(prior.n_disconnected_subgraphs_range[1], (n_nodes - n_roots - 3) // 3)
             if max_disconnected >= 1:
                 n_disconnected = rng.integers(1, max_disconnected + 1)
         
-        # === Sample root input types (ONLY TIME and STATE) ===
-        # Calculate number of roots
-        min_roots_by_fraction = max(2, int(n_nodes * prior.min_roots_fraction))
-        max_roots_by_fraction = max(min_roots_by_fraction, int(n_nodes * prior.max_roots_fraction))
+        # === MEMORY initialization ===
+        memory_noise_type = prior.memory_noise_type
+        memory_sigma = rng.uniform(*prior.memory_sigma_range)
+        memory_a = rng.uniform(*prior.memory_a_range)
         
-        low = max(prior.n_roots_range[0], min_roots_by_fraction)
-        high = min(prior.n_roots_range[1], max_roots_by_fraction) + 1
-        n_roots = rng.integers(low, high) if low < high else low
-        
-        # Distribute between time and state
-        time_fraction = rng.uniform(*prior.time_fraction_range)
-        n_time = max(prior.min_time_inputs, int(n_roots * time_fraction))
-        n_state = max(prior.min_state_inputs, n_roots - n_time)
-        
-        # Adjust if we have too many
-        while n_time + n_state > n_roots:
-            if n_state > prior.min_state_inputs:
-                n_state -= 1
-            elif n_time > prior.min_time_inputs:
-                n_time -= 1
-            else:
-                break
-        
-        # === Sample time activation functions (weighted, no forced linear) ===
-        time_activations = []
-        time_activation_params = {}
-        
-        # Build weighted probabilities
-        available_acts = prior.time_activations.copy()
-        weights = np.array([prior.time_activation_weights.get(a, 1.0) for a in available_acts])
-        probs = weights / weights.sum()
-        
-        # Sample n_time activations WITHOUT replacement (all different)
-        n_to_sample = min(n_time, len(available_acts))
-        sampled_acts = list(rng.choice(available_acts, size=n_to_sample, replace=False, p=probs))
-        time_activations = sampled_acts
-        
-        # Sample parameters for activations that need them
-        for i, act in enumerate(time_activations):
-            if act == 'tanh':
-                time_activation_params[f'tanh_beta_{i}'] = log_uniform(*prior.tanh_beta_range)
-            elif act == 'exp_decay':
-                time_activation_params[f'exp_gamma_{i}'] = log_uniform(*prior.exp_gamma_range)
-        
-        # === Sample state configurations ===
-        # Each state input references a non-root node at t-k
-        # We'll assign source nodes later (after DAG is built)
-        # For now, sample lags
-        state_configs = []
-        n_non_roots = n_nodes - n_roots
-        
-        for i in range(n_state):
-            # Sample lag
-            if prior.state_lag_distribution == 'geometric':
-                # Geometric distribution favors smaller lags
-                lag = 1 + int(rng.geometric(prior.state_lag_geometric_p))
-                lag = min(lag, prior.state_lag_range[1])
-            else:
-                lag = rng.integers(*prior.state_lag_range)
-            
-            # Source node will be assigned later (use -1 as placeholder for "any non-root")
-            # We'll properly assign after DAG is built
-            source_idx = -1  # Placeholder
-            state_configs.append((source_idx, lag))
-        
-        # === Sample state alpha ===
-        state_alpha = log_uniform(*prior.state_alpha_range)
-        
-        # === Sample edge transformation probabilities (NO PASSTHROUGH) ===
+        # === Sample edge transformation probabilities ===
         transform_probs = {
             'nn': prior.prob_nn_transform,
             'tree': prior.prob_tree_transform,
             'discretization': prior.prob_discretization,
         }
-        # Normalize
         total = sum(transform_probs.values())
         transform_probs = {k: v/total for k, v in transform_probs.items()}
         
@@ -471,68 +350,35 @@ class DatasetConfig3D:
         tree_depth = rng.integers(*prior.tree_depth_range)
         tree_max_features_fraction = prior.tree_max_features_fraction
         
-        # === Noise (for initialization only) ===
-        noise_type = rng.choice(prior.noise_types)
-        
-        # Some datasets are "clean" with minimal noise
-        if rng.random() < prior.prob_low_noise_dataset:
-            noise_scale = log_uniform(prior.noise_scale_range[0], prior.low_noise_scale_max)
-        elif prior.noise_scale_log_uniform:
+        # === Noise (v4 - simplified) ===
+        if prior.noise_scale_log_uniform:
             noise_scale = log_uniform(*prior.noise_scale_range)
         else:
             noise_scale = rng.uniform(*prior.noise_scale_range)
-        
-        init_sigma = rng.uniform(*prior.init_sigma_range)
-        init_a = rng.uniform(*prior.init_a_range)
         
         # === Sample generation mode ===
         mode_probs = [prior.prob_iid_mode, prior.prob_sliding_window_mode, prior.prob_mixed_mode]
         mode_probs = np.array(mode_probs) / sum(mode_probs)
         sample_mode = rng.choice(['iid', 'sliding_window', 'mixed'], p=mode_probs)
         
-        # CRITICAL: For IID mode, we MUST have state inputs!
-        # Time inputs are deterministic functions of t, so without state inputs,
-        # all IID samples would have identical features/targets.
-        # State inputs get initialized with noise when t-lag < 0, creating variability.
-        if sample_mode == 'iid' and n_state == 0:
-            # Force at least 1 state input by converting a time input
-            if n_time > 1:
-                n_time -= 1
-                n_state = 1
-            else:
-                # If only 1 time input, add 1 state input (increase roots)
-                n_state = 1
-        
         window_stride = rng.integers(*prior.window_stride_range) if sample_mode != 'iid' else 1
         n_sequences = rng.integers(2, 10) if sample_mode == 'mixed' else 1
         
-        # === Target configuration ===
-        if prior.force_classification is not None:
-            is_classification = prior.force_classification
-        else:
-            is_classification = rng.random() < prior.prob_classification
+        # === Target configuration (v4: always classification) ===
+        is_classification = True
+        max_classes_for_samples = max(2, n_samples // prior.min_samples_per_class)
+        max_classes = min(prior.max_classes, max_classes_for_samples)
+        n_classes = rng.integers(2, max(3, max_classes + 1))
         
-        if is_classification:
-            max_classes_for_samples = max(2, n_samples // prior.min_samples_per_class)
-            max_classes = min(prior.max_classes, max_classes_for_samples)
-            n_classes = rng.integers(2, max(3, max_classes + 1))
-        else:
-            n_classes = 0
-        
-        # === Sample target offset FIRST (to optimize T_total) ===
-        # Use a fixed reasonable max_offset, not dependent on T_total
-        # This way we can then compute optimal T_total
-        max_offset = min(prior.max_target_offset, 15)  # Cap at 15 for reasonable t_ratio
-        
-        # Generate possible offsets and their probabilities
-        # prob(offset=k) ∝ 1 / (1 + |k|^alpha)
+        # === Sample target offset (balanced future/past) ===
+        max_offset = min(prior.max_target_offset, 15)
         possible_offsets = list(range(-min(5, t_subseq - 1), max_offset + 1))
         alpha = prior.distance_alpha
         
         offset_probs = []
         for k in possible_offsets:
             prob = 1.0 / (1.0 + abs(k) ** alpha)
-            # Apply future vs past preference for non-zero offsets
+            # Balanced future/past (50/50)
             if k > 0:
                 prob *= prior.prob_future
             elif k < 0:
@@ -541,36 +387,21 @@ class DatasetConfig3D:
         
         offset_probs = np.array(offset_probs)
         offset_probs = offset_probs / offset_probs.sum()
-        
         target_offset = int(rng.choice(possible_offsets, p=offset_probs))
         
-        # === OPTIMIZE T_total to maximize t_ratio ===
-        # For IID: we only need t_subseq + |offset| + minimal burn_in
-        # For sliding_window: need more room for window extraction
-        # For mixed: similar to sliding_window
-        
+        # === Optimize T_total ===
         if sample_mode == 'iid':
-            # Minimal T_total: just what we need
-            # burn_in is for state initialization (states need some history)
-            max_state_lag = max([sc[1] for sc in state_configs]) if state_configs else 1
-            burn_in = max(5, max_state_lag + 2)  # Small burn-in
+            burn_in = 5
             T_total = t_subseq + abs(target_offset) + burn_in
         elif sample_mode == 'sliding_window':
-            # Need more room for multiple windows, but still optimize
-            # Estimate: need at least n_samples windows of size t_subseq
-            # With stride, need: t_subseq + (n_windows - 1) * stride
-            # But cap it to keep t_ratio reasonable
-            estimated_windows = min(n_samples, 100)  # Cap window count estimation
+            estimated_windows = min(n_samples, 100)
             min_T_for_windows = t_subseq + estimated_windows * window_stride + abs(target_offset)
-            # But cap T_total to keep t_ratio > 0.3 at least
-            max_T_for_ratio = int(t_subseq / 0.25)  # t_ratio >= 0.25
+            max_T_for_ratio = int(t_subseq / 0.25)
             T_total = min(min_T_for_windows, max_T_for_ratio)
             T_total = max(T_total, t_subseq + abs(target_offset) + 10)
         else:  # mixed
-            # Multiple independent sequences, each shorter
-            max_state_lag = max([sc[1] for sc in state_configs]) if state_configs else 1
-            burn_in = max(10, max_state_lag + 5)
-            T_total = t_subseq + abs(target_offset) + burn_in + 20  # Small extra
+            burn_in = 10
+            T_total = t_subseq + abs(target_offset) + burn_in + 20
         
         # === Post-processing ===
         apply_warping = rng.random() < prior.prob_warping
@@ -582,7 +413,6 @@ class DatasetConfig3D:
         apply_missing = rng.random() < prior.prob_missing_values
         missing_rate = rng.uniform(*prior.missing_rate_range)
         
-        # === Train ratio ===
         train_ratio = rng.uniform(*prior.train_ratio_range)
         
         return cls(
@@ -593,23 +423,19 @@ class DatasetConfig3D:
             n_nodes=n_nodes,
             density=density,
             n_disconnected_subgraphs=n_disconnected,
-            n_time_inputs=n_time,
-            n_state_inputs=n_state,
-            state_configs=state_configs,
-            time_activations=time_activations,
-            time_activation_params=time_activation_params,
-            state_alpha=state_alpha,
+            n_extra_time_inputs=n_extra_time_inputs,
+            time_input_activations=time_input_activations,
+            memory_dim=memory_dim,
+            memory_noise_type=memory_noise_type,
+            memory_sigma=memory_sigma,
+            memory_a=memory_a,
             transform_probs=transform_probs,
             allowed_activations=allowed_activations,
             prob_identity_activation=prior.prob_identity_activation,
             n_categories=n_categories,
             tree_depth=tree_depth,
             tree_max_features_fraction=tree_max_features_fraction,
-            noise_type=noise_type,
             noise_scale=noise_scale,
-            edge_noise_prob=prior.prob_edge_noise,
-            init_sigma=init_sigma,
-            init_a=init_a,
             sample_mode=sample_mode,
             window_stride=window_stride,
             n_sequences=n_sequences,
@@ -635,16 +461,15 @@ class DatasetConfig3D:
             'T_total': self.T_total,
             't_subseq': self.t_subseq,
             'n_nodes': self.n_nodes,
-            'n_time_inputs': self.n_time_inputs,
-            'n_state_inputs': self.n_state_inputs,
-            'state_configs': self.state_configs,
-            'time_activations': self.time_activations,
-            'state_alpha': self.state_alpha,
+            'n_extra_time_inputs': self.n_extra_time_inputs,
+            'time_input_activations': self.time_input_activations,
+            'memory_dim': self.memory_dim,
             'sample_mode': self.sample_mode,
             'is_classification': self.is_classification,
             'n_classes': self.n_classes,
             'target_offset': self.target_offset,
             'spatial_distance_alpha': self.spatial_distance_alpha,
+            'noise_scale': self.noise_scale,
             'train_ratio': self.train_ratio,
             'seed': self.seed
         }

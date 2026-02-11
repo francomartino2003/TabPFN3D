@@ -2,14 +2,14 @@
 
 Generator of 3D synthetic datasets with temporal dependencies for time series classification.
 
-## Overview
+## Overview (v4)
 
 This module generates datasets with shape `(n_samples, n_features, t_timesteps)` where:
 - `n_samples`: Number of observations
 - `n_features`: Number of features (observed graph nodes)
 - `t_timesteps`: Temporal subsequence length
 
-## Architecture
+## Architecture (v4)
 
 ```
                     ┌──────────────────────────────────────────┐
@@ -23,7 +23,7 @@ This module generates datasets with shape `(n_samples, n_features, t_timesteps)`
               │  t = 0    │        ...           │  t = T-1    │
               └─────┬─────┘                      └──────┬──────┘
                     │                                   │
-    Inputs:  Noise + Time(0) + State(init)    Noise + Time(T-1) + State(t-1)
+    Inputs:   TIME(0) + MEMORY              TIME(T-1) + MEMORY (same)
                     │                                   │
                     ▼                                   ▼
               Propagation                         Propagation
@@ -36,83 +36,116 @@ This module generates datasets with shape `(n_samples, n_features, t_timesteps)`
                               (n, m, t), y
 ```
 
-## Input Types (Root Nodes)
+## Root Inputs (v4)
 
-### Noise Inputs
-- Normal N(0, σ²) or Uniform U(-a, a)
-- New values at each timestep
-- Provide variability between samples
+### TIME Input (1 node)
+- Single deterministic input: `u = t/T` (normalized time in [0, 1])
+- Same value for all samples at timestep t
+- Provides temporal dependency structure
 
-### Time Inputs
-Deterministic functions of normalized time `u = t/T`:
-- `linear`: u
-- `quadratic`: u²
-- `cubic`: u³
-- `tanh`: tanh(β(2u-1)), β ∈ LogUniform(0.5, 3.0)
-- `sin_k`: sin(2πku), k ∈ {1,2,3,5}
-- `cos_k`: cos(2πku), k ∈ {1,2,3,5}
-- `exp_decay`: exp(-γu), γ ∈ LogUniform(0.5, 5.0)
-- `log`: log(u + 0.1)
+### MEMORY Inputs (1-8 nodes)
+- Vector of dimension 1-8, sampled ONCE per sequence
+- Does NOT change within a sequence
+- **For IID mode**: Each sample gets its own MEMORY → variability between samples
+- **For sliding/mixed**: One MEMORY per long sequence
+- Initialization: Normal N(0, σ²) or Uniform U(-a, a)
 
-### State Inputs
-- Memory from previous timestep
-- At t=0 initialized with noise
-- Normalized: `tanh(α · s_{t-1})`
-- Allow temporal dependencies (AR-like)
+## Transformations (v4)
 
-## Transformations
+Each non-root node has **one** transformation:
 
-Each non-root node has **one** transformation (same as 2D):
+| Type | Probability | Description |
+|------|-------------|-------------|
+| **NN** | 70% | weights × parents + bias → activation → noise |
+| **Tree** | 15% | Decision tree over subset of parents |
+| **Discretization** | 15% | Distance to prototypes → normalized category |
 
-| Type | Description |
-|------|-------------|
-| **NN** | weights × parents + bias → activation → noise |
-| **Tree** | Decision tree over subset of parents |
-| **Discretization** | Distance to prototypes → normalized category |
-
-### Available Activations (12)
+### Available Activations (8)
 ```python
-['identity', 'log', 'sigmoid', 'abs', 'sin', 'tanh', 
- 'rank', 'square', 'power', 'softplus', 'step', 'mod']
+['identity', 'tanh', 'sigmoid', 'relu', 'leaky_relu', 'elu', 'softplus', 'sin']
 ```
+
+### Noise
+- Applied ONLY at the end of each transformation
+- Scale: 0.001 to 0.05 (log-uniform)
+
+## Feature and Target Selection (v4)
+
+### Target
+- **Must be from a discretization node** (categorical = classification)
+- Prefers nodes in main subgraph
+
+### Features
+- **At least 1 RELEVANT** (from main connected subgraph)
+- **At least 1 CONTINUOUS** (not from discretization)
+- Distance-weighted selection for remaining features
 
 ## Sampling Modes
 
-### IID Mode
+### IID Mode (55%)
 ```
-Sequence 1: ────────────────────────────
-Sequence 2: ────────────────────────────
+Sequence 1: ──────────────────────────── (own MEMORY)
+Sequence 2: ──────────────────────────── (own MEMORY)
     ...
-Sequence N: ────────────────────────────
+Sequence N: ──────────────────────────── (own MEMORY)
 ```
-Each sample is an independent sequence with different noise.
+Each sample is an independent sequence with its own MEMORY.
 
-### Sliding Window Mode
+### Sliding Window Mode (30%)
 ```
-Long sequence: ══════════════════════════════════════════
+Long sequence: ══════════════════════════════════════════ (shared MEMORY)
 Windows:       [───────]
                  [───────]
                    [───────]
                      [───────]
 ```
-From a long sequence T, multiple windows are extracted (may overlap).
 
-### Mixed Mode
+### Mixed Mode (15%)
 ```
-Seq 1: ══════════════════════
+Seq 1: ══════════════════════ (MEMORY 1)
         [───] [───] [───]
-Seq 2: ══════════════════════
+Seq 2: ══════════════════════ (MEMORY 2)
         [───] [───] [───]
 ```
-Several long sequences, multiple windows per sequence.
 
-## Target Configuration
+## Target Offset (v4)
 
-The target can be at different positions:
-- **within**: Within the feature window
-- **future_near**: 1-5 steps after the window
-- **future_far**: 6-20 steps ahead
-- **past**: Before the window (rare)
+- **Balanced 50/50 future/past** (not 75% future)
+- prob(offset=k) ∝ 1 / (1 + |k|^α)
+- Favors offset=0 (within), then ±1, ±2, etc.
+
+| Type | Offset |
+|------|--------|
+| within | 0 |
+| future | > 0 |
+| past | < 0 |
+
+## Key Parameters (v4)
+
+### Size Limits
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| max_samples | 10,000 | Maximum samples |
+| max_features | 15 | Maximum features |
+| max_t_subseq | 1,000 | Maximum timesteps per window |
+| max_T_total | 5,000 | Maximum total timesteps |
+| max_classes | 10 | Maximum classes |
+| max_complexity | 10,000,000 | n_samples × T_total × n_nodes |
+
+### Root Configuration
+| Parameter | Value |
+|-----------|-------|
+| TIME inputs | 1 (fixed) |
+| MEMORY dimension | 1-8 |
+| MEMORY noise type | normal or uniform |
+| MEMORY σ range | (0.5, 2.0) |
+
+### Graph Structure
+| Parameter | Value |
+|-----------|-------|
+| n_nodes_range | (8, 30) |
+| density_range | (0.1, 0.6) |
+| Total roots | 1 + memory_dim |
 
 ## Usage
 
@@ -127,9 +160,9 @@ X, y = dataset.X, dataset.y  # (n, m, t), (n,)
 from config import PriorConfig3D
 prior = PriorConfig3D(
     max_features=10,
-    prob_classification=1.0,
-    prob_sliding_window_mode=0.6,
-    max_complexity=5_000_000  # Limit complexity
+    prob_nn_transform=0.70,
+    prob_tree_transform=0.15,
+    prob_discretization=0.15,
 )
 generator = SyntheticDatasetGenerator3D(prior=prior, seed=42)
 dataset = generator.generate()
@@ -144,112 +177,27 @@ for i, dataset in enumerate(generator.generate_many(100)):
 ```
 03_synthetic_generator_3D/
 ├── config.py              # PriorConfig3D, DatasetConfig3D
-├── dag_utils.py           # DAG wrapper over 2D (uses topological order)
-├── temporal_inputs.py     # Input generators (noise, time, state)
-├── temporal_propagator.py # Optimized temporal propagation
+├── dag_utils.py           # DAG wrapper, TransformationFactory
+├── temporal_inputs.py     # TIME + MEMORY generators
+├── temporal_propagator.py # Temporal propagation (no clipping)
 ├── sequence_sampler.py    # Subsequence extraction
-├── feature_selector.py    # Feature and target selection
+├── feature_selector.py    # Feature (1+ relevant, 1+ cont) and target (disc) selection
 ├── generator.py           # Main class
-├── sanity_checks.py       # Complete validation + comparison with real data
-├── discriminator_analysis.py  # Synthetic vs real analysis
-├── visualize_dag.py       # Graph visualization
+├── sanity_checks.py       # Validation
 └── README.md
 ```
 
-## Key Parameters
+## Differences from v3
 
-### Size Limits
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| max_samples | 10,000 | Maximum samples |
-| max_features | 15 | Maximum features |
-| max_t_subseq | 1,000 | Maximum timesteps per window |
-| max_T_total | 5,000 | Maximum total timesteps |
-| max_classes | 10 | Maximum classes |
-| max_complexity | 10,000,000 | n_samples × T_total × n_nodes |
-
-### Graph Structure
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| n_nodes_range | (12, 300) | DAG nodes |
-| density_range | (0.01, 0.8) | Edge density |
-| n_roots_range | (3, 40) | Number of roots |
-| max_roots_fraction | 0.25 | Roots ≤ 25% of nodes |
-
-### Input Distribution
-| Type | Minimum | Description |
-|------|---------|-------------|
-| Noise | 1 | Variability between samples |
-| Time | 1 | Temporal trends |
-| State | 1 | Temporal dependencies |
-
-### Mode Probabilities
-| Mode | Probability |
-|------|-------------|
-| IID | 20% |
-| Sliding Window | 60% |
-| Mixed | 20% |
-
-## Performance Optimizations
-
-The generator includes several optimizations:
-
-1. **Complexity limit**: If `n_samples × T_total × n_nodes > max_complexity`, automatically reduces parameters
-
-2. **Vectorized propagation**: Pre-allocated arrays instead of dictionaries
-
-3. **Timeseries cache**: Timeseries are cached for efficient extraction
-
-4. **Batch processing**: Multiple samples processed in parallel
-
-Typical time: **~0.8s per dataset** (average)
-
-## Sanity Checks
-
-```bash
-cd 03_synthetic_generator_3D
-python sanity_checks.py
-```
-
-Sanity checks include:
-
-1. **Basic Stats**: Shapes, modes, NaN rates
-2. **Learnability**: Models beat baseline
-3. **Temporal Characteristics**: Autocorrelation, trends
-4. **Mode Comparison**: IID vs Sliding vs Mixed
-5. **Label Permutation**: No data leakage
-6. **Comparison with Real**: Distributions vs UCR/UEA datasets
-7. **Difficulty Spectrum**: Variety of difficulties
-8. **Input Type Distribution**: Balance noise/time/state
-
-## Comparison with Real Datasets
-
-Check 6 compares with real datasets from PKL:
-- n_samples, t_length: similar distributions
-- Autocorrelation: synthetics have less AC(1) than real
-- Variance: real have more variability
-
-## Differences with 2D Generator
-
-| Aspect | 2D | 3D |
+| Aspect | v3 | v4 |
 |--------|----|----|
-| Shape | (n, m) | (n, m, t) |
-| Inputs | Only noise | Noise + Time + State |
-| Dependencies | None | Temporal (memory) |
-| Target | One node | One node at a timestep |
-| Sampling | One propagation | T propagations + extraction |
-| Complexity | O(n × nodes) | O(n × T × nodes) |
-
-## Discriminator Analysis
-
-Analysis of synthetic vs real distinguishability:
-
-```bash
-python discriminator_analysis.py
-```
-
-Generates:
-- Dataset features (34 metrics)
-- Random Forest classifier to distinguish
-- Feature importance
-- Visualizations per dataset
+| TIME inputs | Multiple with activations | 1 (u = t/T only) |
+| STATE inputs | Yes (t-k lookups) | **No** |
+| MEMORY inputs | No | **Yes (1-8 dims)** |
+| Variability source | State noise init | MEMORY sampling |
+| NN/Tree/Disc | 40/45/15 | **70/15/15** |
+| Noise params | Many (edge, init, etc.) | **Single scale** |
+| Target | Any node | **Discretization only** |
+| Feature constraints | None | **1+ relevant, 1+ continuous** |
+| Future prob | 75% | **50%** |
+| Clipping | Yes (-1e6, 1e6) | **No** |

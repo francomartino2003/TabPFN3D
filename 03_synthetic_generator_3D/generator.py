@@ -3,11 +3,13 @@ Main 3D Synthetic Dataset Generator.
 
 Generates temporal tabular datasets with shape (n_samples, n_features, t_subseq).
 
-v2 CHANGES:
-- Only time and state inputs (no direct noise roots)
-- State inputs reference specific nodes at t-k
-- No passthrough transformation
-- Simplified feature/target selection
+v4 Design:
+- 1 TIME root (u = t/T)
+- MEMORY vector roots (1-8 dims, sampled once per sequence)
+- No state inputs
+- Target always from discretization (classification)
+- At least 1 relevant + 1 continuous feature
+- No numerical clipping
 """
 
 from dataclasses import dataclass
@@ -17,7 +19,7 @@ import numpy as np
 # Local 3D modules
 from config import PriorConfig3D, DatasetConfig3D
 from temporal_inputs import TemporalInputManager
-from temporal_propagator import TemporalPropagator, BatchTemporalPropagator
+from temporal_propagator import BatchTemporalPropagator
 from sequence_sampler import (
     SequenceSampler, FeatureTargetSelection, Sample3D,
     discretize_targets, samples_to_arrays
@@ -27,7 +29,7 @@ from feature_selector import FeatureSelector3D
 # 2D components via wrapper
 from dag_utils import (
     DAG, DAGBuilder, 
-    TransformationFactory, EdgeTransformation,
+    TransformationFactory, EdgeTransformation, DiscretizationTransformation,
     Warper, MissingValueInjector
 )
 
@@ -74,10 +76,10 @@ class SyntheticDatasetGenerator3D:
     """
     Main generator for 3D temporal synthetic datasets.
     
-    Usage:
-        generator = SyntheticDatasetGenerator3D(seed=42)
-        dataset = generator.generate()
-        X, y = dataset.X, dataset.y  # Shape: (n, m, t), (n,)
+    v4 Design:
+    - TIME (u = t/T) + MEMORY (fixed per sequence)
+    - Target from discretization (classification)
+    - Features: 1+ relevant, 1+ continuous
     """
     
     def __init__(
@@ -106,49 +108,44 @@ class SyntheticDatasetGenerator3D:
         # Create fresh RNG for this dataset
         dataset_rng = np.random.default_rng(config.seed)
         
-        # Step 1: Build DAG
-        dag, transformations = self._build_dag(config, dataset_rng)
+        # Step 1: Build DAG and transformations
+        dag, transformations, shared_activation = self._build_dag(config, dataset_rng)
         
-        # Step 2: Select TARGET first (before configuring state inputs)
-        # This allows state inputs to prefer nodes close to the target
-        selector = FeatureSelector3D(
-            dag, transformations, config, None, dataset_rng  # No input_manager yet
-        )
-        target_node = selector.select_target_only()
+        # Step 2: Ensure at least one discretization node exists (for target)
+        self._ensure_discretization_node(dag, transformations, config, dataset_rng)
         
         # Step 3: Create temporal input manager
         input_manager = TemporalInputManager.from_config(config, dataset_rng)
         
-        # Step 4: Create propagator (state inputs configured with target info)
+        # Step 4: Create propagator
         propagator = BatchTemporalPropagator(
-            config, dag, transformations, input_manager, dataset_rng,
-            target_node=target_node  # Pass target for state source selection
+            config, dag, transformations, input_manager, dataset_rng
         )
         
-        # Step 5: Complete feature selection (target already selected)
-        selector.input_manager = input_manager  # Update selector
-        selection = selector.select_with_target(target_node)
+        # Step 5: Select features and target
+        selector = FeatureSelector3D(
+            dag, transformations, config, input_manager, dataset_rng
+        )
+        selection = selector.select()
         
-        # Step 5: Create sequence sampler
+        # Step 6: Create sequence sampler
         sampler = SequenceSampler(config, selection, dataset_rng)
         
-        # Step 6: Generate samples based on mode
+        # Step 7: Generate samples based on mode
         samples = self._generate_samples(
             config, propagator, sampler, dataset_rng
         )
         
-        # Step 7: Discretize targets if classification
-        if config.is_classification:
-            samples = discretize_targets(samples, config.n_classes, dataset_rng)
+        # Step 8: Discretize targets (always classification in v4)
+        samples = discretize_targets(samples, config.n_classes, dataset_rng)
         
-        # Step 8: Convert to arrays
+        # Step 9: Convert to arrays
         X, y = samples_to_arrays(samples)
         
-        # Step 9: Post-processing
+        # Step 10: Post-processing
         X, y = self._apply_post_processing(X, y, config, dataset_rng)
         
         # Build metadata
-        # Derive offset type from offset value
         if config.target_offset == 0:
             offset_type = 'within'
         elif config.target_offset > 0:
@@ -162,14 +159,13 @@ class SyntheticDatasetGenerator3D:
             't_subseq': X.shape[2] if X.ndim > 2 else 0,
             'T_total': config.T_total,
             'sample_mode': config.sample_mode,
-            'target_offset_type': offset_type,  # Derived from offset value
+            'target_offset_type': offset_type,
             'target_offset': config.target_offset,
-            'n_time_inputs': config.n_time_inputs,
-            'n_state_inputs': config.n_state_inputs,
-            'time_activations': config.time_activations,
+            'memory_dim': config.memory_dim,
             'feature_nodes': selection.feature_nodes,
             'target_node': selection.target_node,
-            'spatial_distance_alpha': config.spatial_distance_alpha
+            'spatial_distance_alpha': config.spatial_distance_alpha,
+            'shared_activation': shared_activation  # Activation used by all NN transformations
         }
         
         return SyntheticDataset3D(
@@ -177,8 +173,8 @@ class SyntheticDatasetGenerator3D:
             y=y,
             config=config,
             metadata=metadata,
-            is_classification=config.is_classification,
-            n_classes=config.n_classes if config.is_classification else 0
+            is_classification=True,
+            n_classes=config.n_classes
         )
     
     def generate_many(self, n_datasets: int) -> Iterator[SyntheticDataset3D]:
@@ -190,14 +186,19 @@ class SyntheticDatasetGenerator3D:
         self, 
         config: DatasetConfig3D, 
         rng: np.random.Generator
-    ) -> Tuple[DAG, Dict[int, EdgeTransformation]]:
-        """Build the causal DAG and transformations."""
+    ) -> Tuple[DAG, Dict[int, EdgeTransformation], str]:
+        """Build the causal DAG and transformations.
+        
+        Returns:
+            DAG, transformations dict, shared_activation (for NN transformations)
+        """
         
         # Build DAG
         dag_builder = DAGBuilder(config, rng)
         dag = dag_builder.build()
         
         # Create transformations - ONE per non-root node
+        # All NN transformations will use the same activation
         transform_factory = TransformationFactory(config, rng)
         transformations = {}
         
@@ -206,7 +207,46 @@ class SyntheticDatasetGenerator3D:
                 transform = transform_factory.create(n_parents=len(node.parents))
                 transformations[node_id] = transform
         
-        return dag, transformations
+        return dag, transformations, transform_factory.shared_activation
+    
+    def _ensure_discretization_node(
+        self,
+        dag: DAG,
+        transformations: Dict[int, EdgeTransformation],
+        config: DatasetConfig3D,
+        rng: np.random.Generator
+    ):
+        """
+        Ensure at least one discretization node exists in the main subgraph.
+        This is required for target selection.
+        """
+        # Check if any discretization node exists in main subgraph
+        has_discretization = False
+        main_subgraph_nodes = []
+        
+        for node_id, transform in transformations.items():
+            node = dag.nodes[node_id]
+            if node.subgraph_id == 0:
+                main_subgraph_nodes.append(node_id)
+                if isinstance(transform, DiscretizationTransformation):
+                    has_discretization = True
+        
+        if not has_discretization and main_subgraph_nodes:
+            # Convert one random node to discretization
+            node_to_convert = rng.choice(main_subgraph_nodes)
+            n_parents = len(dag.nodes[node_to_convert].parents)
+            
+            # Create discretization transformation
+            n_categories = config.n_categories
+            input_dim = max(1, n_parents)
+            prototypes = rng.normal(0, 1, size=(n_categories, input_dim))
+            
+            transformations[node_to_convert] = DiscretizationTransformation(
+                prototypes=prototypes,
+                n_categories=n_categories,
+                noise_scale=config.noise_scale,
+                rng=rng
+            )
     
     def _generate_samples(
         self,
@@ -221,15 +261,18 @@ class SyntheticDatasetGenerator3D:
         stride = config.window_stride
         
         if config.sample_mode == 'iid':
+            # Each sample is an independent sequence with its own MEMORY
             propagated = propagator.generate_iid_sequences(n_samples, T)
             samples = sampler.sample_iid_batch(propagated, n_samples)
             
         elif config.sample_mode == 'sliding_window':
+            # One long sequence (shared MEMORY), multiple windows
             batch_size = min(10, n_samples // 10 + 1)
             propagated = propagator.generate_single_long_sequence(batch_size, T)
             samples = sampler.sample_sliding_window(propagated, n_samples, stride)
             
         else:  # mixed
+            # Multiple long sequences, each with its own MEMORY
             n_sequences = config.n_sequences
             samples_per_seq = max(1, n_samples // n_sequences)
             propagated_list = propagator.generate_mixed_sequences(
@@ -302,16 +345,14 @@ def generate_3d_dataset(
 
 if __name__ == "__main__":
     # Quick test
-    print("Generating 3D synthetic dataset (v3)...")
+    print("Generating 3D synthetic dataset (v4)...")
     dataset = generate_3d_dataset(seed=42)
     print(f"Shape: {dataset.shape}")
     print(f"Classification: {dataset.is_classification}")
     print(f"Classes: {dataset.n_classes}")
     print(f"Sample mode: {dataset.config.sample_mode}")
-    print(f"Time inputs: {dataset.config.n_time_inputs}")
-    print(f"State inputs: {dataset.config.n_state_inputs}")
+    print(f"Memory dim: {dataset.config.memory_dim}")
     print(f"Target offset: {dataset.config.target_offset}")
-    print(f"Spatial distance alpha: {dataset.config.spatial_distance_alpha}")
     print(f"\nX stats: mean={dataset.X[~np.isnan(dataset.X)].mean():.3f}, "
           f"std={dataset.X[~np.isnan(dataset.X)].std():.3f}")
     print(f"y unique: {np.unique(dataset.y)}")

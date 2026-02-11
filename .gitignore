@@ -54,6 +54,15 @@ wandb/
 .DS_Store
 Thumbs.db
 
+# Generated visualizations and results
+**/visualizations/
+**/results/
+**/analysis_results/
+**/benchmark_results/
+**/comparison_results/
+**/eval_results/
+*.png
+
 # Test outputs
 sanity_check_results.json
 *_demo.png

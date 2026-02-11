@@ -1,0 +1,22 @@
+=== z (memory) ===
+  z_dim: 2, z_std: 0.9248
+  z_NN: 4 layers, nodes=[11, 3, 9, 3]
+  z_features_dim: 3
+
+=== t (time) ===
+  t_NN: 5 layers, nodes=[6, 11, 4, 11, 11]
+  t_features_dim: 12 (includes raw t)
+
+=== noise ===
+  noise_std: 0.503809
+
+=== FC layer ===
+  input: 16 (z:3 + t:12 + noise:1)
+  output: 9 roots
+  activation: leaky_relu
+
+=== DAG ===
+  nodes: 14 (roots: 9)
+  edges: 10
+  redirection_prob: 0.557
+  noisy_nodes: 0/14

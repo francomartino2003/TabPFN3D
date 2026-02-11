@@ -1,0 +1,49 @@
+======================================================================
+Deep Analysis Benchmark - Full Metadata
+======================================================================
+Output: /Users/franco/Documents/TabPFN3D/06_generator_experiments/analysis_results
+Results: /Users/franco/Documents/TabPFN3D/06_generator_experiments/analysis_results/results_20260125_234703.json
+
+[ 1/32] 320×2×170 | 6 cls | mixed           | Acc: 0.250 | AUC: 0.620
+[ 2/32] 684×1×343 | 2 cls | iid             | Acc: 0.531 | AUC: 0.532
+[ 3/32] 614×1×230 | 5 cls | iid             | Acc: 0.174 | AUC: 0.497
+[ 4/32] 348×1×377 | 2 cls | iid             | Acc: 0.653 | AUC: 0.672
+[ 5/32] 562×1×309 | 4 cls | iid             | Acc: 0.248 | AUC: 0.538
+[ 6/32] 215×7×65 | 3 cls | iid             | Acc: 0.376 | AUC: 0.457
+[ 7/32] 389×1×370 | 6 cls | iid             | Acc: 0.113 | AUC: 0.489
+[ 8/32] 53×1×91 | 7 cls | iid             | Acc: 0.174 | AUC: 0.543
+[ 9/32] 690×1×280 | 8 cls | mixed           | Acc: 0.143 | AUC: 0.454
+[10/32] 50×1×266 | 7 cls | sliding_window  | Acc: 0.000 | AUC: N/A
+[11/32] 282×1×23 | 4 cls | iid             | Acc: 0.273 | AUC: 0.554
+[12/32] 163×1×51 | 7 cls | iid             | Acc: 0.200 | AUC: 0.522
+[13/32] 173×1×301 | 8 cls | iid             | Acc: 0.053 | AUC: 0.459
+[14/32] 546×4×92 | 5 cls | iid             | Acc: 0.285 | AUC: 0.631
+[15/32] 157×2×136 | 7 cls | iid             | Acc: 0.088 | AUC: 0.539
+[16/32] 611×2×127 | 9 cls | iid             | Acc: 0.095 | AUC: 0.510
+[17/32] 539×1×489 | 9 cls | iid             | Acc: 0.195 | AUC: 0.576
+[18/32] 686×2×143 | 10 cls | iid             | Acc: 0.170 | AUC: 0.682
+[19/32] 348×2×28 | 9 cls | iid             | Acc: 0.153 | AUC: 0.579
+[20/32] 55×1×185 | 4 cls | mixed           | Acc: 0.000 | AUC: N/A
+[21/32] 300×3×160 | 4 cls | iid             | Acc: 0.326 | AUC: 0.635
+[22/32] 530×1×260 | 3 cls | mixed           | Acc: 0.204 | AUC: 0.343
+[23/32] 90×3×147 | 5 cls | mixed           | Acc: 0.220 | AUC: 0.560
+[24/32] 376×2×113 | 5 cls | iid             | Acc: 0.346 | AUC: 0.662
+[25/32] 478×7×41 | 3 cls | iid             | Acc: 0.439 | AUC: 0.661
+[26/32] 244×1×338 | 6 cls | iid             | Acc: 0.143 | AUC: 0.453
+[27/32] 324×1×105 | 2 cls | iid             | Acc: 0.486 | AUC: 0.596
+[28/32] 465×2×186 | 2 cls | iid             | Acc: 0.615 | AUC: 0.653
+[29/32] 134×4×115 | 10 cls | iid             | Acc: 0.121 | AUC: 0.737
+[30/32] 447×1×92 | 9 cls | iid             | Acc: 0.276 | AUC: 0.686
+[31/32] 640×1×419 | 9 cls | mixed           | Acc: 0.107 | AUC: 0.523
+[32/32] 503×1×497 | 4 cls | iid             | Acc: 0.227 | AUC: 0.532
+
+======================================================================
+Summary
+======================================================================
+Successful: 32/32
+Accuracy: mean=0.240, std=0.161
+AUC:      mean=0.563, std=0.087
+
+High AUC datasets (>=0.9): 0
+
+All results saved to: /Users/franco/Documents/TabPFN3D/06_generator_experiments/analysis_results/results_20260125_234703.json

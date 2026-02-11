@@ -1,0 +1,9 @@
+Memory: 158 dims (uniform)
+Stochastic: 0 dims
+Time transforms (16): ['linear', 'cos_k5', 'exp_growth', 'cos_k2', 'tanh_trend', 'quadratic', 'sin_k1', 'cos_k3', 'sin_k3', 'log', 'sqrt', 'cubic', 'exp_decay', 'sin_k2', 'cos_k1', 'sin_k5']
+Layers: [6, 15, 13]
+Activations: [tanh, tanh, tanh]
+Weight init: xavier_normal (scale=1.09)
+Bias std: 0.030
+Noisy nodes (15/34, p=40%): L1:4, L2:8, L3:3
+Quantization nodes (0/34): none

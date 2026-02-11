@@ -1,391 +1,246 @@
 """
 Temporal Input Generators for 3D Synthetic Data.
 
-NEW DESIGN (v2):
-- Two types of root inputs: TIME and STATE
-- No direct noise inputs as roots
-- State inputs: value of node X at t-k
-- When t-k < 0, use noise initialization (provides sample variability)
-- Each state input has a specific source node and lag
+v4 Design:
+- 1 base TIME input: u = t/T (normalized, no activation)
+- 0-7 extra TIME inputs with activations (sin, cos, tanh, etc.)
+- MEMORY vector: sampled ONCE per sequence (1-8 dimensions)
+  - For IID: each sample gets its own MEMORY (gives variability)
+  - For sliding/mixed: one MEMORY per long sequence
 
 Input types:
-1. Time inputs: Deterministic functions of normalized time u = t/T
-2. State inputs: Value of specific node at t-k (with noise init if t-k < 0)
+1. TIME base: u = t/T (provides linear temporal dependency)
+2. TIME extra: f(u) with various activations (periodic, S-curves, etc.)
+3. MEMORY: fixed vector per sequence (provides sample variability)
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Callable
 import numpy as np
 
 from config import DatasetConfig3D
 
 
-class NoiseGenerator:
+# Time activation functions
+TIME_ACTIVATIONS: Dict[str, Callable[[np.ndarray], np.ndarray]] = {
+    'sin': lambda u: np.sin(2 * np.pi * u),           # [-1, 1] periodic
+    'cos': lambda u: np.cos(2 * np.pi * u),           # [-1, 1] periodic
+    'sin2': lambda u: np.sin(4 * np.pi * u),          # [-1, 1] higher freq
+    'cos2': lambda u: np.cos(4 * np.pi * u),          # [-1, 1] higher freq
+    'tanh': lambda u: np.tanh(4 * (u - 0.5)),         # [-1, 1] S-curve
+    'sigmoid': lambda u: 1 / (1 + np.exp(-10 * (u - 0.5))),  # [0, 1] S-curve
+    'sqrt': lambda u: np.sqrt(np.clip(u, 0, 1)),      # [0, 1] concave
+    'square': lambda u: u ** 2,                        # [0, 1] convex
+    'exp': lambda u: np.exp(u) - 1,                   # [0, e-1] exponential
+    'log': lambda u: np.log1p(u),                     # [0, log(2)] logarithmic
+}
+
+
+class MemoryGenerator:
     """
-    Generates noise for state initialization (when t-k < 0).
+    Generates MEMORY vectors for sequences.
     
-    Not used as direct root input anymore, only for initialization.
+    v4 Design:
+    - MEMORY is sampled ONCE per sequence
+    - Provides variability between samples (especially in IID mode)
+    - Does NOT change within a sequence
     """
     
     def __init__(self, config: DatasetConfig3D, rng: np.random.Generator):
         self.config = config
         self.rng = rng
-        self.noise_type = config.noise_type
-        self.sigma = config.init_sigma
-        self.a = config.init_a
+        self.memory_dim = config.memory_dim
+        self.noise_type = config.memory_noise_type
+        self.sigma = config.memory_sigma
+        self.a = config.memory_a
     
-    def generate(self, n_samples: int, n_values: int = 1) -> np.ndarray:
+        # Current memory vectors (shape: n_samples, memory_dim)
+        self._memory: Optional[np.ndarray] = None
+    
+    def sample_memory(self, n_samples: int) -> np.ndarray:
         """
-        Generate noise values for initialization.
+        Sample new MEMORY vectors for n_samples.
         
         Args:
-            n_samples: Number of samples
-            n_values: Number of noise values to generate per sample
+            n_samples: Number of samples (sequences)
             
         Returns:
-            Array of shape (n_samples, n_values) or (n_samples,) if n_values=1
+            Array of shape (n_samples, memory_dim)
         """
-        shape = (n_samples, n_values) if n_values > 1 else (n_samples,)
-        
         if self.noise_type == 'normal':
-            return self.rng.normal(0, self.sigma, size=shape)
+            self._memory = self.rng.normal(0, self.sigma, size=(n_samples, self.memory_dim))
         elif self.noise_type == 'uniform':
-            return self.rng.uniform(-self.a, self.a, size=shape)
-        elif self.noise_type == 'mixed':
-            if n_values > 1:
-                output = np.zeros(shape)
-                for i in range(n_values):
-                    if self.rng.random() < 0.5:
-                        output[:, i] = self.rng.normal(0, self.sigma, size=n_samples)
-                    else:
-                        output[:, i] = self.rng.uniform(-self.a, self.a, size=n_samples)
-                return output
-            else:
-                if self.rng.random() < 0.5:
-                    return self.rng.normal(0, self.sigma, size=shape)
-                else:
-                    return self.rng.uniform(-self.a, self.a, size=shape)
+            self._memory = self.rng.uniform(-self.a, self.a, size=(n_samples, self.memory_dim))
         else:
-            return self.rng.normal(0, self.sigma, size=shape)
-
-
-class TimeInputGenerator:
-    """
-    Generates time-dependent inputs.
+            # Default to normal
+            self._memory = self.rng.normal(0, self.sigma, size=(n_samples, self.memory_dim))
+        
+        return self._memory
     
-    Input is u = t/T (normalized time in [0, 1]).
-    Various activation functions transform u into input values.
-    """
+    def get_memory(self) -> np.ndarray:
+        """Get current MEMORY vectors."""
+        if self._memory is None:
+            raise ValueError("Memory not yet sampled. Call sample_memory first.")
+        return self._memory
     
-    def __init__(self, config: DatasetConfig3D, rng: np.random.Generator):
-        self.config = config
-        self.rng = rng
-        self.activations = config.time_activations
-        self.params = config.time_activation_params
-    
-    def generate(self, t: int, T: int) -> np.ndarray:
+    def get_memory_component(self, idx: int) -> np.ndarray:
         """
-        Generate time input values for a specific timestep.
+        Get a specific component of the MEMORY vector for all samples.
         
         Args:
-            t: Current timestep (0-indexed)
-            T: Total number of timesteps
-            
-        Returns:
-            Array of shape (n_time_inputs,) with values for each time input
-        """
-        u = t / max(T - 1, 1)  # Normalized time in [0, 1]
-        
-        values = []
-        for i, activation in enumerate(self.activations):
-            val = self._apply_activation(u, activation, i)
-            values.append(val)
-        
-        return np.array(values)
-    
-    def generate_all_timesteps(self, T: int) -> np.ndarray:
-        """
-        Generate time inputs for all timesteps.
-        
-        Args:
-            T: Total number of timesteps
-            
-        Returns:
-            Array of shape (T, n_time_inputs)
-        """
-        return np.array([self.generate(t, T) for t in range(T)])
-    
-    def _apply_activation(self, u: float, activation: str, idx: int) -> float:
-        """Apply a time activation function."""
-        
-        if activation == 'constant':
-            return 1.0
-        elif activation == 'linear':
-            return u
-        elif activation == 'quadratic':
-            return u ** 2
-        elif activation == 'cubic':
-            return u ** 3
-        elif activation == 'tanh':
-            beta = self.params.get(f'tanh_beta_{idx}', 1.0)
-            return np.tanh(beta * (2 * u - 1))
-        elif activation.startswith('sin_'):
-            k = int(activation.split('_')[1])
-            return np.sin(2 * np.pi * k * u)
-        elif activation.startswith('cos_'):
-            k = int(activation.split('_')[1])
-            return np.cos(2 * np.pi * k * u)
-        elif activation == 'exp_decay':
-            gamma = self.params.get(f'exp_gamma_{idx}', 1.0)
-            return np.exp(-gamma * u)
-        elif activation == 'log':
-            return np.log(u + 0.1)
-        else:
-            return u
-
-
-@dataclass
-class StateInputConfig:
-    """Configuration for a single state input."""
-    source_node_id: int  # ID of the node whose past value to use
-    lag: int             # How many timesteps back (k in t-k)
-    root_node_id: int    # ID of the root node that receives this state
-
-
-class StateInputManager:
-    """
-    Manages state inputs (node X at t-k).
-    
-    NEW DESIGN:
-    - Each state input references a specific non-root node
-    - When t-k < 0, use noise (provides initial variability)
-    - When t-k >= 0, use the actual value of the source node at that timestep
-    """
-    
-    def __init__(self, config: DatasetConfig3D, rng: np.random.Generator):
-        self.config = config
-        self.rng = rng
-        self.alpha = config.state_alpha
-        self.n_state_inputs = config.n_state_inputs
-        
-        # Noise generator for initialization
-        self.noise_gen = NoiseGenerator(config, rng)
-        
-        # State configurations: will be set after DAG is built
-        # List of StateInputConfig
-        self.state_configs: List[StateInputConfig] = []
-        
-        # Cache for noise initialization (per sample)
-        self._init_noise_cache: Dict[int, np.ndarray] = {}
-    
-    def configure_states(
-        self, 
-        state_root_ids: List[int], 
-        non_root_node_ids: List[int],
-        lags: List[int],
-        node_distances: Optional[Dict[int, int]] = None
-    ):
-        """
-        Configure state inputs after DAG is built.
-        
-        Args:
-            state_root_ids: IDs of root nodes that are state inputs
-            non_root_node_ids: IDs of non-root nodes that can be state sources
-            lags: List of lags (one per state input)
-            node_distances: Optional dict mapping node_id -> distance to target
-                           If provided, prefer nodes CLOSER to target (smaller distance)
-        """
-        self.state_configs = []
-        
-        for i, (root_id, lag) in enumerate(zip(state_root_ids, lags)):
-            if not non_root_node_ids:
-                # Fallback: use the first root as source (shouldn't happen normally)
-                source_id = state_root_ids[0] if state_root_ids else 0
-            elif node_distances is None:
-                # No distance info: uniform random selection
-                source_id = self.rng.choice(non_root_node_ids)
-            else:
-                # Distance-weighted selection: prefer CLOSER nodes to target
-                # prob ∝ 1 / (1 + distance^alpha) where alpha from config
-                alpha = getattr(self.config, 'state_source_distance_alpha', 2.0)
-                distances = np.array([node_distances.get(nid, 100) for nid in non_root_node_ids])
-                # Closer = higher probability
-                weights = 1.0 / (1.0 + np.power(distances, alpha))
-                probs = weights / weights.sum()
-                source_id = self.rng.choice(non_root_node_ids, p=probs)
-            
-            self.state_configs.append(StateInputConfig(
-                source_node_id=source_id,
-                lag=lag,
-                root_node_id=root_id
-            ))
-    
-    def get_state_value(
-        self, 
-        state_config: StateInputConfig,
-        t: int,
-        n_samples: int,
-        history: Dict[Tuple[int, int], np.ndarray]  # (t, node_id) -> values
-    ) -> np.ndarray:
-        """
-        Get the value for a state input at timestep t.
-        
-        Args:
-            state_config: Configuration for this state input
-            t: Current timestep
-            n_samples: Number of samples
-            history: Dict of (timestep, node_id) -> values array
+            idx: Index of the memory component (0 to memory_dim-1)
             
         Returns:
             Array of shape (n_samples,)
         """
-        t_source = t - state_config.lag
-        
-        if t_source < 0:
-            # Before sequence start: use noise initialization
-            cache_key = (state_config.root_node_id, state_config.source_node_id)
-            if cache_key not in self._init_noise_cache:
-                self._init_noise_cache[cache_key] = self.noise_gen.generate(n_samples)
-            return self._init_noise_cache[cache_key]
-        else:
-            # Get value from history
-            key = (t_source, state_config.source_node_id)
-            if key in history:
-                raw_value = history[key]
-                # Return raw value without tanh normalization
-                # This preserves the original signal structure
-                return raw_value
-            else:
-                # Fallback: noise (shouldn't happen if history is built correctly)
-                return self.noise_gen.generate(n_samples)
+        if self._memory is None:
+            raise ValueError("Memory not yet sampled. Call sample_memory first.")
+        return self._memory[:, idx]
     
-    def reset_cache(self):
-        """Reset the initialization noise cache (call between IID samples)."""
-        self._init_noise_cache = {}
+    def reset(self):
+        """Reset memory (call before new sequence in IID mode)."""
+        self._memory = None
+
+
+class TimeInputGenerator:
+    """
+    Generates TIME inputs.
+    
+    v4 Design:
+    - 1 base input: u = t/T (normalized time, no activation)
+    - 0-7 extra inputs: f(u) with various activations
+    - Same values for all samples at timestep t
+    """
+    
+    def __init__(self, config: DatasetConfig3D, rng: np.random.Generator):
+        self.config = config
+        self.rng = rng
+        self.n_extra = config.n_extra_time_inputs
+        self.activations = config.time_input_activations
+    
+    def generate_base(self, t: int, T: int, n_samples: int) -> np.ndarray:
+        """
+        Generate base TIME input (u = t/T) for timestep t.
+        
+        Args:
+            t: Current timestep (0-indexed)
+            T: Total number of timesteps
+            n_samples: Number of samples
+            
+        Returns:
+            Array of shape (n_samples,) with value u = t/T
+        """
+        u = t / max(T - 1, 1)  # Normalized time in [0, 1]
+        return np.full(n_samples, u, dtype=np.float32)
+    
+    def generate_extra(self, t: int, T: int, n_samples: int, activation_idx: int) -> np.ndarray:
+        """
+        Generate extra TIME input with activation for timestep t.
+        
+        Args:
+            t: Current timestep (0-indexed)
+            T: Total number of timesteps
+            n_samples: Number of samples
+            activation_idx: Index into self.activations
+            
+        Returns:
+            Array of shape (n_samples,) with activated time value
+        """
+        u = t / max(T - 1, 1)  # Normalized time in [0, 1]
+        
+        if activation_idx >= len(self.activations):
+            return np.full(n_samples, u, dtype=np.float32)
+        
+        activation_name = self.activations[activation_idx]
+        if activation_name in TIME_ACTIVATIONS:
+            value = TIME_ACTIVATIONS[activation_name](u)
+        else:
+            value = u  # Fallback to linear
+        
+        return np.full(n_samples, value, dtype=np.float32)
+    
+    def get_total_time_inputs(self) -> int:
+        """Get total number of TIME inputs (1 base + n_extra)."""
+        return 1 + self.n_extra
 
 
 @dataclass
 class TemporalInputManager:
     """
-    Manages all temporal inputs (time and state).
+    Manages all temporal inputs (TIME and MEMORY).
     
-    NEW DESIGN: Only time and state inputs, no noise roots.
+    v4 Design:
+    - 1 base TIME input (u = t/T)
+    - 0-7 extra TIME inputs with activations
+    - memory_dim MEMORY inputs (fixed per sequence)
+    - Total roots = 1 + n_extra_time_inputs + memory_dim
     """
     
     time_generator: TimeInputGenerator
-    state_manager: StateInputManager
-    noise_gen: NoiseGenerator  # For any remaining noise needs
+    memory_generator: MemoryGenerator
+    config: DatasetConfig3D
     
     # Node ID assignments (set when DAG is built)
-    time_node_ids: List[int] = None
-    state_node_ids: List[int] = None
+    time_base_node_id: Optional[int] = None      # Base TIME (u = t/T)
+    time_extra_node_ids: List[int] = None        # Extra TIME with activations
+    memory_node_ids: List[int] = None            # MEMORY inputs
     
     @classmethod
     def from_config(cls, config: DatasetConfig3D, rng: np.random.Generator) -> 'TemporalInputManager':
         """Create from dataset config."""
         return cls(
             time_generator=TimeInputGenerator(config, rng),
-            state_manager=StateInputManager(config, rng),
-            noise_gen=NoiseGenerator(config, rng),
-            time_node_ids=[],
-            state_node_ids=[],
+            memory_generator=MemoryGenerator(config, rng),
+            config=config,
+            time_base_node_id=None,
+            time_extra_node_ids=[],
+            memory_node_ids=[],
         )
     
-    def assign_root_nodes(
-        self, 
-        root_node_ids: List[int],
-        non_root_node_ids: List[int],
-        dag: Optional[Any] = None,
-        target_node: Optional[int] = None
-    ):
+    def assign_root_nodes(self, root_node_ids: List[int]):
         """
         Assign root nodes to input types.
         
+        Order: [base TIME, extra TIME..., MEMORY...]
+        
         Args:
             root_node_ids: List of all root node IDs in the DAG
-            non_root_node_ids: List of non-root node IDs (for state sources)
-            dag: Optional DAG object for computing distances
-            target_node: Optional target node for distance-based source selection
         """
-        n_time = len(self.time_generator.activations)
-        n_state = self.state_manager.n_state_inputs
+        n_extra_time = self.config.n_extra_time_inputs
+        memory_dim = self.config.memory_dim
+        total_needed = 1 + n_extra_time + memory_dim
         
-        total_needed = n_time + n_state
-        
-        # Adjust if not enough roots
         if len(root_node_ids) < total_needed:
-            scale = len(root_node_ids) / total_needed
-            n_time = max(1, int(n_time * scale))
-            n_state = max(1, len(root_node_ids) - n_time)
+            raise ValueError(f"Need {total_needed} roots but only got {len(root_node_ids)}")
         
-        # Shuffle and assign
-        shuffled = list(root_node_ids)
-        self.state_manager.rng.shuffle(shuffled)
+        idx = 0
         
-        self.time_node_ids = shuffled[:n_time]
-        self.state_node_ids = shuffled[n_time:n_time + n_state]
+        # First root is base TIME (u = t/T)
+        self.time_base_node_id = root_node_ids[idx]
+        idx += 1
         
-        # Get lags from config
-        lags = [cfg[1] for cfg in self.state_manager.config.state_configs]
-        # Extend if needed
-        while len(lags) < len(self.state_node_ids):
-            lags.append(self.state_manager.rng.integers(1, 5))
-        lags = lags[:len(self.state_node_ids)]
+        # Next are extra TIME inputs with activations
+        self.time_extra_node_ids = root_node_ids[idx:idx + n_extra_time]
+        idx += n_extra_time
         
-        # Compute distances to target if DAG and target are provided
-        node_distances = None
-        if dag is not None and target_node is not None:
-            node_distances = self._compute_distances_to_target(dag, target_node)
-        
-        # Configure state manager with distance info (closer to target = preferred)
-        self.state_manager.configure_states(
-            self.state_node_ids,
-            non_root_node_ids,
-            lags,
-            node_distances
-        )
+        # Rest are MEMORY
+        self.memory_node_ids = root_node_ids[idx:idx + memory_dim]
     
-    def _compute_distances_to_target(self, dag: Any, target_node: int) -> Dict[int, int]:
+    def sample_memory_for_sequences(self, n_samples: int):
         """
-        Compute shortest path distance from each node to the target.
+        Sample MEMORY vectors for n_samples sequences.
+        Call this BEFORE generating timesteps.
         
-        Uses BFS on undirected graph (edges treated as bidirectional).
-        Nodes closer to target will be preferred as state sources.
+        For IID mode: n_samples = number of independent sequences
+        For sliding/mixed: n_samples = batch size for the long sequence
         """
-        # Build undirected adjacency
-        adjacency = {nid: set() for nid in dag.nodes}
-        for nid, node in dag.nodes.items():
-            for parent_id in node.parents:
-                adjacency[nid].add(parent_id)
-                adjacency[parent_id].add(nid)
-        
-        # BFS from target
-        distances = {target_node: 0}
-        queue = [target_node]
-        
-        while queue:
-            current = queue.pop(0)
-            current_dist = distances[current]
-            
-            for neighbor in adjacency.get(current, []):
-                if neighbor not in distances:
-                    distances[neighbor] = current_dist + 1
-                    queue.append(neighbor)
-        
-        # Nodes not reachable get max distance
-        max_dist = len(dag.nodes)
-        for nid in dag.nodes:
-            if nid not in distances:
-                distances[nid] = max_dist
-        
-        return distances
+        self.memory_generator.sample_memory(n_samples)
     
     def generate_inputs_for_timestep(
         self, 
         t: int, 
         T: int, 
-        n_samples: int,
-        history: Dict[Tuple[int, int], np.ndarray]
+        n_samples: int
     ) -> Dict[int, np.ndarray]:
         """
         Generate all root node inputs for a specific timestep.
@@ -394,33 +249,43 @@ class TemporalInputManager:
             t: Current timestep
             T: Total timesteps
             n_samples: Number of samples
-            history: Dict of (timestep, node_id) -> values for state lookups
             
         Returns:
             Dict mapping node_id -> input values array of shape (n_samples,)
         """
         inputs = {}
         
-        # Time inputs (same value for all samples at this timestep)
-        if self.time_node_ids:
-            time_values = self.time_generator.generate(t, T)
-            for i, node_id in enumerate(self.time_node_ids):
-                if i < len(time_values):
-                    inputs[node_id] = np.full(n_samples, time_values[i])
+        # Base TIME input (u = t/T)
+        if self.time_base_node_id is not None:
+            inputs[self.time_base_node_id] = self.time_generator.generate_base(t, T, n_samples)
         
-        # State inputs (from history or noise init)
-        for state_config in self.state_manager.state_configs:
-            value = self.state_manager.get_state_value(
-                state_config, t, n_samples, history
-            )
-            inputs[state_config.root_node_id] = value
+        # Extra TIME inputs with activations
+        for i, node_id in enumerate(self.time_extra_node_ids or []):
+            inputs[node_id] = self.time_generator.generate_extra(t, T, n_samples, i)
+        
+        # MEMORY inputs (fixed per sequence)
+        for i, node_id in enumerate(self.memory_node_ids or []):
+            inputs[node_id] = self.memory_generator.get_memory_component(i)
         
         return inputs
     
     def get_all_root_node_ids(self) -> List[int]:
-        """Get all root node IDs (time + state)."""
-        return (self.time_node_ids or []) + (self.state_node_ids or [])
+        """Get all root node IDs (TIME base + TIME extra + MEMORY)."""
+        result = []
+        if self.time_base_node_id is not None:
+            result.append(self.time_base_node_id)
+        result.extend(self.time_extra_node_ids or [])
+        result.extend(self.memory_node_ids or [])
+        return result
+    
+    def get_time_node_ids(self) -> List[int]:
+        """Get all TIME node IDs (base + extra)."""
+        result = []
+        if self.time_base_node_id is not None:
+            result.append(self.time_base_node_id)
+        result.extend(self.time_extra_node_ids or [])
+        return result
     
     def reset_for_new_sequence(self):
-        """Reset caches for generating a new independent sequence."""
-        self.state_manager.reset_cache()
+        """Reset state for generating a new independent sequence."""
+        self.memory_generator.reset()

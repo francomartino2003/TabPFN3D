@@ -1,0 +1,9 @@
+Memory: 2 dims (uniform)
+Stochastic: 0 dims
+Time transforms (3): ['linear', 'linear', 'log']
+Layers: [79, 76, 39, 4]
+Activations: [tanh, elu, softplus, elu]
+Weight init: xavier_normal (scale=1.00)
+Bias std: 0.010
+Noisy nodes (4/198, p=2%): L2:2, L3:2
+Quantization nodes (27/198): L1:10, L2:9, L3:8

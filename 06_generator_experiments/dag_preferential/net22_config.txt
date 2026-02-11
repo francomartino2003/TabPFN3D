@@ -1,0 +1,7 @@
+Nodes: 722 (roots: 39)
+Edges: 1355
+Redirection prob: 0.766
+Memory: 1 dims (normal)
+Stochastic: 1 dims
+Time transforms: 1
+Noisy nodes: 6/722

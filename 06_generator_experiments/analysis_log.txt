@@ -1,0 +1,167 @@
+======================================================================
+Deep Analysis Benchmark - Full Metadata
+======================================================================
+Output: /Users/franco/Documents/TabPFN3D/06_generator_experiments/analysis_results
+Results: /Users/franco/Documents/TabPFN3D/06_generator_experiments/analysis_results/results_20260125_230857.json
+
+[ 1/64] 322×2×170 | 6 cls | mixed           | Acc: 0.906 | AUC: 0.976 ★★★
+[ 2/64] 684×1×343 | 2 cls | iid             | Acc: 0.531 | AUC: 0.532
+[ 3/64] 614×1×230 | 5 cls | iid             | Acc: 0.174 | AUC: 0.497
+[ 4/64] 348×1×377 | 2 cls | iid             | Acc: 0.653 | AUC: 0.672
+[ 5/64] 562×1×309 | 4 cls | iid             | Acc: 0.248 | AUC: 0.538
+[ 6/64] 215×7×65 | 3 cls | iid             | Acc: 0.376 | AUC: 0.457
+[ 7/64] 389×1×370 | 6 cls | iid             | Acc: 0.113 | AUC: 0.489
+[ 8/64] 53×1×91 | 7 cls | iid             | Acc: 0.174 | AUC: 0.543
+[ 9/64] 693×1×280 | 8 cls | mixed           | Acc: 0.822 | AUC: 0.954 ★★★
+[10/64] 50×1×266 | 7 cls | sliding_window  | Acc: 0.000 | AUC: N/A
+[11/64] 282×1×23 | 4 cls | iid             | Acc: 0.273 | AUC: 0.554
+[12/64] 163×1×51 | 7 cls | iid             | Acc: 0.200 | AUC: 0.522
+[13/64] 173×1×301 | 8 cls | iid             | Acc: 0.053 | AUC: 0.459
+[14/64] 546×4×92 | 5 cls | iid             | Acc: 0.285 | AUC: 0.631
+[15/64] 157×2×136 | 7 cls | iid             | Acc: 0.088 | AUC: 0.539
+[16/64] 611×2×127 | 9 cls | iid             | Acc: 0.095 | AUC: 0.510
+[17/64] 539×1×489 | 9 cls | iid             | Acc: 0.195 | AUC: 0.576
+[18/64] 686×2×143 | 10 cls | iid             | Acc: 0.170 | AUC: 0.682
+[19/64] 348×2×28 | 9 cls | iid             | Acc: 0.153 | AUC: 0.579
+[20/64] 61×1×185 | 4 cls | mixed           | Acc: 0.889 | AUC: 0.959 ★★★
+[21/64] 300×3×160 | 4 cls | iid             | Acc: 0.326 | AUC: 0.635
+[22/64] 532×1×260 | 3 cls | mixed           | Acc: 0.447 | AUC: 0.605
+[23/64] 98×3×147 | 5 cls | mixed           | Acc: 0.357 | AUC: 0.617
+[24/64] 376×2×113 | 5 cls | iid             | Acc: 0.346 | AUC: 0.662
+[25/64] 478×7×41 | 3 cls | iid             | Acc: 0.439 | AUC: 0.661
+[26/64] 244×1×338 | 6 cls | iid             | Acc: 0.143 | AUC: 0.453
+[27/64] 324×1×105 | 2 cls | iid             | Acc: 0.486 | AUC: 0.596
+[28/64] 465×2×186 | 2 cls | iid             | Acc: 0.615 | AUC: 0.653
+[29/64] 134×4×115 | 10 cls | iid             | Acc: 0.121 | AUC: 0.737
+[30/64] 447×1×92 | 9 cls | iid             | Acc: 0.276 | AUC: 0.686
+[31/64] 644×1×419 | 9 cls | mixed           | Acc: 0.348 | AUC: 0.694
+[32/64] 503×1×497 | 4 cls | iid             | Acc: 0.227 | AUC: 0.532
+[33/64] 149×1×92 | 4 cls | sliding_window  | Acc: 0.138 | AUC: 0.511
+[34/64] 388×1×160 | 8 cls | iid             | Acc: 0.210 | AUC: 0.746
+[35/64] 445×6×39 | 9 cls | iid             | Acc: 0.115 | AUC: 0.503
+[36/64] 541×1×344 | 9 cls | iid             | Acc: 0.194 | AUC: 0.640
+[37/64] 216×1×79 | 7 cls | iid             | Acc: 0.226 | AUC: 0.583
+[38/64] 392×1×387 | 5 cls | iid             | Acc: 0.250 | AUC: 0.586
+[39/64] 593×1×259 | 3 cls | iid             | Acc: 0.310 | AUC: 0.548
+[40/64] 487×1×429 | 4 cls | iid             | Acc: 0.249 | AUC: 0.540
+[41/64] 353×1×194 | 10 cls | iid             | Acc: 0.112 | AUC: 0.557
+[42/64] 510×1×480 | 8 cls | mixed           | Acc: 0.950 | AUC: 0.985 ★★★
+[43/64] 481×2×216 | 8 cls | iid             | Acc: 0.184 | AUC: 0.708
+[44/64] 161×1×153 | 8 cls | iid             | Acc: 0.304 | AUC: 0.793
+[45/64] 419×2×167 | 7 cls | iid             | Acc: 0.200 | AUC: 0.714
+[46/64] 236×2×222 | 6 cls | iid             | Acc: 0.441 | AUC: 0.869
+[47/64] 168×1×347 | 7 cls | mixed           | Acc: 0.431 | AUC: 0.804
+[48/64] 182×1×382 | 5 cls | iid             | Acc: 0.367 | AUC: 0.780
+[49/64] 322×4×96 | 10 cls | iid             | Acc: 0.232 | AUC: 0.718
+[50/64] 84×1×428 | 8 cls | iid             | Acc: 0.108 | AUC: 0.608
+[51/64] 28×1×447 | 9 cls | sliding_window  | Acc: 0.308 | AUC: N/A
+[52/64] 256×2×136 | 5 cls | iid             | Acc: 0.270 | AUC: 0.596
+[53/64] 532×1×483 | 4 cls | iid             | Acc: 0.303 | AUC: 0.584
+[54/64] 294×1×62 | 3 cls | mixed           | Acc: 0.770 | AUC: 0.921 ★★★
+[55/64] 133×1×435 | 6 cls | mixed           | Acc: 0.614 | AUC: 0.868
+[56/64] 569×1×290 | 2 cls | iid             | Acc: 0.453 | AUC: 0.471
+[57/64] 175×1×81 | 3 cls | iid             | Acc: 0.360 | AUC: 0.500
+[58/64] 133×1×107 | 8 cls | iid             | Acc: 0.241 | AUC: 0.590
+[59/64] 368×8×43 | 2 cls | iid             | Acc: 0.614 | AUC: 0.671
+[60/64] 39×1×426 | 2 cls | iid             | Acc: 0.529 | AUC: 0.500
+[61/64] 625×1×222 | 7 cls | iid             | Acc: 0.276 | AUC: 0.732
+[62/64] 277×1×493 | 6 cls | iid             | Acc: 0.400 | AUC: 0.775
+[63/64] 630×7×24 | 3 cls | mixed           | Acc: 0.741 | AUC: 0.894
+[64/64] 132×2×230 | 9 cls | iid             | Acc: 0.175 | AUC: 0.442
+
+======================================================================
+Summary
+======================================================================
+Successful: 64/64
+Accuracy: mean=0.338, std=0.219
+AUC:      mean=0.644, std=0.142
+
+High AUC datasets (>=0.9): 5
+
+======================================================================
+SENSITIVITY EXPERIMENTS on High AUC Configs
+======================================================================
+
+--- Dataset 0 (Original AUC: 0.976) ---
+
+Exp 1: Same network, different feature selection seeds:
+  feat_seed=2042: Acc=0.891, AUC=0.967, features=[(2, 0), (3, 40)]
+  feat_seed=2142: Acc=0.565, AUC=0.875, features=[(1, 17), (3, 12)]
+  feat_seed=2242: Acc=0.681, AUC=0.937, features=[(1, 3), (3, 40)]
+  feat_seed=2342: Acc=0.732, AUC=0.937, features=[(3, 12), (1, 13)]
+  feat_seed=2442: Acc=0.710, AUC=0.923, features=[(3, 1), (3, 7)]
+
+Exp 2: Different weight initializations (same structure):
+  weight_seed=5042: Acc=0.710, AUC=0.800
+  weight_seed=5142: Acc=0.797, AUC=0.943
+  weight_seed=5242: Acc=0.406, AUC=0.817
+  weight_seed=5342: Acc=0.761, AUC=0.909
+  weight_seed=5442: Acc=0.732, AUC=0.944
+
+--- Dataset 8 (Original AUC: 0.954) ---
+
+Exp 1: Same network, different feature selection seeds:
+  feat_seed=2842: Acc=0.532, AUC=0.872, features=[(3, 25)]
+  feat_seed=2942: Acc=0.852, AUC=0.970, features=[(3, 8)]
+  feat_seed=3042: Acc=0.411, AUC=0.730, features=[(3, 8)]
+  feat_seed=3142: Acc=0.882, AUC=0.930, features=[(2, 3)]
+  feat_seed=3242: Acc=0.323, AUC=0.695, features=[(3, 2)]
+
+Exp 2: Different weight initializations (same structure):
+  weight_seed=5842: Acc=0.859, AUC=0.974
+  weight_seed=5942: Acc=0.458, AUC=0.661
+  weight_seed=6042: Acc=0.690, AUC=0.909
+  weight_seed=6142: Acc=0.916, AUC=0.985
+  weight_seed=6242: Acc=0.875, AUC=0.982
+
+--- Dataset 19 (Original AUC: 0.959) ---
+
+Exp 1: Same network, different feature selection seeds:
+  feat_seed=3942: Acc=0.889, AUC=0.971, features=[(0, 4)]
+  feat_seed=4042: Acc=0.778, AUC=0.937, features=[(4, 8)]
+  feat_seed=4142: Error - Dataset too boring: avg temporal variance = 0.0095
+  feat_seed=4242: Acc=0.593, AUC=0.901, features=[(4, 40)]
+  feat_seed=4342: Acc=0.778, AUC=0.921, features=[(4, 8)]
+
+Exp 2: Different weight initializations (same structure):
+  weight_seed=6942: Error - Dataset too boring: avg temporal variance = 0.0035
+  weight_seed=7042: Acc=0.481, AUC=0.833
+  weight_seed=7142: Acc=0.889, AUC=0.973
+  weight_seed=7242: Acc=0.370, AUC=0.744
+  weight_seed=7342: Acc=0.556, AUC=0.775
+
+--- Dataset 41 (Original AUC: 0.985) ---
+
+Exp 1: Same network, different feature selection seeds:
+  feat_seed=6142: Acc=0.800, AUC=0.958, features=[(7, 37)]
+  feat_seed=6242: Acc=0.859, AUC=0.965, features=[(3, 60)]
+  feat_seed=6342: Acc=0.895, AUC=0.977, features=[(5, 12)]
+  feat_seed=6442: Acc=0.891, AUC=0.967, features=[(7, 69)]
+  feat_seed=6542: Acc=0.845, AUC=0.949, features=[(10, 93)]
+
+Exp 2: Different weight initializations (same structure):
+  weight_seed=9142: Acc=0.759, AUC=0.936
+  weight_seed=9242: Acc=0.818, AUC=0.964
+  weight_seed=9342: Acc=0.541, AUC=0.863
+  weight_seed=9442: Acc=0.359, AUC=0.751
+  weight_seed=9542: Acc=0.473, AUC=0.776
+
+--- Dataset 53 (Original AUC: 0.921) ---
+
+Exp 1: Same network, different feature selection seeds:
+  feat_seed=7342: Acc=0.333, AUC=0.627, features=[(4, 49)]
+  feat_seed=7442: Acc=0.460, AUC=0.771, features=[(1, 73)]
+  feat_seed=7542: Acc=0.698, AUC=0.894, features=[(4, 40)]
+  feat_seed=7642: Acc=0.317, AUC=0.640, features=[(5, 31)]
+  feat_seed=7742: Acc=0.579, AUC=0.878, features=[(5, 15)]
+
+Exp 2: Different weight initializations (same structure):
+  weight_seed=10342: Acc=0.587, AUC=0.749
+  weight_seed=10442: Acc=0.667, AUC=0.830
+  weight_seed=10542: Acc=0.540, AUC=0.858
+  weight_seed=10642: Acc=0.524, AUC=0.769
+  weight_seed=10742: Acc=0.524, AUC=0.638
+
+Sensitivity results saved to: /Users/franco/Documents/TabPFN3D/06_generator_experiments/analysis_results/sensitivity_20260125_230857.json
+
+All results saved to: /Users/franco/Documents/TabPFN3D/06_generator_experiments/analysis_results/results_20260125_230857.json

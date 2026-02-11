@@ -1,0 +1,9 @@
+Memory: 5 dims (uniform)
+Stochastic: 0 dims
+Time transforms (12): ['linear', 'linear', 'exp_decay', 'quadratic', 'sin_k1', 'cos_k2', 'cos_k5', 'cubic', 'exp_growth', 'sin_k3', 'sin_k5', 'sin_k2']
+Layers: [12, 34, 38]
+Activations: [elu, elu, softplus]
+Weight init: xavier_normal (scale=0.90)
+Bias std: 0.038
+Noisy nodes (18/84, p=18%): L1:2, L2:8, L3:8
+Quantization nodes (6/84): L2:3, L3:3

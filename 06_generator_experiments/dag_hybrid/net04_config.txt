@@ -1,0 +1,22 @@
+=== z (memory) ===
+  z_dim: 10, z_std: 0.9074
+  z_NN: 4 layers, nodes=[6, 11, 2, 6]
+  z_features_dim: 6
+
+=== t (time) ===
+  t_NN: 4 layers, nodes=[8, 10, 5, 8]
+  t_features_dim: 9 (includes raw t)
+
+=== noise ===
+  noise_std: 0.208309
+
+=== FC layer ===
+  input: 16 (z:6 + t:9 + noise:1)
+  output: 9 roots
+  activation: identity
+
+=== DAG ===
+  nodes: 14 (roots: 9)
+  edges: 10
+  redirection_prob: 0.398
+  noisy_nodes: 0/14

@@ -5,11 +5,13 @@ This module handles the import of DAG and transformation components from
 02_synthetic_generator_2D without conflicting with the 3D config.
 
 Also provides a modified DAGBuilder that creates multiple root nodes
-(required for 3D temporal generator to have time/state inputs).
+(required for 3D temporal generator).
 
-v2 CHANGES:
-- Removed passthrough transformation
-- Higher probability for tree transformation
+v4 CHANGES:
+- Roots = 1 (base TIME) + n_extra_time_inputs + memory_dim (MEMORY)
+- Extra TIME inputs have activations (sin, cos, tanh, etc.)
+- NN 70%, Tree 15%, Discretization 15%
+- Noise only at end of transformations
 """
 
 import sys
@@ -43,7 +45,6 @@ try:
         DiscretizationTransformation,
         NNTransformation,
         TreeTransformation,
-        # PassthroughTransformation - NOT importing, removed from 3D
     )
     from post_processing import Warper, MissingValueInjector
     
@@ -65,22 +66,41 @@ class TransformationFactory:
     """
     Transformation factory for 3D generator.
     
-    v2: NO passthrough, only NN, tree, and discretization.
+    v4: All NN with same activation per DAG
+    Noise is applied at the end of each transformation.
     """
     
-    def __init__(self, config, rng: Optional[np.random.Generator] = None):
+    def __init__(self, config, rng: Optional[np.random.Generator] = None, shared_activation: Optional[str] = None):
         self.config = config
         self.rng = rng if rng is not None else np.random.default_rng()
+        
+        # Select ONE activation for ALL NN transformations in this DAG
+        if shared_activation is None:
+            prob_identity = getattr(config, 'prob_identity_activation', 0.5)
+            if self.rng.random() < prob_identity and 'identity' in config.allowed_activations:
+                self.shared_activation = 'identity'
+            else:
+                other_activations = [a for a in config.allowed_activations if a != 'identity']
+                if other_activations:
+                    self.shared_activation = self.rng.choice(other_activations)
+                else:
+                    self.shared_activation = 'identity'
+        else:
+            self.shared_activation = shared_activation
     
-    def create(self, n_parents: int) -> EdgeTransformation:
-        """Create a random transformation (no passthrough)."""
+    def create(self, n_parents: int, force_discretization: bool = False) -> EdgeTransformation:
+        """
+        Create a random transformation.
         
-        # Get probabilities (passthrough should not be in config anymore)
+        Args:
+            n_parents: Number of parent nodes
+            force_discretization: If True, always create discretization (for target node)
+        """
+        if force_discretization:
+            return self._create_discretization(n_parents)
+        
+        # Get probabilities
         probs = self.config.transform_probs.copy()
-        
-        # Remove passthrough if present
-        if 'passthrough' in probs:
-            del probs['passthrough']
         
         # Normalize
         types = list(probs.keys())
@@ -89,34 +109,26 @@ class TransformationFactory:
         
         transform_type = self.rng.choice(types, p=type_probs)
         
+        if transform_type == 'nn':
+            return self._create_nn(n_parents)
+        elif transform_type == 'tree':
+            return self._create_tree(n_parents)
+        else:  # discretization
+            return self._create_discretization(n_parents)
+    
+    def _create_nn(self, n_parents: int) -> NNTransformation:
+        """Create a neural network transformation with shared activation."""
+        input_dim = max(1, n_parents)
         noise_scale = self.config.noise_scale
         
-        if transform_type == 'nn':
-            return self._create_nn(n_parents, noise_scale)
-        elif transform_type == 'tree':
-            return self._create_tree(n_parents, noise_scale)
-        else:  # discretization
-            return self._create_discretization(n_parents, noise_scale)
-    
-    def _create_nn(self, n_parents: int, noise_scale: float) -> NNTransformation:
-        """Create a neural network transformation."""
-        input_dim = max(1, n_parents)
-        
-        # Xavier initialization
-        xavier_std = np.sqrt(2.0 / (input_dim + 1))
+        # More conservative Xavier initialization (reduced from 2.0 to 1.0)
+        xavier_std = np.sqrt(1.0 / (input_dim + 1))
         weights = self.rng.normal(0, xavier_std, size=(input_dim,))
-        bias = self.rng.normal(0, 0.1)
+        # Reduced bias range for more stability
+        bias = self.rng.normal(0, 0.05)
         
-        # Sample activation
-        prob_identity = getattr(self.config, 'prob_identity_activation', 0.4)
-        if self.rng.random() < prob_identity and 'identity' in self.config.allowed_activations:
-            activation = 'identity'
-        else:
-            other_activations = [a for a in self.config.allowed_activations if a != 'identity']
-            if other_activations:
-                activation = self.rng.choice(other_activations)
-            else:
-                activation = 'identity'
+        # Use the shared activation for all NN transformations in this DAG
+        activation = self.shared_activation
         
         return NNTransformation(
             weights=weights,
@@ -126,12 +138,13 @@ class TransformationFactory:
             rng=self.rng
         )
     
-    def _create_tree(self, n_parents: int, noise_scale: float) -> TreeTransformation:
+    def _create_tree(self, n_parents: int) -> TreeTransformation:
         """Create a decision tree transformation."""
         depth = self.config.tree_depth
         n_internal = 2 ** depth - 1
         n_leaves = 2 ** depth
         total_nodes = n_internal + n_leaves
+        noise_scale = self.config.noise_scale
         
         input_dim = max(1, n_parents)
         
@@ -174,10 +187,11 @@ class TransformationFactory:
             rng=self.rng
         )
     
-    def _create_discretization(self, n_parents: int, noise_scale: float) -> DiscretizationTransformation:
+    def _create_discretization(self, n_parents: int) -> DiscretizationTransformation:
         """Create a discretization transformation."""
         n_categories = self.config.n_categories
         input_dim = max(1, n_parents)
+        noise_scale = self.config.noise_scale
         
         prototypes = self.rng.normal(0, 1, size=(n_categories, input_dim))
         
@@ -193,27 +207,26 @@ class DAGBuilder:
     """
     Modified DAG Builder for 3D temporal generator.
     
-    Creates MULTIPLE root nodes for time and state inputs.
+    v4: Creates TIME roots (1 base + n_extra) + MEMORY roots
     """
     
     def __init__(self, config, rng: Optional[np.random.Generator] = None):
         self.config = config
         self.rng = rng if rng is not None else np.random.default_rng()
         
-        # Minimum roots = time + state inputs
-        self.min_roots = (
-            getattr(config, 'n_time_inputs', 1) +
-            getattr(config, 'n_state_inputs', 1)
-        )
+        # Total roots = 1 (base TIME) + n_extra_time_inputs + memory_dim (MEMORY)
+        n_extra_time = getattr(config, 'n_extra_time_inputs', 0)
+        memory_dim = getattr(config, 'memory_dim', 4)
+        self.n_roots = 1 + n_extra_time + memory_dim
     
     def build(self) -> DAG:
-        """Build a random DAG with multiple root nodes."""
+        """Build a random DAG with TIME + MEMORY roots."""
         n_nodes = self.config.n_nodes
         n_disconnected = getattr(self.config, 'n_disconnected_subgraphs', 0)
         density = getattr(self.config, 'density', 0.3)
         
         # Ensure enough nodes for roots
-        n_roots = max(self.min_roots, 2)
+        n_roots = self.n_roots
         n_nodes = max(n_nodes, n_roots + 3)
         
         # Calculate subgraph allocation
@@ -245,7 +258,7 @@ class DAGBuilder:
         else:
             subgraph_sizes = [n_nodes]
         
-        # Roots per subgraph
+        # Roots per subgraph (all in main subgraph)
         roots_per_subgraph = [n_roots]
         for i in range(1, len(subgraph_sizes)):
             n_subgraph_roots = min(2, max(1, subgraph_sizes[i] // 3))

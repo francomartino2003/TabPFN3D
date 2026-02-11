@@ -104,6 +104,15 @@ class NodeQuantizationConfig:
 
 
 @dataclass
+class DiscreteMemoryDimConfig:
+    """Configuration for a single discrete memory dimension."""
+    dim_idx: int
+    n_classes: int
+    class_values: np.ndarray  # (n_classes,) - propagation value for each class (sampled from normal)
+    class_probs: np.ndarray   # (n_classes,) - probability of each class (sums to 1)
+
+
+@dataclass
 class SampledConfig:
     """Configuration that was sampled for a specific network."""
     memory_dim: int
@@ -119,8 +128,12 @@ class SampledConfig:
     weight_init: str = 'xavier_normal'
     weight_scale: float = 1.0
     bias_std: float = 0.0
+    # Activation subset: the subset of activations used for this network
+    activation_subset: List[str] = None
     # Discrete dims: which dims are discrete and how many classes each has
-    memory_discrete_info: List[Tuple[int, int]] = None  # List of (dim_idx, n_classes)
+    memory_discrete_info: List[Tuple[int, int]] = None  # List of (dim_idx, n_classes) - for backwards compat
+    # NEW: Full discrete memory configuration with sampled class values and probabilities
+    memory_discrete_configs: List[DiscreteMemoryDimConfig] = None
     # Per-node noise: List[List[NodeNoiseConfig]] - one list per layer, one config per node
     node_noise: List[List[NodeNoiseConfig]] = None
     node_noise_prob: float = 0.0  # The sampled noise probability for this network
@@ -197,8 +210,16 @@ class RandomNNGenerator:
         # Sample memory dimension (uniform)
         memory_dim = self.rng.integers(cfg.memory_dim_range[0], cfg.memory_dim_range[1] + 1)
         
+        # Sample memory normal std first (needed for discrete class values)
+        memory_normal_std = self._log_uniform_float(
+            cfg.memory_normal_std_range[0],
+            cfg.memory_normal_std_range[1]
+        )
+        
         # Sample which memory dims are discrete
-        memory_discrete_info = []
+        memory_discrete_info = []  # For backwards compatibility
+        memory_discrete_configs = []
+        
         for dim_idx in range(memory_dim):
             if self.rng.random() < cfg.memory_discrete_prob:
                 # Log-uniform for n_classes (favor fewer classes)
@@ -206,7 +227,26 @@ class RandomNNGenerator:
                     cfg.memory_discrete_classes_range[0],
                     cfg.memory_discrete_classes_range[1]
                 )
+                
+                # Sample class values from same distribution as continuous memory
+                if cfg.memory_init == 'uniform':
+                    class_values = self.rng.uniform(-1, 1, n_classes)
+                else:  # normal
+                    class_values = np.clip(
+                        self.rng.normal(0, memory_normal_std, n_classes),
+                        -1, 1
+                    )
+                
+                # Uniform class probabilities (like before)
+                class_probs = np.ones(n_classes) / n_classes
+                
                 memory_discrete_info.append((dim_idx, n_classes))
+                memory_discrete_configs.append(DiscreteMemoryDimConfig(
+                    dim_idx=dim_idx,
+                    n_classes=n_classes,
+                    class_values=class_values,
+                    class_probs=class_probs
+                ))
         
         # Force at least 1 discrete dim (for labels)
         if len(memory_discrete_info) == 0:
@@ -215,7 +255,26 @@ class RandomNNGenerator:
                 cfg.memory_discrete_classes_range[0],
                 cfg.memory_discrete_classes_range[1]
             )
+            
+            # Sample class values
+            if cfg.memory_init == 'uniform':
+                class_values = self.rng.uniform(-1, 1, n_classes)
+            else:
+                class_values = np.clip(
+                    self.rng.normal(0, memory_normal_std, n_classes),
+                    -1, 1
+                )
+            
+            # Uniform class probabilities (like before)
+            class_probs = np.ones(n_classes) / n_classes
+            
             memory_discrete_info.append((dim_idx, n_classes))
+            memory_discrete_configs.append(DiscreteMemoryDimConfig(
+                dim_idx=dim_idx,
+                n_classes=n_classes,
+                class_values=class_values,
+                class_probs=class_probs
+            ))
         
         # Sample stochastic input dimension
         stochastic_dim = self.rng.integers(
@@ -223,11 +282,7 @@ class RandomNNGenerator:
             cfg.stochastic_input_dim_range[1] + 1
         )
         
-        # Sample memory normal std (log-uniform)
-        memory_normal_std = self._log_uniform_float(
-            cfg.memory_normal_std_range[0],
-            cfg.memory_normal_std_range[1]
-        )
+        # Note: memory_normal_std was already sampled above (needed for discrete class values)
         
         # Sample stochastic input std (log-uniform)
         stochastic_input_std = self._log_uniform_float(
@@ -253,12 +308,19 @@ class RandomNNGenerator:
             nodes_per_layer.append(n_nodes)
         
         # Sample activations
-        # Per-node activation mode: each node gets its own activation
+        # First: sample a SUBSET of activation functions (1 to all)
+        # Use log-uniform to favor smaller subsets (more variety: some 100% tanh, some mixed)
+        # This allows networks to be e.g. 100% tanh, or only tanh+step, or all activations
+        all_activations = list(cfg.activation_choices)
+        n_act_subset = self._log_uniform_int(1, len(all_activations))  # log-uniform favors smaller
+        activation_subset = list(self.rng.choice(all_activations, size=n_act_subset, replace=False))
+        
+        # Per-node activation mode: each node gets its own activation FROM THE SUBSET
         node_activations = []
         activations = []  # Keep for backwards compatibility
         for layer_idx in range(n_layers):
             n_nodes = nodes_per_layer[layer_idx]
-            layer_acts = [self.rng.choice(list(cfg.activation_choices)) for _ in range(n_nodes)]
+            layer_acts = [self.rng.choice(activation_subset) for _ in range(n_nodes)]
             node_activations.append(layer_acts)
             # For backwards compatibility, pick the most common or first
             activations.append(layer_acts[0] if layer_acts else 'identity')
@@ -336,7 +398,9 @@ class RandomNNGenerator:
             weight_init=weight_init,
             weight_scale=weight_scale,
             bias_std=bias_std,
+            activation_subset=activation_subset,
             memory_discrete_info=memory_discrete_info,
+            memory_discrete_configs=memory_discrete_configs,
             node_noise=node_noise,
             node_noise_prob=node_noise_prob,
             node_quantization=node_quantization,
@@ -522,9 +586,11 @@ class RandomNNGenerator:
     def _generate_memory(self, n_samples: int) -> np.ndarray:
         """Generate memory vectors for each sample.
         
-        Some dims may be discrete (uniform categorical), determined by memory_discrete_info.
-        Discrete dims with n classes use values: linspace(-1, 1, n)
-        e.g., 2 classes: [-1, 1], 3 classes: [-1, 0, 1], 4 classes: [-1, -0.33, 0.33, 1]
+        Some dims may be discrete, determined by memory_discrete_configs.
+        Each discrete dim has:
+        - n_classes: number of classes
+        - class_values: propagation value for each class (sampled from same distribution as continuous memory)
+        - class_probs: probability of each class (sampled from Dirichlet)
         """
         cfg = self.sampled_config
         
@@ -537,12 +603,21 @@ class RandomNNGenerator:
                 -1, 1
             )
         
-        # Override discrete dims
-        if cfg.memory_discrete_info:
+        # Override discrete dims using the new configs with sampled class values
+        if cfg.memory_discrete_configs:
+            for disc_cfg in cfg.memory_discrete_configs:
+                # Sample class indices according to class_probs
+                sampled_indices = self.rng.choice(
+                    disc_cfg.n_classes,
+                    size=n_samples,
+                    p=disc_cfg.class_probs
+                )
+                # Use pre-sampled class values (not linspace!)
+                memory[:, disc_cfg.dim_idx] = disc_cfg.class_values[sampled_indices]
+        elif cfg.memory_discrete_info:
+            # Fallback to old behavior for backwards compatibility
             for dim_idx, n_classes in cfg.memory_discrete_info:
-                # Generate discrete values: linspace(-1, 1, n_classes)
                 discrete_values = np.linspace(-1, 1, n_classes)
-                # Sample uniformly from these values
                 sampled_indices = self.rng.integers(0, n_classes, n_samples)
                 memory[:, dim_idx] = discrete_values[sampled_indices]
         

@@ -1,0 +1,9 @@
+Memory: 1 dims (uniform)
+Stochastic: 0 dims
+Time transforms (2): ['linear', 'linear']
+Layers: [11, 11, 9, 4, 10, 11]
+Activations: [abs:8, identity:1, log:3, modulo:6, power:5, rank:6, sigmoid:7, sin:2, softplus:3, square:5, step:8, tanh:2]
+Weight init: xavier_normal (scale=1.08)
+Bias std: 0.057
+Noisy nodes (0/56, p=3%): none
+Quantization nodes (0/56): none
