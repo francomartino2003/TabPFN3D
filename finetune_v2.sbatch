@@ -67,17 +67,23 @@ if [ -n "${RESUME:-}" ]; then
     fi
 fi
 
+# Run name (for parallel experiments)
+RUN_NAME="${RUN_NAME:-default}"
+LR="${LR:-1e-5}"
+echo "RUN_NAME=$RUN_NAME  LR=$LR"
+
 # Run
 if [ "${DEBUG:-0}" == "1" ]; then
     echo "DEBUG MODE"
-    python -u finetune_tabpfn_v2.py --debug $RESUME_ARGS
+    python -u finetune_tabpfn_v2.py --debug --run-name $RUN_NAME --lr $LR $RESUME_ARGS
 else
     echo "Full training..."
     python -u finetune_tabpfn_v2.py \
         --n-steps 1000 \
         --batch-size 64 \
-        --lr 1e-5 \
+        --lr $LR \
         --eval-every 1 \
+        --run-name $RUN_NAME \
         $RESUME_ARGS
 fi
 

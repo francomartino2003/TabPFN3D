@@ -81,10 +81,17 @@ class FinetuneConfig:
     max_flat_features: int = 500
     max_classes: int = 10
 
-    # Paths
-    checkpoint_dir: str = "checkpoints_v2"
-    log_dir: str = "logs_v2"
+    # Paths (run_name allows parallel runs without overwriting)
+    run_name: str = "default"
+    checkpoint_dir: str = ""   # set from run_name
+    log_dir: str = ""          # set from run_name
     real_data_path: str = "../01_real_data/AEON/data/classification_datasets.pkl"
+
+    def __post_init__(self):
+        if not self.checkpoint_dir:
+            self.checkpoint_dir = f"checkpoints_v2/{self.run_name}"
+        if not self.log_dir:
+            self.log_dir = f"logs_v2/{self.run_name}"
 
     # Device
     device: str = "auto"
@@ -728,12 +735,15 @@ def main():
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--run-name', type=str, default='default',
+                        help='Run name (separates checkpoints/logs per experiment)')
     args = parser.parse_args()
 
     config = FinetuneConfig(
         n_steps=args.n_steps, batch_size=args.batch_size,
         lr=args.lr, eval_every=args.eval_every,
-        device=args.device, seed=args.seed)
+        device=args.device, seed=args.seed,
+        run_name=args.run_name)
 
     if args.debug:
         print("DEBUG MODE")
