@@ -72,13 +72,7 @@ class PropagationHyperparameters:
     # U(-a, a):  a sampled uniform in range
     root_uniform_a_range: Tuple[float, float] = (0.5, 2)
 
-    # Number of causal conv layers per series node (log-uniform int)
-    n_conv_layers_range: Tuple[int, int] = (1, 2)
-
-    # Hidden channels in intermediate conv layers (log-uniform int)
-    hidden_channels_range: Tuple[int, int] = (1, 4)
-
-    # Causal convolution kernel size per layer (log-uniform int, sampled per layer)
+    # Causal convolution kernel size (log-uniform int, sampled per conv layer)
     kernel_size_range: Tuple[int, int] = (3, 100)
 
     # Per-node output noise: std sampled log-uniform (favors small values)
@@ -86,17 +80,6 @@ class PropagationHyperparameters:
 
     # Discrete nodes: number of classes k per node (log-uniform int — favors fewer)
     discrete_classes_range: Tuple[int, int] = (2, 10)
-
-    # Continuous activations for time index channel (no step)
-    time_activation_choices: Tuple[str, ...] = (
-        'identity',   # f(t) = t
-        'sin',        # f(t) = sin(t)
-        'tanh',       # f(t) = tanh(t)
-        'sigmoid',    # f(t) = 1/(1+exp(-t))
-        'square',     # f(t) = t^2
-        'power',      # f(t) = sign(t)*|t|^0.5
-        'abs',        # f(t) = |t|
-    )
 
     # Activation bank (same as folder 10)
     activation_choices: Tuple[str, ...] = (

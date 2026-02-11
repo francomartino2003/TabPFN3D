@@ -8,9 +8,11 @@ Node types and computation:
              class index → continuous class_value + noise for downstream propagation.
   SERIES:    dim 1×T.
     All series nodes use the same logic:
-    - Parent inputs → (n_parents, L), non-series parents are replicated along time.
-    - Concatenate normalized time index → (n_parents+1, L).
-    - Causal 1D conv (n_parents+1 → 1) + activation → (1, T) + iid noise.
+    - Parent inputs → (n_parents, T), non-series parents replicated along time.
+    - Concatenate normalized time index → (n_parents+1, T).
+    - Conv1: (n_parents+1 → 1, kernel K1) + activation → (1, T).
+    - Conv2: (1 → 1, kernel K2), no activation → (1, T).
+    - Add iid noise.
 """
 
 from __future__ import annotations
@@ -202,38 +204,36 @@ class DatasetGenerator:
 
     def _build_series_ops(self, node, parent_types, d, acts):
         """
-        Unified series node builder — mini CNN with L layers.
+        Series node builder — two causal convolutions with one activation.
 
-        Each series node is a stack of causal conv layers:
-          Layer 0: (n_parents+1, L_in) → (h, L_in-K0+1) + activation
-          Layer 1: (h, ...) → (h, ...) + activation
-          ...
-          Layer L-1: (h, ...) → (1, T) + activation
+        Structure:
+          1. Input: (n_parents+1, L_in)  — parents + time index channel
+          2. Conv1: (n_parents+1) → 1 channel, kernel K1  → (1, L_mid)
+          3. Activation
+          4. Conv2: 1 → 1 channel, kernel K2  → (1, T)
+          5. Noise
 
-        Each layer has its own kernel (with independently sampled size)
-        and its own activation. The time index channel gets a random
-        continuous activation applied before entering the first layer.
+        Each conv has its own independently sampled kernel size.
         """
         hp_p = self.hp.propagation
-        n_layers = self._log_uniform_int(*hp_p.n_conv_layers_range)
-        hidden = self._log_uniform_int(*hp_p.hidden_channels_range)
         c_in = len(parent_types) + 1  # +1 for time index channel
 
-        kernels = []
-        layer_acts = []
-        for i in range(n_layers):
-            ci = c_in if i == 0 else hidden
-            co = 1 if i == n_layers - 1 else hidden
-            K = self._log_uniform_int(*hp_p.kernel_size_range)
-            std = np.sqrt(2.0 / (ci * K))
-            kernels.append(self.rng.normal(0, std, size=(co, ci, K)))
-            layer_acts.append(str(self.rng.choice(acts)))
+        K1 = self._log_uniform_int(*hp_p.kernel_size_range)
+        K2 = self._log_uniform_int(*hp_p.kernel_size_range)
+
+        std1 = np.sqrt(2.0 / (c_in * K1))
+        kernel1 = self.rng.normal(0, std1, size=(1, c_in, K1))
+
+        std2 = np.sqrt(2.0 / K2)
+        kernel2 = self.rng.normal(0, std2, size=(1, 1, K2))
+
+        act = str(self.rng.choice(acts))
 
         self.node_ops[node.id] = {
             'kind': 'series',
-            'kernels': kernels,
-            'acts': layer_acts,
-            'time_act': str(self.rng.choice(hp_p.time_activation_choices)),
+            'kernel1': kernel1,
+            'kernel2': kernel2,
+            'act': act,
             'noise_std': self._sample_noise_std(),
         }
 
@@ -314,24 +314,27 @@ class DatasetGenerator:
         cont_vals = cont_vals + self.rng.normal(0, ops['noise_std'], size=(n,))
         return cont_vals, indices
 
-    # ── Series propagation (unified mini CNN) ──────────────────────────────
+    # ── Series propagation (two convolutions + one activation) ─────────────
 
     def _prop_series(self, node, ops, vals, n, T):
         """
-        Unified series propagation — mini CNN with L conv layers.
+        Series propagation — two causal convolutions with one activation.
 
-        1. Compute total shrinkage from all layers to determine L_in.
+        1. Compute total shrinkage (K1-1 + K2-1) to determine L_in.
         2. Gather parent channels → (n, n_parents, L_in).
-        3. Append time index channel (with activation) → (n, n_parents+1, L_in).
-        4. Apply conv layers: conv + activation at each layer.
-        5. Final output: (n, T) + iid noise.
+           - Series parents: edge-pad from T to L_in.
+           - Tabular/discrete parents: replicate scalar L_in times.
+           - Root parent: replicate mean(d) L_in times.
+        3. Append normalized time index channel → (n, n_parents+1, L_in).
+        4. Conv1: (n_parents+1 → 1) + activation → (n, 1, L_mid).
+        5. Conv2: (1 → 1), no activation → (n, 1, T).
+        6. Squeeze + iid noise → (n, T).
         """
-        kernels = ops['kernels']
-        layer_acts = ops['acts']
-
-        # Total shrinkage = sum of (K_i - 1) across all layers
-        total_shrink = sum(k.shape[2] - 1 for k in kernels)
-        L_in = T + total_shrink
+        kernel1 = ops['kernel1']
+        kernel2 = ops['kernel2']
+        K1 = kernel1.shape[2]
+        K2 = kernel2.shape[2]
+        L_in = T + (K1 - 1) + (K2 - 1)
 
         channels = []
         for pid in node.parents:
@@ -345,30 +348,30 @@ class DatasetGenerator:
                 channels.append(
                     np.tile(v.mean(axis=1, keepdims=True), (1, L_in)))
 
-        # Normalized time index channel with activation
+        # Normalized time index channel (no activation)
         t_channel = np.linspace(-1.0, 1.0, L_in)
-        t_channel = apply_activation(t_channel, ops['time_act'])
         t_batch = np.tile(t_channel[None, :], (n, 1))
         channels.append(t_batch)
 
         # x: (n, n_parents+1, L_in)
         x = np.stack(channels, axis=1)
 
-        # Apply mini CNN layers
-        for kernel, act in zip(kernels, layer_acts):
-            x = batch_causal_conv(x, kernel)        # (n, C_out, L') or (n, L') for last
-            x = apply_activation(x, act)
-            # If output is 2D (last layer, C_out=1, squeezed), break
-            if x.ndim == 2:
-                break
-            # Otherwise keep going as 3D
+        # Conv1: (n_parents+1 → 1) → (n, 1, L_mid)
+        x = batch_causal_conv(x, kernel1)
+        x = apply_activation(x, ops['act'])
 
-        # x should be (n, T) at this point
+        # Ensure 3D for second conv
+        if x.ndim == 2:
+            x = x[:, None, :]
+
+        # Conv2: (1 → 1) → (n, 1, T), no activation
+        x = batch_causal_conv(x, kernel2)
+
+        # Squeeze to (n, T)
         if x.ndim == 3:
-            x = x[:, 0, :]  # squeeze channel dim if still 3D
+            x = x[:, 0, :]
 
-        out = x
-        out += self.rng.normal(0, ops['noise_std'], size=(n, T))
+        out = x + self.rng.normal(0, ops['noise_std'], size=(n, T))
         return out
 
     # ── Dataset extraction ────────────────────────────────────────────────
@@ -470,12 +473,11 @@ class DatasetGenerator:
                     f'  node {nid} (discrete): k={ops["k"]}, '
                     f'proto({ops["prototypes"].shape}){noise}')
             elif ops['kind'] == 'series':
-                kshapes = [f'{k.shape}' for k in ops['kernels']]
-                acts_str = '→'.join(ops['acts'])
+                k1 = ops['kernel1'].shape
+                k2 = ops['kernel2'].shape
                 lines.append(
-                    f'  node {nid} (series): {len(ops["kernels"])}L '
-                    f'kernels={kshapes}, acts=[{acts_str}], '
-                    f't_act={ops["time_act"]}{noise}')
+                    f'  node {nid} (series): conv1{k1} → {ops["act"]} → '
+                    f'conv2{k2}{noise}')
         return '\n'.join(lines)
 
 
