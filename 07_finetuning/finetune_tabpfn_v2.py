@@ -412,7 +412,7 @@ class TabPFNFineTuner:
 
         total_loss, total_acc, n_valid = 0.0, 0.0, 0
 
-        for data in batch:
+        for i, data in enumerate(batch):
             try:
                 out = self.forward_single_dataset(
                     data['X_train'], data['y_train'],
@@ -427,6 +427,10 @@ class TabPFNFineTuner:
                 del out
             except Exception:
                 continue
+
+            # Free CUDA cache periodically to avoid OOM during accumulation
+            if torch.cuda.is_available() and (i + 1) % 8 == 0:
+                torch.cuda.empty_cache()
 
         if n_valid > 0:
             for p in self.model.parameters():
