@@ -10,8 +10,8 @@ Node types and computation:
     All series nodes use the same logic:
     - Parent inputs → (n_parents, T), non-series parents replicated along time.
     - Concatenate normalized time index → (n_parents+1, T).
-    - Conv1: (n_parents+1 → 1, kernel K1) + activation → (1, T).
-    - Conv2: (1 → 1, kernel K2), no activation → (1, T).
+    - Conv1 pointwise (K=1): (n_parents+1 → d_hidden) + activation → (d_hidden, T).
+    - Conv2 temporal (K, dilation D): (d_hidden → 1), left zero-padded → (1, T).
     - Add iid noise.
 """
 
@@ -47,30 +47,47 @@ def apply_activation(z: np.ndarray, name: str) -> np.ndarray:
     return z
 
 
-# ── Batch causal convolution ──────────────────────────────────────────────────
+# ── Batch convolutions ────────────────────────────────────────────────────────
 
-def batch_causal_conv(x: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+def batch_pointwise_conv(x: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     """
-    Multi-channel causal conv supporting multi-channel output.
+    Pointwise (K=1) convolution — mixes channels independently at each t.
 
-    x:      (N, C_in, L)
-    kernel: (C_out, C_in, K)  or  (C_in, K) for single-output (legacy)
-    output: (N, C_out, L-K+1)  or  (N, L-K+1) if kernel was 2D
+    x:      (N, C_in, T)
+    kernel: (C_out, C_in)
+    output: (N, C_out, T)
     """
-    squeeze = False
-    if kernel.ndim == 2:
-        kernel = kernel[None, :, :]   # (1, C_in, K)
-        squeeze = True
+    # einsum: for each n,t: y[n, o, t] = sum_c kernel[o,c] * x[n,c,t]
+    return np.einsum('oc,nct->not', kernel, x)
+
+
+def batch_dilated_causal_conv(x: np.ndarray, kernel: np.ndarray,
+                              dilation: int = 1) -> np.ndarray:
+    """
+    Dilated causal conv with left zero-padding to preserve length T.
+
+    x:      (N, C_in, T)
+    kernel: (C_out, C_in, K)
+    dilation: int  (spacing between kernel taps)
+    output: (N, C_out, T)
+
+    Effective receptive field: D * (K - 1) + 1.
+    Left zero-pad of D * (K - 1) ensures causality and same output length.
+    """
     C_out, C_in, K = kernel.shape
-    N = x.shape[0]
-    L = x.shape[2]
-    out_len = L - K + 1
-    y = np.zeros((N, C_out, out_len))
-    for t in range(out_len):
-        # x[:, :, t:t+K] → (N, C_in, K);  kernel → (C_out, C_in, K)
-        y[:, :, t] = np.einsum('nck,ock->no', x[:, :, t:t + K], kernel)
-    if squeeze:
-        return y[:, 0, :]   # (N, out_len)
+    N, _, T = x.shape
+    pad_len = dilation * (K - 1)
+
+    # Left zero-pad for causality
+    x_padded = np.pad(x, ((0, 0), (0, 0), (pad_len, 0)), mode='constant')
+
+    y = np.zeros((N, C_out, T))
+    for t in range(T):
+        t_p = t + pad_len  # position in padded array
+        # Gather K samples at dilation spacing, going backwards from t_p
+        indices = [t_p - k * dilation for k in range(K)]
+        x_slice = x_padded[:, :, indices]  # (N, C_in, K)
+        y[:, :, t] = np.einsum('nck,ock->no', x_slice, kernel)
     return y
 
 
@@ -204,35 +221,38 @@ class DatasetGenerator:
 
     def _build_series_ops(self, node, parent_types, d, acts):
         """
-        Series node builder — two causal convolutions with one activation.
+        Series node builder — pointwise conv + activation + dilated causal conv.
 
         Structure:
-          1. Input: (n_parents+1, L_in)  — parents + time index channel
-          2. Conv1: (n_parents+1) → 1 channel, kernel K1  → (1, L_mid)
-          3. Activation
-          4. Conv2: 1 → 1 channel, kernel K2  → (1, T)
-          5. Noise
-
-        Each conv has its own independently sampled kernel size.
+          1. Input: (n_parents+1, T) — parents + time index channel.
+          2. Conv1 pointwise (K=1): (n_parents+1) → d_hidden channels → (d_hidden, T).
+             Mixes parent channels at each t independently.
+          3. Activation.
+          4. Conv2 dilated causal (K, dilation D): (d_hidden) → 1 channel.
+             Left zero-padded so output is (1, T). No activation.
+          5. Noise.
         """
         hp_p = self.hp.propagation
         c_in = len(parent_types) + 1  # +1 for time index channel
 
-        K1 = self._log_uniform_int(*hp_p.kernel_size_range)
+        # Conv1: pointwise (K=1), maps c_in → d_hidden
+        d_hidden = self._log_uniform_int(*hp_p.series_hidden_channels_range)
+        std1 = np.sqrt(2.0 / c_in)
+        kernel1 = self.rng.normal(0, std1, size=(d_hidden, c_in))  # (d_hidden, c_in)
+
+        # Conv2: temporal dilated causal, maps d_hidden → 1
         K2 = self._log_uniform_int(*hp_p.kernel_size_range)
-
-        std1 = np.sqrt(2.0 / (c_in * K1))
-        kernel1 = self.rng.normal(0, std1, size=(1, c_in, K1))
-
-        std2 = np.sqrt(2.0 / K2)
-        kernel2 = self.rng.normal(0, std2, size=(1, 1, K2))
+        D2 = self._log_uniform_int(*hp_p.dilation_range)
+        std2 = np.sqrt(2.0 / (d_hidden * K2))
+        kernel2 = self.rng.normal(0, std2, size=(1, d_hidden, K2))
 
         act = str(self.rng.choice(acts))
 
         self.node_ops[node.id] = {
             'kind': 'series',
-            'kernel1': kernel1,
-            'kernel2': kernel2,
+            'kernel1': kernel1,        # (d_hidden, c_in)
+            'kernel2': kernel2,        # (1, d_hidden, K2)
+            'dilation': D2,
             'act': act,
             'noise_std': self._sample_noise_std(),
         }
@@ -314,64 +334,52 @@ class DatasetGenerator:
         cont_vals = cont_vals + self.rng.normal(0, ops['noise_std'], size=(n,))
         return cont_vals, indices
 
-    # ── Series propagation (two convolutions + one activation) ─────────────
+    # ── Series propagation (pointwise + activation + dilated causal) ────────
 
     def _prop_series(self, node, ops, vals, n, T):
         """
-        Series propagation — two causal convolutions with one activation.
+        Series propagation — pointwise conv + act + dilated causal conv.
 
-        1. Compute total shrinkage (K1-1 + K2-1) to determine L_in.
-        2. Gather parent channels → (n, n_parents, L_in).
-           - Series parents: edge-pad from T to L_in.
-           - Tabular/discrete parents: replicate scalar L_in times.
-           - Root parent: replicate mean(d) L_in times.
-        3. Append normalized time index channel → (n, n_parents+1, L_in).
-        4. Conv1: (n_parents+1 → 1) + activation → (n, 1, L_mid).
-        5. Conv2: (1 → 1), no activation → (n, 1, T).
+        1. Gather parent channels → (n, n_parents, T).
+           - Series parents: already (n, T).
+           - Tabular/discrete parents: replicate scalar T times.
+           - Root parent: replicate mean(d) T times.
+        2. Append normalized time index channel → (n, n_parents+1, T).
+        3. Conv1 pointwise (K=1): (n_parents+1 → d_hidden) → (n, d_hidden, T).
+        4. Activation.
+        5. Conv2 dilated causal (K, D): (d_hidden → 1), left zero-padded → (n, 1, T).
         6. Squeeze + iid noise → (n, T).
         """
-        kernel1 = ops['kernel1']
-        kernel2 = ops['kernel2']
-        K1 = kernel1.shape[2]
-        K2 = kernel2.shape[2]
-        L_in = T + (K1 - 1) + (K2 - 1)
-
         channels = []
         for pid in node.parents:
             pt = self.dag.nodes[pid].node_type
             v = vals[pid]
             if pt == 'series':
-                channels.append(np.pad(v, ((0, 0), (0, L_in - T)), mode='edge'))
+                channels.append(v)                                    # (n, T)
             elif pt in ('tabular', 'discrete'):
-                channels.append(np.tile(v[:, None], (1, L_in)))
+                channels.append(np.tile(v[:, None], (1, T)))          # (n, T)
             elif pt == 'root':
                 channels.append(
-                    np.tile(v.mean(axis=1, keepdims=True), (1, L_in)))
+                    np.tile(v.mean(axis=1, keepdims=True), (1, T)))   # (n, T)
 
         # Normalized time index channel (no activation)
-        t_channel = np.linspace(-1.0, 1.0, L_in)
+        t_channel = np.linspace(-1.0, 1.0, T)
         t_batch = np.tile(t_channel[None, :], (n, 1))
         channels.append(t_batch)
 
-        # x: (n, n_parents+1, L_in)
+        # x: (n, n_parents+1, T)
         x = np.stack(channels, axis=1)
 
-        # Conv1: (n_parents+1 → 1) → (n, 1, L_mid)
-        x = batch_causal_conv(x, kernel1)
+        # Conv1 pointwise: (n_parents+1 → d_hidden) → (n, d_hidden, T)
+        x = batch_pointwise_conv(x, ops['kernel1'])
         x = apply_activation(x, ops['act'])
 
-        # Ensure 3D for second conv
-        if x.ndim == 2:
-            x = x[:, None, :]
-
-        # Conv2: (1 → 1) → (n, 1, T), no activation
-        x = batch_causal_conv(x, kernel2)
+        # Conv2 dilated causal: (d_hidden → 1) → (n, 1, T), no activation
+        x = batch_dilated_causal_conv(x, ops['kernel2'], ops['dilation'])
 
         # Squeeze to (n, T)
-        if x.ndim == 3:
-            x = x[:, 0, :]
-
-        out = x + self.rng.normal(0, ops['noise_std'], size=(n, T))
+        out = x[:, 0, :]
+        out = out + self.rng.normal(0, ops['noise_std'], size=(n, T))
         return out
 
     # ── Dataset extraction ────────────────────────────────────────────────
@@ -473,11 +481,12 @@ class DatasetGenerator:
                     f'  node {nid} (discrete): k={ops["k"]}, '
                     f'proto({ops["prototypes"].shape}){noise}')
             elif ops['kind'] == 'series':
-                k1 = ops['kernel1'].shape
-                k2 = ops['kernel2'].shape
+                d_h = ops['kernel1'].shape[0]
+                K2 = ops['kernel2'].shape[2]
+                D2 = ops['dilation']
                 lines.append(
-                    f'  node {nid} (series): conv1{k1} → {ops["act"]} → '
-                    f'conv2{k2}{noise}')
+                    f'  node {nid} (series): pw({ops["kernel1"].shape[1]}→{d_h}) → '
+                    f'{ops["act"]} → conv(K={K2},D={D2},{d_h}→1){noise}')
         return '\n'.join(lines)
 
 

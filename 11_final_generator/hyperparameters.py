@@ -72,8 +72,14 @@ class PropagationHyperparameters:
     # U(-a, a):  a sampled uniform in range
     root_uniform_a_range: Tuple[float, float] = (0.5, 2)
 
-    # Causal convolution kernel size (log-uniform int, sampled per conv layer)
+    # Conv1 (pointwise, K=1): output channels (log-uniform int per series node)
+    series_hidden_channels_range: Tuple[int, int] = (1, 16)
+
+    # Conv2 (temporal): kernel size (log-uniform int per series node)
     kernel_size_range: Tuple[int, int] = (3, 100)
+
+    # Conv2 (temporal): dilation factor (log-uniform int per series node)
+    dilation_range: Tuple[int, int] = (1, 16)
 
     # Per-node output noise: std sampled log-uniform (favors small values)
     noise_std_range: Tuple[float, float] = (1e-4, 0.5)

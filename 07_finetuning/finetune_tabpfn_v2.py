@@ -592,8 +592,8 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     log_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("FINE-TUNING TABPFN  —  DAG Generator v3 (2-conv series)")
-    print("  Generator: 2 causal convs + 1 activation per series node")
+    print("FINE-TUNING TABPFN  —  DAG Generator v4 (pointwise + dilated)")
+    print("  Series: pointwise(→d) + act + dilated_causal(K,D,d→1)")
     print("=" * 60)
 
     # Synthetic generator
