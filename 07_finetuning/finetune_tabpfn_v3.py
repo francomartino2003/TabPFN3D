@@ -2,12 +2,12 @@
 Fine-tune TabPFN with Temporal Positional Encoding (V3).
 
 Key changes from V2:
-- features_per_group=1 (each column is its own token)
-- Feature shuffle disabled
-- Structured embeddings: feature_emb(j) + temporal_PE(t) per column
-- Pretrained v2.5 weights loaded with strict=False (only encoder linear re-init)
+- Keeps features_per_group=3 (same architecture, same speed, same memory)
+- Feature shuffle disabled (temporal order must be preserved)
+- Pads T to multiple of 3 so groups align to consecutive timesteps
+- Structured group embeddings: feature_emb(j) + sinusoidal_PE(group_idx)
+- 100% pretrained weights — NO new parameters, pure fine-tuning
 - Synthetic data from 11_final_generator (same as V2)
-- Passes (n_features, T) metadata so the model knows column→(feature, timestep)
 
 Usage:
     python finetune_tabpfn_v3.py --n-steps 1000 --eval-every 1
@@ -53,6 +53,7 @@ from tabpfn_temporal import (
     build_temporal_tabpfn,
     set_temporal_info,
     clear_temporal_info,
+    pad_to_group3,
 )
 
 # Global for signal handling
@@ -152,6 +153,10 @@ class SyntheticDataGenerator:
                 n_test  = X_test_3d.shape[0]
                 X_train = X_train_3d.reshape(n_train, -1).astype(np.float32)
                 X_test  = X_test_3d.reshape(n_test, -1).astype(np.float32)
+
+                # Pad T to multiple of 3 for fpg=3 grouping
+                X_train, T = pad_to_group3(X_train, n_features_orig, T)
+                X_test, _  = pad_to_group3(X_test, n_features_orig, T)
 
                 # Constraint: flattened features
                 if X_train.shape[1] > self.config.max_flat_features:
@@ -257,6 +262,11 @@ def load_real_datasets(config: FinetuneConfig) -> List[Dict[str, Any]]:
 
             X_train_flat = X_train.reshape(X_train.shape[0], -1).astype(np.float32)
             X_test_flat  = X_test.reshape(X_test.shape[0], -1).astype(np.float32)
+
+            # Pad T to multiple of 3 for fpg=3 grouping
+            X_train_flat, T_padded = pad_to_group3(X_train_flat, n_channels, T)
+            X_test_flat, _         = pad_to_group3(X_test_flat, n_channels, T)
+            T = T_padded
 
             le = LabelEncoder()
             le.fit(y_train)
@@ -475,7 +485,8 @@ class TabPFNTemporalFineTuner:
         """Evaluate on real datasets.
 
         For each dataset we create a fresh TabPFNClassifier (with shuffle
-        disabled), copy our fine-tuned weights, and set temporal info.
+        disabled), copy our fine-tuned weights, and patch add_embeddings.
+        Same architecture (fpg=3), just need to patch embeddings and load weights.
         """
         self.model.eval()
         results = []
@@ -492,34 +503,14 @@ class TabPFNTemporalFineTuner:
                     )
                     clf.fit(data['X_train'], data['y_train'])
 
-                    # Patch the eval model the same way as training model
+                    # Patch add_embeddings (same arch, just swap embedding logic)
                     eval_model = clf.model_
-                    eval_model.features_per_group = 1
-
-                    # Rebuild encoder for num_features=1
-                    from tabpfn.architectures.base import get_encoder
-                    eval_model.encoder = get_encoder(
-                        num_features=1,
-                        embedding_size=eval_model.ninp,
-                        remove_empty_features=True,
-                        remove_duplicate_features=False,
-                        nan_handling_enabled=True,
-                        normalize_on_train_only=True,
-                        normalize_to_ranking=False,
-                        normalize_x=True,
-                        remove_outliers=False,
-                        normalize_by_used_features=True,
-                        encoder_use_bias=False,
-                        encoder_type="linear",
-                    ).to(self.device)
-
-                    # Monkey-patch add_embeddings
                     import types
                     from tabpfn_temporal import temporal_add_embeddings
                     eval_model.add_embeddings = types.MethodType(
                         temporal_add_embeddings, eval_model)
 
-                    # Load fine-tuned weights
+                    # Load fine-tuned weights (same architecture, full match)
                     eval_model.load_state_dict(self.model.state_dict())
                     eval_model.eval()
 
@@ -646,8 +637,10 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
 
     print("=" * 60)
     print("FINE-TUNING TABPFN V3  —  Temporal Positional Encoding")
-    print("  features_per_group=1, feature_emb + sinusoidal_PE")
-    print("  feature shuffle: DISABLED")
+    print("  features_per_group=3 (kept as pretrained)")
+    print("  groups = 3 consecutive timesteps from same feature")
+    print("  embeddings = feature_emb(j) + sinusoidal_PE(group_idx)")
+    print("  feature shuffle: DISABLED, no new params")
     print("=" * 60)
 
     # Synthetic generator

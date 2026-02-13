@@ -11,9 +11,10 @@
 # Fine-tune TabPFN V3 — Temporal Positional Encoding
 #
 # Changes from V2:
-#   - features_per_group=1, feature shuffle disabled
-#   - Structured embeddings: feature_emb(j) + sinusoidal_PE(t)
-#   - Pretrained v2.5 weights (strict=False, only encoder linear re-init)
+#   - features_per_group=3 (kept as pretrained, same speed/memory)
+#   - Feature shuffle disabled, T padded to multiple of 3
+#   - Structured group embeddings: feature_emb(j) + sinusoidal_PE(group_idx)
+#   - 100% pretrained weights, no new parameters
 #
 # Usage:
 #   sbatch finetune_v3.sbatch
@@ -37,9 +38,6 @@ source $HOME/venv_tabpfn3d/bin/activate
 
 cd $HOME/TabPFN3D
 mkdir -p logs
-
-# Reduce CUDA memory fragmentation
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Environment info
 echo ""
