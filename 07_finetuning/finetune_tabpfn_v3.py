@@ -158,8 +158,10 @@ class SyntheticDataGenerator:
                 X_test  = X_test_3d.reshape(n_test, -1).astype(np.float32)
 
                 # Pad T to multiple of 3 for fpg=3 grouping
-                X_train, T = pad_to_group3(X_train, n_features_orig, T)
-                X_test, _  = pad_to_group3(X_test, n_features_orig, T)
+                # NB: must use original T for both calls (don't overwrite before 2nd)
+                X_train, T_padded = pad_to_group3(X_train, n_features_orig, T)
+                X_test, _         = pad_to_group3(X_test, n_features_orig, T)
+                T = T_padded
 
                 # Constraint: flattened features
                 if X_train.shape[1] > self.config.max_flat_features:
@@ -574,6 +576,10 @@ class TabPFNTemporalFineTuner:
                     res['auc'] = None
                     res['status'] = 'failed'
                     res['error'] = str(e)[:200]
+                    if getattr(self, '_n_eval_warns', 0) < 10:
+                        print(f"  [Eval fail] {data['name']}: {type(e).__name__}: "
+                              f"{str(e)[:150]}", flush=True)
+                        self._n_eval_warns = getattr(self, '_n_eval_warns', 0) + 1
                 results.append(res)
         return results
 
