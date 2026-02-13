@@ -38,6 +38,9 @@ source $HOME/venv_tabpfn3d/bin/activate
 cd $HOME/TabPFN3D
 mkdir -p logs
 
+# Reduce CUDA memory fragmentation
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 # Environment info
 echo ""
 echo "[Environment]"

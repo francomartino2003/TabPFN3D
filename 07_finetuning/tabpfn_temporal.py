@@ -251,6 +251,26 @@ def build_temporal_tabpfn(device: str = "auto"):
                 nn.init.zeros_(step.layer.bias)
             break
 
+    # ── Step 8: Enable gradient checkpointing for attention & MLP ──
+    # With fpg=1, the number of feature tokens is 3x larger than fpg=3,
+    # causing O(n^2) attention to use ~9x more memory during backprop.
+    # Wrapping attention and MLP forwards with checkpoint() trades ~30-40%
+    # more compute for much less peak memory.
+    from functools import partial
+    from torch.utils.checkpoint import checkpoint as torch_checkpoint
+    from tabpfn.architectures.base.attention.full_attention import MultiHeadAttention
+    from tabpfn.architectures.base.mlp import MLP
+
+    n_wrapped = 0
+    for module in model.modules():
+        if isinstance(module, (MultiHeadAttention, MLP)):
+            # Only wrap if not already wrapped (check if forward is already a partial)
+            if not isinstance(module.forward, partial):
+                module.forward = partial(
+                    torch_checkpoint, module.forward, use_reentrant=False)
+                n_wrapped += 1
+    print(f"  Enabled gradient checkpointing on {n_wrapped} attention/MLP modules")
+
     model.to(device if device != "auto" else "cpu")
 
     n_params = sum(p.numel() for p in model.parameters())
