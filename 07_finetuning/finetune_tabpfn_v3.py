@@ -495,92 +495,93 @@ class TabPFNTemporalFineTuner:
     def evaluate_all(self, datasets: List[Dict]) -> List[Dict]:
         """Evaluate on real datasets, bypassing sklearn preprocessing.
 
-        Uses the same bypass approach as training: data goes directly to the
-        model encoder. We use a fresh TabPFNClassifier for each dataset, load
-        fine-tuned weights, and patch add_embeddings.
+        Reuses self.model directly (no fresh TabPFNClassifier per dataset)
+        to avoid GPU memory fragmentation from repeated model loads.
+        Calls the model forward pass manually instead of going through the
+        classifier API.
         """
         self.model.eval()
         results = []
-        with torch.no_grad():
-            for data in datasets:
-                res = {'name': data['name'], 'n_classes': data['n_classes']}
-                try:
-                    # Create fresh classifier (just to get the model)
-                    eval_clf = TabPFNClassifier(
-                        device=self.device,
-                        n_estimators=1,
-                        ignore_pretraining_limits=True,
-                        fit_mode="batched",
-                        inference_config={"FEATURE_SHIFT_METHOD": None},
-                    )
-                    eval_clf._initialize_model_variables()
-                    eval_model = eval_clf.model_
 
-                    # Patch add_embeddings and load fine-tuned weights
-                    import types
-                    from tabpfn_temporal import temporal_add_embeddings
-                    eval_model.add_embeddings = types.MethodType(
-                        temporal_add_embeddings, eval_model)
-                    eval_model.load_state_dict(self.model.state_dict())
-                    eval_model.eval()
+        for data in datasets:
+            res = {'name': data['name'], 'n_classes': data['n_classes']}
+            try:
+                # Clear GPU cache before each dataset
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
+                with torch.no_grad():
                     # Set temporal info
-                    set_temporal_info(eval_model, data['n_features_orig'], data['T'])
+                    set_temporal_info(self.model, data['n_features_orig'],
+                                     data['T'])
 
-                    # Bypass sklearn: pass data directly
+                    # Build tensors on device
                     X_train_t = torch.as_tensor(
                         data['X_train'], dtype=torch.float32,
-                        device=self.device).unsqueeze(0)
+                        device=self.device)
                     y_train_t = torch.as_tensor(
                         data['y_train'], dtype=torch.float32,
-                        device=self.device).unsqueeze(0)
+                        device=self.device)
                     X_test_t = torch.as_tensor(
                         data['X_test'], dtype=torch.float32,
-                        device=self.device).unsqueeze(0)
+                        device=self.device)
 
-                    dummy_cfg = self._make_dummy_ensemble_config()
-                    eval_clf.n_classes_ = data['n_classes']
-                    eval_clf.fit_from_preprocessed(
-                        [X_train_t], [y_train_t],
-                        cat_ix=[[[]]],
-                        configs=[[dummy_cfg]],
+                    # Concatenate train+test as (seq_len, 1, n_features)
+                    # Model expects x=(seq_len, batch, features), y=(train_len, batch)
+                    X_full = torch.cat([X_train_t, X_test_t], dim=0)  # (n_all, feat)
+                    X_full = X_full.unsqueeze(1)  # (n_all, 1, feat)
+                    y_in = y_train_t.unsqueeze(1)  # (n_train, 1)
+
+                    # Direct model forward
+                    output = self.model(
+                        X_full, y_in,
+                        only_return_standard_out=True,
+                        categorical_inds=[[]],
                     )
-                    logits = eval_clf.forward(
-                        [X_test_t], return_raw_logits=True)
 
-                    # logits → probabilities
-                    if logits.ndim == 4:
-                        logits = logits.mean(dim=(1, 2))
-                    elif logits.ndim == 3:
-                        logits = logits.squeeze(1)
+                    # output shape: (n_test, 1, n_out) or (n_test, n_out)
+                    if output.ndim == 3:
+                        logits = output.squeeze(1)
+                    else:
+                        logits = output
+                    logits = logits[:, :data['n_classes']]
+
                     proba = torch.softmax(logits, dim=-1)
-                    proba = proba[:, :data['n_classes']]
                     proba_np = proba.cpu().numpy()
-                    preds = proba_np.argmax(axis=1)
 
-                    res['accuracy'] = float(
-                        accuracy_score(data['y_test'], preds))
-                    try:
-                        if data['n_classes'] == 2:
-                            res['auc'] = float(
-                                roc_auc_score(data['y_test'], proba_np[:, 1]))
-                        else:
-                            res['auc'] = float(
-                                roc_auc_score(data['y_test'], proba_np,
-                                              multi_class='ovr'))
-                    except Exception:
-                        res['auc'] = None
-                    res['status'] = 'success'
-                except Exception as e:
-                    res['accuracy'] = None
+                # Free GPU tensors
+                del X_train_t, y_train_t, X_test_t, X_full, y_in
+                del output, logits, proba
+
+                preds = proba_np.argmax(axis=1)
+                res['accuracy'] = float(
+                    accuracy_score(data['y_test'], preds))
+                try:
+                    if data['n_classes'] == 2:
+                        res['auc'] = float(
+                            roc_auc_score(data['y_test'], proba_np[:, 1]))
+                    else:
+                        res['auc'] = float(
+                            roc_auc_score(data['y_test'], proba_np,
+                                          multi_class='ovr'))
+                except Exception:
                     res['auc'] = None
-                    res['status'] = 'failed'
-                    res['error'] = str(e)[:200]
-                    if getattr(self, '_n_eval_warns', 0) < 10:
-                        print(f"  [Eval fail] {data['name']}: {type(e).__name__}: "
-                              f"{str(e)[:150]}", flush=True)
-                        self._n_eval_warns = getattr(self, '_n_eval_warns', 0) + 1
-                results.append(res)
+                res['status'] = 'success'
+            except Exception as e:
+                res['accuracy'] = None
+                res['auc'] = None
+                res['status'] = 'failed'
+                res['error'] = str(e)[:200]
+                if getattr(self, '_n_eval_warns', 0) < 10:
+                    print(f"  [Eval fail] {data['name']}: {type(e).__name__}: "
+                          f"{str(e)[:150]}", flush=True)
+                    self._n_eval_warns = getattr(self, '_n_eval_warns', 0) + 1
+            finally:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            results.append(res)
+
+        self.model.train()
         return results
 
     # ── Checkpoints ───────────────────────────────────────────────────────
