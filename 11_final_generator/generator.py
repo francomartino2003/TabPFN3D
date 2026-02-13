@@ -2,16 +2,20 @@
 Dataset generator: builds DAG, assigns per-node operations, propagates, extracts datasets.
 
 Node types and computation:
-  ROOT:      dimension d, sampled N(0,std) or U(-a,a) per observation.
+  ROOT LAYER (layer 0):
+    Each root node is tabular or discrete.
+    Tabular roots: sampled N(0,std) or U(-a,a) per observation → scalar.
+    Discrete roots: sample class uniformly → class_value → scalar.
   TABULAR:   dim 1 (continuous).  flatten parents → W·x + b + activation → scalar + noise.
   DISCRETE:  dim 1 (discrete→continuous).  flatten parents → nearest-prototype →
              class index → continuous class_value + noise for downstream propagation.
   SERIES:    dim 1×T.
-    All series nodes use the same logic:
+    All series nodes use the same two-conv logic:
     - Parent inputs → (n_parents, T), non-series parents replicated along time.
-    - Concatenate normalized time index → (n_parents+1, T).
-    - Conv1 pointwise (K=1): (n_parents+1 → d_hidden) + activation → (d_hidden, T).
-    - Conv2 temporal (K, dilation D): (d_hidden → 1), left zero-padded → (1, T).
+    - Add N_t normalized time-index channels (variable per node).
+      N_t = 1 + extra if no series parents, else 0 + extra.
+    - Conv1 pointwise (K=1): (n_parents + N_t → d_hidden) + act1 → (d_hidden, T).
+    - Conv2 temporal (K, dilation D): (d_hidden → 1), left zero-padded + act2 → (1, T).
     - Add iid noise.
 """
 
@@ -159,36 +163,43 @@ class DatasetGenerator:
 
     def _build_operations(self):
         hp_p = self.hp.propagation
-        d = self.dag.root_d
         T = self.T
         acts = hp_p.activation_choices
 
         self.node_ops: Dict[int, dict] = {}
 
         for node in self.dag.nodes:
-            if node.node_type == 'root':
+            # Layer 0: root nodes (initialized by sampling, not propagation)
+            if node.layer == 0:
+                if node.node_type == 'discrete':
+                    k = self._log_uniform_int(*hp_p.discrete_classes_range)
+                    class_values = self.rng.uniform(-1, 1, size=(k,))
+                    self.node_ops[node.id] = {
+                        'kind': 'root_discrete',
+                        'k': k,
+                        'class_values': class_values,
+                    }
+                else:  # tabular root
+                    self.node_ops[node.id] = {'kind': 'root_tabular'}
                 continue
 
             parent_types = [self.dag.nodes[p].node_type for p in node.parents]
 
             if node.node_type == 'tabular':
-                self._build_tabular_ops(node, parent_types, d, T, acts)
+                self._build_tabular_ops(node, parent_types, T, acts)
 
             elif node.node_type == 'discrete':
-                self._build_discrete_ops(node, parent_types, d, T, hp_p)
+                self._build_discrete_ops(node, parent_types, T, hp_p)
 
             elif node.node_type == 'series':
-                self._build_series_ops(node, parent_types, d, acts)
+                self._build_series_ops(node, parent_types, acts)
 
-    def _input_dim(self, parent_types, d, T):
+    def _input_dim(self, parent_types, T):
         """Total flattened input dimension for a scalar (tabular/discrete) node."""
-        return sum(
-            d if pt == 'root' else (T if pt == 'series' else 1)
-            for pt in parent_types
-        )
+        return sum(T if pt == 'series' else 1 for pt in parent_types)
 
-    def _build_tabular_ops(self, node, parent_types, d, T, acts):
-        dim = self._input_dim(parent_types, d, T)
+    def _build_tabular_ops(self, node, parent_types, T, acts):
+        dim = self._input_dim(parent_types, T)
         std = np.sqrt(2.0 / (dim + 1))
         self.node_ops[node.id] = {
             'kind': 'tabular',
@@ -198,8 +209,8 @@ class DatasetGenerator:
             'noise_std': self._sample_noise_std(),
         }
 
-    def _build_discrete_ops(self, node, parent_types, d, T, hp_p):
-        dim = self._input_dim(parent_types, d, T)
+    def _build_discrete_ops(self, node, parent_types, T, hp_p):
+        dim = self._input_dim(parent_types, T)
         k = self._log_uniform_int(*hp_p.discrete_classes_range)
 
         # Well-separated prototypes: sample random directions and normalize
@@ -219,26 +230,28 @@ class DatasetGenerator:
             'noise_std': self._sample_noise_std(),
         }
 
-    def _build_series_ops(self, node, parent_types, d, acts):
+    def _build_series_ops(self, node, parent_types, acts):
         """
         Series node builder — pointwise conv + activation + dilated causal conv.
 
-        Structure:
-          1. Input: (n_parents+1, T) — parents + time index channel.
-          2. Conv1 pointwise (K=1): (n_parents+1) → d_hidden channels → (d_hidden, T).
-             Mixes parent channels at each t independently.
-          3. Activation.
-          4. Conv2 dilated causal (K, dilation D): (d_hidden) → 1 channel.
-             Left zero-padded so output is (1, T). No activation.
-          5. Noise.
+        Time-index channels per node:
+          - No series parents → 1 mandatory + extra (1..5 total).
+          - Has series parents → 0 mandatory + extra (0..4 total).
         """
         hp_p = self.hp.propagation
-        c_in = len(parent_types) + 1  # +1 for time index channel
+
+        has_series_parent = any(pt == 'series' for pt in parent_types)
+        n_extra = int(self.rng.integers(
+            hp_p.n_extra_time_indices_range[0],
+            hp_p.n_extra_time_indices_range[1] + 1,
+        ))
+        n_time_indices = (0 if has_series_parent else 1) + n_extra
+        c_in = len(parent_types) + n_time_indices
 
         # Conv1: pointwise (K=1), maps c_in → d_hidden
         d_hidden = self._log_uniform_int(*hp_p.series_hidden_channels_range)
-        std1 = np.sqrt(2.0 / c_in)
-        kernel1 = self.rng.normal(0, std1, size=(d_hidden, c_in))  # (d_hidden, c_in)
+        std1 = np.sqrt(2.0 / max(c_in, 1))
+        kernel1 = self.rng.normal(0, std1, size=(d_hidden, c_in))
 
         # Conv2: temporal dilated causal, maps d_hidden → 1
         K2 = self._log_uniform_int(*hp_p.kernel_size_range)
@@ -246,24 +259,22 @@ class DatasetGenerator:
         std2 = np.sqrt(2.0 / (d_hidden * K2))
         kernel2 = self.rng.normal(0, std2, size=(1, d_hidden, K2))
 
-        act = str(self.rng.choice(acts))
+        act1 = str(self.rng.choice(acts))
+        # act2: 50 % identity, 50 % random from bank
+        act2 = 'identity' if self.rng.random() < 0.3 else str(self.rng.choice(acts))
 
         self.node_ops[node.id] = {
             'kind': 'series',
-            'kernel1': kernel1,        # (d_hidden, c_in)
-            'kernel2': kernel2,        # (1, d_hidden, K2)
+            'kernel1': kernel1,
+            'kernel2': kernel2,
             'dilation': D2,
-            'act': act,
+            'act1': act1,
+            'act2': act2,
             'noise_std': self._sample_noise_std(),
+            'n_time_indices': n_time_indices,
         }
 
     # ── Propagation ──────────────────────────────────────────────────────
-
-    def _sample_root(self, n: int) -> np.ndarray:
-        d = self.dag.root_d
-        if self.root_init == 'normal':
-            return self.rng.normal(0, self.root_std, (n, d))
-        return self.rng.uniform(-self.root_a, self.root_a, (n, d))
 
     def propagate(self, n: int):
         """
@@ -271,14 +282,27 @@ class DatasetGenerator:
 
         Returns:
             vals:  {node_id: np.ndarray} – continuous values
-                   root → (n, d), tabular/discrete → (n,), series → (n, T)
+                   tabular/discrete/root → (n,), series → (n, T)
             disc:  {node_id: np.ndarray} – discrete class indices (int)
                    only for discrete nodes → (n,)
         """
         T = self.T
         vals: Dict[int, np.ndarray] = {}
         disc: Dict[int, np.ndarray] = {}
-        vals[self.dag.root.id] = self._sample_root(n)
+
+        # Initialize layer 0 (root nodes)
+        for nid in self.dag.layers[0]:
+            ops = self.node_ops[nid]
+            if ops['kind'] == 'root_discrete':
+                k = ops['k']
+                idx = self.rng.integers(0, k, size=(n,))
+                vals[nid] = ops['class_values'][idx]
+                disc[nid] = idx
+            else:  # root_tabular
+                if self.root_init == 'normal':
+                    vals[nid] = self.rng.normal(0, self.root_std, (n,))
+                else:
+                    vals[nid] = self.rng.uniform(-self.root_a, self.root_a, (n,))
 
         for l_idx in range(1, self.dag.n_layers):
             for nid in self.dag.layers[l_idx]:
@@ -306,12 +330,10 @@ class DatasetGenerator:
         for pid in node.parents:
             pt = self.dag.nodes[pid].node_type
             v = vals[pid]
-            if pt == 'root':
-                parts.append(v)                          # (n, d)
-            elif pt in ('tabular', 'discrete'):
-                parts.append(v[:, None])                  # (n, 1)
-            elif pt == 'series':
+            if pt == 'series':
                 parts.append(v)                           # (n, T)
+            else:  # tabular or discrete
+                parts.append(v[:, None])                  # (n, 1)
         return np.concatenate(parts, axis=1)
 
     # ── Tabular propagation ───────────────────────────────────────────────
@@ -338,17 +360,13 @@ class DatasetGenerator:
 
     def _prop_series(self, node, ops, vals, n, T):
         """
-        Series propagation — pointwise conv + act + dilated causal conv.
+        Series propagation — pointwise conv + act1 + dilated causal conv + act2.
 
         1. Gather parent channels → (n, n_parents, T).
-           - Series parents: already (n, T).
-           - Tabular/discrete parents: replicate scalar T times.
-           - Root parent: replicate mean(d) T times.
-        2. Append normalized time index channel → (n, n_parents+1, T).
-        3. Conv1 pointwise (K=1): (n_parents+1 → d_hidden) → (n, d_hidden, T).
-        4. Activation.
-        5. Conv2 dilated causal (K, D): (d_hidden → 1), left zero-padded → (n, 1, T).
-        6. Squeeze + iid noise → (n, T).
+        2. Append N_t normalized time-index channels.
+        3. Conv1 pointwise → (n, d_hidden, T) + act1.
+        4. Conv2 dilated causal → (n, 1, T) + act2.
+        5. Squeeze + iid noise → (n, T).
         """
         channels = []
         for pid in node.parents:
@@ -356,26 +374,27 @@ class DatasetGenerator:
             v = vals[pid]
             if pt == 'series':
                 channels.append(v)                                    # (n, T)
-            elif pt in ('tabular', 'discrete'):
+            else:  # tabular or discrete
                 channels.append(np.tile(v[:, None], (1, T)))          # (n, T)
-            elif pt == 'root':
-                channels.append(
-                    np.tile(v.mean(axis=1, keepdims=True), (1, T)))   # (n, T)
 
-        # Normalized time index channel (no activation)
-        t_channel = np.linspace(-1.0, 1.0, T)
-        t_batch = np.tile(t_channel[None, :], (n, 1))
-        channels.append(t_batch)
+        # Time-index channels (variable count per node)
+        n_time = ops['n_time_indices']
+        if n_time > 0:
+            t_channel = np.linspace(-1.0, 1.0, T)
+            t_batch = np.tile(t_channel[None, :], (n, 1))
+            for _ in range(n_time):
+                channels.append(t_batch)
 
-        # x: (n, n_parents+1, T)
+        # x: (n, n_parents + n_time, T)
         x = np.stack(channels, axis=1)
 
-        # Conv1 pointwise: (n_parents+1 → d_hidden) → (n, d_hidden, T)
+        # Conv1 pointwise → (n, d_hidden, T) + act1
         x = batch_pointwise_conv(x, ops['kernel1'])
-        x = apply_activation(x, ops['act'])
+        x = apply_activation(x, ops['act1'])
 
-        # Conv2 dilated causal: (d_hidden → 1) → (n, 1, T), no activation
+        # Conv2 dilated causal → (n, 1, T) + act2
         x = batch_dilated_causal_conv(x, ops['kernel2'], ops['dilation'])
+        x = apply_activation(x, ops['act2'])
 
         # Squeeze to (n, T)
         out = x[:, 0, :]
@@ -466,27 +485,37 @@ class DatasetGenerator:
         lines = [
             f'seed={self.seed}  n_samples={self.n_samples}  T={self.T}  '
             f'n_features={self.n_features}  n_classes={self.n_classes}',
-            f'root: d={self.dag.root_d}, init={self.root_init}',
+            f'root layer: d={self.dag.root_d} nodes, init={self.root_init}',
             self.dag.summary(),
             'Node operations:',
         ]
         for nid, ops in sorted(self.node_ops.items()):
-            noise = f', noise_std={ops["noise_std"]:.1e}'
-            if ops['kind'] == 'tabular':
+            kind = ops['kind']
+            if kind == 'root_tabular':
+                lines.append(f'  node {nid} (root tabular): sampled')
+            elif kind == 'root_discrete':
+                lines.append(
+                    f'  node {nid} (root discrete): k={ops["k"]}')
+            elif kind == 'tabular':
+                noise = f', noise_std={ops["noise_std"]:.1e}'
                 lines.append(
                     f'  node {nid} (tabular): W({len(ops["W"])}), '
                     f'act={ops["act"]}{noise}')
-            elif ops['kind'] == 'discrete':
+            elif kind == 'discrete':
+                noise = f', noise_std={ops["noise_std"]:.1e}'
                 lines.append(
                     f'  node {nid} (discrete): k={ops["k"]}, '
                     f'proto({ops["prototypes"].shape}){noise}')
-            elif ops['kind'] == 'series':
+            elif kind == 'series':
+                noise = f', noise_std={ops["noise_std"]:.1e}'
                 d_h = ops['kernel1'].shape[0]
                 K2 = ops['kernel2'].shape[2]
                 D2 = ops['dilation']
+                n_t = ops['n_time_indices']
                 lines.append(
                     f'  node {nid} (series): pw({ops["kernel1"].shape[1]}→{d_h}) → '
-                    f'{ops["act"]} → conv(K={K2},D={D2},{d_h}→1){noise}')
+                    f'{ops["act1"]} → conv(K={K2},D={D2},{d_h}→1) → '
+                    f'{ops["act2"]}, t_idx={n_t}{noise}')
         return '\n'.join(lines)
 
 

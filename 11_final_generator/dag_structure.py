@@ -2,10 +2,10 @@
 DAG structure builder for the final dataset generator.
 
 Builds a layered causal DAG:
-  - Layer 0: single root node (latent, dimension d).
+  - Layer 0: d root nodes (each "tabular" or "discrete", no series).
   - Layers 1…L: hidden nodes, each "series", "tabular" (continuous), or "discrete".
   - Fully connected between consecutive layers, with random connection drops.
-  - Role assignment: some series nodes → features, one discrete node → target.
+  - Role assignment: series nodes → features, one discrete node (any layer) → target.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ class Node:
     """A single node in the DAG."""
     id: int
     layer: int
-    node_type: str          # "root", "series", "tabular", or "discrete"
+    node_type: str          # "series", "tabular", or "discrete"
     parents: List[int] = field(default_factory=list)
     role: Optional[str] = None  # "feature", "target", or None
 
@@ -47,10 +47,6 @@ class DAGStructure:
     discrete_node_prob: float
 
     # Convenience accessors
-    @property
-    def root(self) -> Node:
-        return self.nodes[0]
-
     @property
     def feature_nodes(self) -> List[Node]:
         return [n for n in self.nodes if n.role == 'feature']
@@ -90,6 +86,22 @@ def _log_uniform_int(rng: np.random.Generator, lo: int, hi: int) -> int:
     return int(np.clip(np.round(np.exp(log_val)), lo, hi))
 
 
+def _get_root_ancestors(nodes: List[Node], node_id: int) -> set:
+    """Return the set of layer-0 node ids reachable by walking parents upward."""
+    roots = set()
+    stack = [node_id]
+    visited = set()
+    while stack:
+        nid = stack.pop()
+        if nid in visited:
+            continue
+        visited.add(nid)
+        if nodes[nid].layer == 0:
+            roots.add(nid)
+        stack.extend(nodes[nid].parents)
+    return roots
+
+
 # ── Builder ────────────────────────────────────────────────────────────────────
 
 def build_dag(
@@ -114,23 +126,31 @@ def build_dag(
     # ── 1. Global parameters ──────────────────────────────────────────────
 
     root_d = _log_uniform_int(rng, *dag_hp.root_d_range)
-    n_layers = int(rng.integers(dag_hp.n_layers_range[0], dag_hp.n_layers_range[1] + 1))
+    n_layers = _log_uniform_int(rng, *dag_hp.n_layers_range)
     connection_drop_prob = rng.uniform(*dag_hp.connection_drop_prob_range)
     series_node_prob = rng.uniform(*dag_hp.series_node_prob_range)
     discrete_node_prob = rng.uniform(*dag_hp.discrete_node_prob_range)
 
-    # ── 2. Root ───────────────────────────────────────────────────────────
+    # ── 2. Root layer (tabular / discrete, no series) ────────────────────
 
     node_id = 0
-    root = Node(id=node_id, layer=0, node_type='root')
-    nodes = [root]
-    layers: List[List[int]] = [[0]]
-    node_id += 1
+    nodes: List[Node] = []
+    layers: List[List[int]] = [[]]
+
+    for _ in range(root_d):
+        if rng.random() < discrete_node_prob:
+            ntype = 'discrete'
+        else:
+            ntype = 'tabular'
+        node = Node(id=node_id, layer=0, node_type=ntype)
+        nodes.append(node)
+        layers[0].append(node_id)
+        node_id += 1
 
     # ── 3. Hidden layers ──────────────────────────────────────────────────
 
     for l_idx in range(1, n_layers + 1):
-        n_nodes = int(rng.integers(dag_hp.nodes_per_layer_range[0], dag_hp.nodes_per_layer_range[1] + 1))
+        n_nodes = _log_uniform_int(rng, *dag_hp.nodes_per_layer_range)
         layer_ids = []
         for _ in range(n_nodes):
             if rng.random() < series_node_prob:
@@ -145,17 +165,17 @@ def build_dag(
             node_id += 1
         layers.append(layer_ids)
 
-    # ── 3b. Guarantee ≥1 series + ≥1 discrete ────────────────────────────
+    # ── 3b. Guarantee ≥1 series (hidden) + ≥1 discrete (any layer) ──────
 
-    non_root = [n for n in nodes if n.node_type != 'root']
+    hidden_nodes = [n for n in nodes if n.layer > 0]
 
-    if not any(n.node_type == 'series' for n in non_root):
-        convert = non_root[rng.integers(0, len(non_root))]
+    if not any(n.node_type == 'series' for n in hidden_nodes):
+        convert = hidden_nodes[rng.integers(0, len(hidden_nodes))]
         convert.node_type = 'series'
 
-    if not any(n.node_type == 'discrete' for n in non_root):
-        # Pick a non-root, non-series node; if none, add one
-        candidates = [n for n in non_root if n.node_type not in ('series',)]
+    if not any(n.node_type == 'discrete' for n in nodes):
+        # Pick a non-series node; if none, add one
+        candidates = [n for n in nodes if n.node_type != 'series']
         if candidates:
             convert = candidates[rng.integers(0, len(candidates))]
             convert.node_type = 'discrete'
@@ -197,13 +217,45 @@ def build_dag(
     assert nodes[target_id].node_type == 'discrete', \
         f'BUG: target node {target_id} is {nodes[target_id].node_type}, expected discrete'
 
+    # 5b. Ensure at least one feature shares ancestry with target ────────
+    #     (otherwise the classification problem is unsolvable)
+
+    target_roots = _get_root_ancestors(nodes, target_id)
+    connected_series = [sid for sid in series_ids
+                        if _get_root_ancestors(nodes, sid) & target_roots]
+
+    if not connected_series:
+        # No series node shares a root ancestor with the target.
+        # Force-connect: pick a random series node and add a target root
+        # as parent to its shallowest ancestor in layer ≥ 1.
+        target_root = next(iter(target_roots)) if target_roots else target_id
+        forced_sid = series_ids[rng.integers(0, len(series_ids))]
+        nid = forced_sid
+        while nodes[nid].layer > 1 and nodes[nid].parents:
+            nid = nodes[nid].parents[0]
+        if target_root not in nodes[nid].parents:
+            nodes[nid].parents = sorted(nodes[nid].parents + [target_root])
+        connected_series = [forced_sid]
+
     # Features: 75% univariate, otherwise log-uniform in range
     if rng.random() < role_hp.univariate_prob:
         n_features = 1
     else:
         n_features = _log_uniform_int(rng, *role_hp.n_features_range)
     n_features = min(n_features, len(series_ids))
-    feature_ids = rng.choice(series_ids, size=n_features, replace=False)
+
+    # First feature must be connected to the target
+    first_feat = int(rng.choice(connected_series))
+    remaining_pool = [sid for sid in series_ids if sid != first_feat]
+
+    if n_features > 1 and remaining_pool:
+        extra = rng.choice(remaining_pool,
+                           size=min(n_features - 1, len(remaining_pool)),
+                           replace=False)
+        feature_ids = [first_feat] + list(extra)
+    else:
+        feature_ids = [first_feat]
+
     for fid in feature_ids:
         nodes[fid].role = 'feature'
 
@@ -242,7 +294,6 @@ def build_dag(
 # ── Visualisation ──────────────────────────────────────────────────────────────
 
 _TYPE_COLORS = {
-    'root':     '#6C5CE7',  # purple
     'series':   '#00B894',  # green
     'tabular':  '#FDCB6E',  # yellow
     'discrete': '#74B9FF',  # blue
@@ -253,7 +304,7 @@ _ROLE_EDGE = {
     'target':  '#D63031',  # red
 }
 
-_TYPE_SHORT = {'root': 'R', 'series': 'S', 'tabular': 'T', 'discrete': 'D'}
+_TYPE_SHORT = {'series': 'S', 'tabular': 'T', 'discrete': 'D'}
 
 
 def visualize_dag(dag: DAGStructure, save_path: str) -> None:
@@ -311,7 +362,6 @@ def visualize_dag(dag: DAGStructure, save_path: str) -> None:
                 fontstyle='italic')
 
     legend_handles = [
-        mpatches.Patch(facecolor=_TYPE_COLORS['root'],     edgecolor='#2D3436', label='Root'),
         mpatches.Patch(facecolor=_TYPE_COLORS['series'],   edgecolor='#2D3436', label='Series'),
         mpatches.Patch(facecolor=_TYPE_COLORS['tabular'],  edgecolor='#2D3436', label='Tabular'),
         mpatches.Patch(facecolor=_TYPE_COLORS['discrete'], edgecolor='#2D3436', label='Discrete'),

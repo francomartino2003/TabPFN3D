@@ -20,18 +20,17 @@ class DAGHyperparameters:
     """Hyperparameters that control the DAG topology."""
 
     # Root latent dimension d  (log-uniform int)
-    root_d_range: Tuple[int, int] = (2, 8)
+    root_d_range: Tuple[int, int] = (1, 8)
 
     # Number of hidden layers (log-uniform int — favors smaller)
-    # Number of hidden layers (uniform int)
-    n_layers_range: Tuple[int, int] = (2, 6)
+    n_layers_range: Tuple[int, int] = (2, 8)
 
-    # Number of nodes per hidden layer (uniform int per layer)
-    nodes_per_layer_range: Tuple[int, int] = (2, 6)
+    # Number of nodes per hidden layer (log-uniform int per layer — favors smaller)
+    nodes_per_layer_range: Tuple[int, int] = (2, 20)
 
     # Probability that a node is "series" (vs tabular/discrete)
     # Sampled uniform float once per DAG
-    series_node_prob_range: Tuple[float, float] = (0.5, 1)
+    series_node_prob_range: Tuple[float, float] = (0.75, 1)
 
     # Among non-series nodes, probability that a node is "discrete" (vs continuous tabular)
     # Sampled uniform float once per DAG
@@ -67,22 +66,27 @@ class PropagationHyperparameters:
     root_init_choices: Tuple[str, ...] = ('normal', 'uniform')
 
     # N(0, std):  std sampled uniform in range
-    root_normal_std_range: Tuple[float, float] = (0.5, 2)
+    root_normal_std_range: Tuple[float, float] = (0.5, 1.5)
 
     # U(-a, a):  a sampled uniform in range
-    root_uniform_a_range: Tuple[float, float] = (0.5, 2)
+    root_uniform_a_range: Tuple[float, float] = (0.5, 1.5)
 
     # Conv1 (pointwise, K=1): output channels (log-uniform int per series node)
     series_hidden_channels_range: Tuple[int, int] = (1, 16)
 
     # Conv2 (temporal): kernel size (log-uniform int per series node)
-    kernel_size_range: Tuple[int, int] = (3, 100)
+    kernel_size_range: Tuple[int, int] = (1, 10)
 
     # Conv2 (temporal): dilation factor (log-uniform int per series node)
-    dilation_range: Tuple[int, int] = (1, 16)
+    dilation_range: Tuple[int, int] = (1, 15)
+
+    # Extra time-index channels for series nodes (uniform int per node)
+    # All series: add this many extra t-index channels.
+    # Series with no series parents: +1 mandatory on top.
+    n_extra_time_indices_range: Tuple[int, int] = (0, 3)
 
     # Per-node output noise: std sampled log-uniform (favors small values)
-    noise_std_range: Tuple[float, float] = (1e-4, 0.5)
+    noise_std_range: Tuple[float, float] = (1e-4, 1)
 
     # Discrete nodes: number of classes k per node (log-uniform int — favors fewer)
     discrete_classes_range: Tuple[int, int] = (2, 10)
