@@ -8,6 +8,9 @@ Key changes from V2:
 - Structured group embeddings: feature_emb(j) + sinusoidal_PE(group_idx)
 - 100% pretrained weights — NO new parameters, pure fine-tuning
 - Synthetic data from 11_final_generator (same as V2)
+- BYPASSES sklearn preprocessing entirely (no RemoveConstantFeatures,
+  no SquashingScaler, no SVD). Data goes directly to the model encoder
+  which handles normalization per group internally.
 
 Usage:
     python finetune_tabpfn_v3.py --n-steps 1000 --eval-every 1
@@ -42,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / '11_final_generator'))
 sys.path.insert(0, str(Path(__file__).parent.parent / '00_TabPFN' / 'src'))
 
 from tabpfn import TabPFNClassifier
-from tabpfn.preprocessing import fit_preprocessing
+from tabpfn.preprocessing.configs import ClassifierEnsembleConfig, PreprocessorConfig
 
 # Import DAG-based generator (folder 11)
 from generator import DatasetGenerator
@@ -347,6 +350,19 @@ class TabPFNTemporalFineTuner:
 
     # ── Forward pass ──────────────────────────────────────────────────────
 
+    def _make_dummy_ensemble_config(self) -> ClassifierEnsembleConfig:
+        """Create a minimal ensemble config that does no preprocessing."""
+        return ClassifierEnsembleConfig(
+            preprocess_config=PreprocessorConfig("none", categorical_name="numeric"),
+            feature_shift_count=0,
+            class_permutation=None,
+            add_fingerprint_feature=False,
+            polynomial_features="no",
+            feature_shift_decoder=None,
+            subsample_ix=None,
+            _model_index=0,
+        )
+
     def forward_single_dataset(
         self,
         X_train: np.ndarray, y_train: np.ndarray,
@@ -354,48 +370,41 @@ class TabPFNTemporalFineTuner:
         n_classes: int,
         n_features_orig: int, T: int,
     ) -> Dict[str, torch.Tensor]:
+        """Forward pass bypassing sklearn preprocessing entirely.
+
+        Data goes directly to the model. The model's internal encoder handles:
+        - RemoveEmptyFeaturesEncoderStep (per group of 3)
+        - NanHandling
+        - InputNormalizationEncoderStep (z-score per group, train-only)
+        - VariableNumFeaturesEncoderStep (pad + rescale per group)
+        - LinearInputEncoderStep (projection to emsize=192)
+        """
         try:
             y_test_t = torch.tensor(y_test, dtype=torch.long, device=self.device)
-            rng = np.random.default_rng(self.config.seed + self.current_step)
 
             # Set temporal info so add_embeddings knows m and T
             set_temporal_info(self.model, n_features_orig, T)
 
-            ensemble_configs, X_init, y_init = \
-                self.clf._initialize_dataset_preprocessing(X_train, y_train, rng)
-            cat_ix = self.clf.inferred_categorical_indices_ or []
+            # Convert to tensors — shape (1, n_samples, n_features)
+            X_train_t = torch.as_tensor(
+                X_train, dtype=torch.float32,
+                device=self.device).unsqueeze(0)
+            y_train_t = torch.as_tensor(
+                y_train, dtype=torch.float32,
+                device=self.device).unsqueeze(0)
+            X_test_t = torch.as_tensor(
+                X_test, dtype=torch.float32,
+                device=self.device).unsqueeze(0)
 
-            pp_results = list(fit_preprocessing(
-                configs=ensemble_configs, X_train=X_init, y_train=y_init,
-                random_state=rng, cat_ix=cat_ix,
-                n_preprocessing_jobs=1, parallel_mode="block"))
-
-            configs_pp, X_trains_pp, y_trains_pp = [], [], []
-            cat_ixs_pp, preprocessors = [], []
-            for cfg, pp, Xpp, ypp, cix in pp_results:
-                configs_pp.append(cfg)
-                preprocessors.append(pp)
-                X_trains_pp.append(Xpp)
-                y_trains_pp.append(ypp)
-                cat_ixs_pp.append(cix)
-
-            X_tests_pp = [pp.transform(X_test).X for pp in preprocessors]
-
-            X_ctx, y_ctx, X_qry = [], [], []
-            for i in range(len(configs_pp)):
-                X_ctx.append(torch.as_tensor(
-                    X_trains_pp[i], dtype=torch.float32,
-                    device=self.device).unsqueeze(0))
-                y_ctx.append(torch.as_tensor(
-                    y_trains_pp[i], dtype=torch.float32,
-                    device=self.device).unsqueeze(0))
-                X_qry.append(torch.as_tensor(
-                    X_tests_pp[i], dtype=torch.float32,
-                    device=self.device).unsqueeze(0))
-
+            # Bypass sklearn: pass data directly via fit_from_preprocessed
+            dummy_cfg = self._make_dummy_ensemble_config()
+            self.clf.n_classes_ = n_classes
             self.clf.fit_from_preprocessed(
-                X_ctx, y_ctx, [cat_ixs_pp], [configs_pp])
-            logits = self.clf.forward(X_qry, return_raw_logits=True)
+                [X_train_t], [y_train_t],
+                cat_ix=[[[]]],          # no categorical features
+                configs=[[dummy_cfg]],
+            )
+            logits = self.clf.forward([X_test_t], return_raw_logits=True)
 
             if logits.ndim == 2:
                 logits_QL = logits
@@ -482,11 +491,11 @@ class TabPFNTemporalFineTuner:
     # ── Evaluation ────────────────────────────────────────────────────────
 
     def evaluate_all(self, datasets: List[Dict]) -> List[Dict]:
-        """Evaluate on real datasets.
+        """Evaluate on real datasets, bypassing sklearn preprocessing.
 
-        For each dataset we create a fresh TabPFNClassifier (with shuffle
-        disabled), copy our fine-tuned weights, and patch add_embeddings.
-        Same architecture (fpg=3), just need to patch embeddings and load weights.
+        Uses the same bypass approach as training: data goes directly to the
+        model encoder. We use a fresh TabPFNClassifier for each dataset, load
+        fine-tuned weights, and patch add_embeddings.
         """
         self.model.eval()
         results = []
@@ -494,39 +503,68 @@ class TabPFNTemporalFineTuner:
             for data in datasets:
                 res = {'name': data['name'], 'n_classes': data['n_classes']}
                 try:
-                    # Create fresh classifier with shuffle disabled
-                    clf = TabPFNClassifier(
+                    # Create fresh classifier (just to get the model)
+                    eval_clf = TabPFNClassifier(
                         device=self.device,
-                        n_estimators=self.config.n_estimators_eval,
+                        n_estimators=1,
                         ignore_pretraining_limits=True,
+                        fit_mode="batched",
                         inference_config={"FEATURE_SHIFT_METHOD": None},
                     )
-                    clf.fit(data['X_train'], data['y_train'])
+                    eval_clf._initialize_model_variables()
+                    eval_model = eval_clf.model_
 
-                    # Patch add_embeddings (same arch, just swap embedding logic)
-                    eval_model = clf.model_
+                    # Patch add_embeddings and load fine-tuned weights
                     import types
                     from tabpfn_temporal import temporal_add_embeddings
                     eval_model.add_embeddings = types.MethodType(
                         temporal_add_embeddings, eval_model)
-
-                    # Load fine-tuned weights (same architecture, full match)
                     eval_model.load_state_dict(self.model.state_dict())
                     eval_model.eval()
 
                     # Set temporal info
                     set_temporal_info(eval_model, data['n_features_orig'], data['T'])
 
-                    proba = clf.predict_proba(data['X_test'])
-                    preds = proba.argmax(axis=1)
-                    res['accuracy'] = float(accuracy_score(data['y_test'], preds))
+                    # Bypass sklearn: pass data directly
+                    X_train_t = torch.as_tensor(
+                        data['X_train'], dtype=torch.float32,
+                        device=self.device).unsqueeze(0)
+                    y_train_t = torch.as_tensor(
+                        data['y_train'], dtype=torch.float32,
+                        device=self.device).unsqueeze(0)
+                    X_test_t = torch.as_tensor(
+                        data['X_test'], dtype=torch.float32,
+                        device=self.device).unsqueeze(0)
+
+                    dummy_cfg = self._make_dummy_ensemble_config()
+                    eval_clf.n_classes_ = data['n_classes']
+                    eval_clf.fit_from_preprocessed(
+                        [X_train_t], [y_train_t],
+                        cat_ix=[[[]]],
+                        configs=[[dummy_cfg]],
+                    )
+                    logits = eval_clf.forward(
+                        [X_test_t], return_raw_logits=True)
+
+                    # logits → probabilities
+                    if logits.ndim == 4:
+                        logits = logits.mean(dim=(1, 2))
+                    elif logits.ndim == 3:
+                        logits = logits.squeeze(1)
+                    proba = torch.softmax(logits, dim=-1)
+                    proba = proba[:, :data['n_classes']]
+                    proba_np = proba.cpu().numpy()
+                    preds = proba_np.argmax(axis=1)
+
+                    res['accuracy'] = float(
+                        accuracy_score(data['y_test'], preds))
                     try:
                         if data['n_classes'] == 2:
                             res['auc'] = float(
-                                roc_auc_score(data['y_test'], proba[:, 1]))
+                                roc_auc_score(data['y_test'], proba_np[:, 1]))
                         else:
                             res['auc'] = float(
-                                roc_auc_score(data['y_test'], proba,
+                                roc_auc_score(data['y_test'], proba_np,
                                               multi_class='ovr'))
                     except Exception:
                         res['auc'] = None
@@ -641,6 +679,8 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     print("  groups = 3 consecutive timesteps from same feature")
     print("  embeddings = feature_emb(j) + sinusoidal_PE(group_idx)")
     print("  feature shuffle: DISABLED, no new params")
+    print("  sklearn preprocessing: BYPASSED (no RemoveConst/Scaler/SVD)")
+    print("  normalization: model-internal per group (z-score)")
     print("=" * 60)
 
     # Synthetic generator
