@@ -128,6 +128,13 @@ class DatasetHyperparameters:
     # Minimum total observations per class (classes below this are dropped)
     min_samples_per_class: int = 6
 
+    # Probability of applying Kumaraswamy warping to one random feature/series
+    warping_prob: float = 0.2
+
+    # Kumaraswamy CDF params F(x)=1-(1-x^a)^b (sampled per application)
+    kumaraswamy_a_range: Tuple[float, float] = (1.5, 5.0)
+    kumaraswamy_b_range: Tuple[float, float] = (1.5, 5.0)
+
 
 # ── Collected defaults ─────────────────────────────────────────────────────────
 

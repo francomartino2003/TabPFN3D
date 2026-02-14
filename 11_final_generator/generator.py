@@ -34,6 +34,33 @@ from dag_structure import DAGStructure, build_dag, visualize_dag
 from hyperparameters import GeneratorHyperparameters
 
 
+# ── Kumaraswamy warping ─────────────────────────────────────────────────────────
+
+def kumaraswamy_cdf(x: np.ndarray, a: float, b: float) -> np.ndarray:
+    """Kumaraswamy CDF: F(x) = 1 - (1 - x^a)^b for x in [0, 1]. Clips x to [0,1]."""
+    x = np.clip(x.astype(np.float64), 1e-12, 1.0 - 1e-12)
+    return (1.0 - (1.0 - np.power(x, a)) ** b).astype(np.float64)
+
+
+def apply_kumaraswamy_warp_to_feature(X: np.ndarray, feat_idx: int,
+                                      a: float, b: float,
+                                      rng: np.random.Generator) -> None:
+    """
+    In-place: warp the series of one feature using Kumaraswamy CDF.
+    X shape (n, n_features, T). For each sample, normalize feat column to [0,1],
+    apply F(x)=1-(1-x^a)^b, then scale back to original min/max.
+    """
+    n, _, T = X.shape
+    for i in range(n):
+        x = X[i, feat_idx, :].astype(np.float64)
+        x_min, x_max = x.min(), x.max()
+        if x_max <= x_min:
+            continue
+        x_norm = (x - x_min) / (x_max - x_min)
+        x_warp = kumaraswamy_cdf(x_norm, a, b)
+        X[i, feat_idx, :] = x_min + (x_max - x_min) * x_warp
+
+
 # ── Activations ────────────────────────────────────────────────────────────────
 
 def apply_activation(z: np.ndarray, name: str) -> np.ndarray:
@@ -423,6 +450,14 @@ class DatasetGenerator:
         vals, disc = self.propagate(n_propagate)
         X = np.stack([vals[fid] for fid in feat_ids], axis=1)
         y = disc[target_id].astype(int)
+
+        # ── Optional: Kumaraswamy warping on one random feature ─────────────
+        hp_d = self.hp.dataset
+        if hp_d.warping_prob > 0 and self.rng.random() < hp_d.warping_prob:
+            j = self.rng.integers(0, self.n_features)
+            a = float(self.rng.uniform(*hp_d.kumaraswamy_a_range))
+            b = float(self.rng.uniform(*hp_d.kumaraswamy_b_range))
+            apply_kumaraswamy_warp_to_feature(X, j, a, b, self.rng)
 
         # ── Drop rare classes ─────────────────────────────────────────────
         unique, counts = np.unique(y, return_counts=True)

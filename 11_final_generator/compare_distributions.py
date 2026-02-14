@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 
 # Local imports
 sys.path.insert(0, str(Path(__file__).parent))
-from generator import DatasetGenerator
+from generator import DatasetGenerator, visualize_dataset
 from hyperparameters import GeneratorHyperparameters
 
 
@@ -550,7 +550,7 @@ def save_results(real_stats, synth_stats, synth_bench, real_bench, out_path):
 def main():
     parser = argparse.ArgumentParser(
         description="Compare real vs synthetic dataset distributions + TabPFN benchmark")
-    parser.add_argument("--n-synthetic", type=int, default=30,
+    parser.add_argument("--n-synthetic", type=int, default=50,
                         help="Number of synthetic seeds to try")
     parser.add_argument("--seed", type=int, default=0,
                         help="Base seed for synthetic generation")
@@ -578,6 +578,21 @@ def main():
         n_datasets=args.n_synthetic, base_seed=args.seed)
     print(f"  {len(synth_list)} generated successfully")
     synth_stats = synth_to_stats(synth_list)
+
+    # ── 2b. Dataset visualizations ───────────────────────────────────────
+    vis_dir = Path(args.out_dir) / "dataset_visualizations"
+    vis_dir.mkdir(parents=True, exist_ok=True)
+    n_vis = min(15, len(synth_list))
+    if n_vis > 0:
+        print(f"\nSaving {n_vis} dataset visualizations to {vis_dir}...")
+        for i in range(n_vis):
+            ds, gen = synth_list[i]
+            save_path = vis_dir / f"synth_{i:03d}_seed{gen.seed}.png"
+            try:
+                visualize_dataset(ds, gen, str(save_path), n_per_class=5)
+            except Exception as e:
+                print(f"  [vis synth_{i:03d}] {e}")
+        print(f"  Done.")
 
     # ── 3. Print distribution comparison ────────────────────────────────
     print_comparison(real_stats, synth_stats)
