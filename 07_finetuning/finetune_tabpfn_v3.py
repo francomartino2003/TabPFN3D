@@ -708,17 +708,35 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     if resume_from:
         trainer.load_checkpoint(Path(resume_from))
 
+    # Best validation tracking (updated each eval)
+    best_acc, best_auc = None, None
+    best_acc_step, best_auc_step = None, None
+
     # Baseline evaluation
     if real_datasets:
         print(f"\nBaseline evaluation ({len(real_datasets)} datasets)...")
         eval_res = trainer.evaluate_all(real_datasets)
         aucs = [r['auc'] for r in eval_res if r.get('auc') is not None]
         accs = [r['accuracy'] for r in eval_res if r.get('accuracy') is not None]
-        print(f"  BASELINE: AUC={np.mean(aucs):.4f}  Acc={np.mean(accs):.4f}  "
+        mean_auc = np.mean(aucs)
+        mean_acc = np.mean(accs)
+        print(f"  BASELINE: AUC={mean_auc:.4f}  Acc={mean_acc:.4f}  "
               f"({len(aucs)}/{len(real_datasets)} OK)\n")
         trainer.eval_steps.append(trainer.current_step)
         trainer.eval_results.append(eval_res)
-        trainer.baseline_auc = np.mean(aucs)
+        trainer.baseline_auc = mean_auc
+        best_acc, best_auc = mean_acc, mean_auc
+        best_acc_step, best_auc_step = trainer.current_step, trainer.current_step
+        trainer.save_checkpoint(
+            ckpt_dir / "checkpoint_best_acc.pt",
+            extra={'best_accuracy': best_acc, 'best_accuracy_step': best_acc_step,
+                   'best_auc': best_auc, 'best_auc_step': best_auc_step,
+                   'step_eval_results': eval_res})
+        trainer.save_checkpoint(
+            ckpt_dir / "checkpoint_best_auc.pt",
+            extra={'best_accuracy': best_acc, 'best_accuracy_step': best_acc_step,
+                   'best_auc': best_auc, 'best_auc_step': best_auc_step,
+                   'step_eval_results': eval_res})
         save_eval_json(trainer, log_dir)
 
     # Training
@@ -754,11 +772,32 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
             eval_res = trainer.evaluate_all(real_datasets)
             aucs = [r['auc'] for r in eval_res if r.get('auc') is not None]
             accs = [r['accuracy'] for r in eval_res if r.get('accuracy') is not None]
-            print(f"  >> EVAL step {step+1}: Acc={np.mean(accs):.4f}  "
-                  f"AUC={np.mean(aucs):.4f}  ({len(aucs)}/{len(real_datasets)} OK)",
+            mean_acc = np.mean(accs)
+            mean_auc = np.mean(aucs)
+            print(f"  >> EVAL step {step+1}: Acc={mean_acc:.4f}  "
+                  f"AUC={mean_auc:.4f}  ({len(aucs)}/{len(real_datasets)} OK)",
                   flush=True)
             trainer.eval_steps.append(step + 1)
             trainer.eval_results.append(eval_res)
+
+            # Update and save best-by-accuracy checkpoint
+            if best_acc is None or mean_acc > best_acc:
+                best_acc, best_acc_step = mean_acc, step + 1
+                trainer.save_checkpoint(
+                    ckpt_dir / "checkpoint_best_acc.pt",
+                    extra={'best_accuracy': best_acc, 'best_accuracy_step': best_acc_step,
+                           'best_auc': best_auc, 'best_auc_step': best_auc_step,
+                           'step_eval_results': eval_res})
+                print(f"  >> New best Acc: {best_acc:.4f} @ step {best_acc_step}", flush=True)
+            # Update and save best-by-AUC checkpoint
+            if best_auc is None or mean_auc > best_auc:
+                best_auc, best_auc_step = mean_auc, step + 1
+                trainer.save_checkpoint(
+                    ckpt_dir / "checkpoint_best_auc.pt",
+                    extra={'best_accuracy': best_acc, 'best_accuracy_step': best_acc_step,
+                           'best_auc': best_auc, 'best_auc_step': best_auc_step,
+                           'step_eval_results': eval_res})
+                print(f"  >> New best AUC: {best_auc:.4f} @ step {best_auc_step}", flush=True)
 
             if (step + 1) % 50 == 0:
                 trainer.save_checkpoint(
