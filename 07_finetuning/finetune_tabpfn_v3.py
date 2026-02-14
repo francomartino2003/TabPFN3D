@@ -243,17 +243,15 @@ def load_real_datasets(config: FinetuneConfig) -> List[Dict[str, Any]]:
                 continue
 
             if X_train.ndim == 2:
-                X_train = X_train[:, :, np.newaxis]
+                X_train = X_train[:, np.newaxis, :]
             if X_test.ndim == 2:
-                X_test = X_test[:, :, np.newaxis]
+                X_test = X_test[:, np.newaxis, :]
 
-            # (n, length, channels) → (n, channels, length)
-            X_train = np.transpose(X_train, (0, 2, 1))
-            X_test  = np.transpose(X_test,  (0, 2, 1))
-
+            # Pickle is already in aeon format: (n, m_channels, T_length)
+            # NO transpose needed
             n_samples = X_train.shape[0] + X_test.shape[0]
-            n_channels = X_train.shape[1]  # m (original features)
-            T = X_train.shape[2]            # T (timesteps)
+            n_channels = X_train.shape[1]  # m (original features/channels)
+            T = X_train.shape[2]            # T (timesteps/length)
             flat_features = n_channels * T
 
             if n_samples > config.max_samples:
@@ -293,7 +291,7 @@ def load_real_datasets(config: FinetuneConfig) -> List[Dict[str, Any]]:
                 'y_train': y_train_enc,
                 'y_test': y_test_enc,
                 'n_classes': n_classes,
-                'n_features': flat_features,
+                'n_features': X_train_flat.shape[1],  # actual flat (after padding)
                 'n_features_orig': n_channels,
                 'T': T,
                 'n_samples': n_samples,
