@@ -76,7 +76,8 @@ fi
 # Run name (for parallel experiments)
 RUN_NAME="${RUN_NAME:-default}"
 LR="${LR:-1e-5}"
-echo "RUN_NAME=$RUN_NAME  LR=$LR"
+BATCH="${BATCH:-128}"
+echo "RUN_NAME=$RUN_NAME  LR=$LR  BATCH=$BATCH"
 
 # Run
 if [ "${DEBUG:-0}" == "1" ]; then
@@ -86,7 +87,7 @@ else
     echo "Full training..."
     python -u finetune_tabpfn_v3.py \
         --n-steps 1000 \
-        --batch-size 64 \
+        --batch-size $BATCH \
         --lr $LR \
         --eval-every 1 \
         --run-name $RUN_NAME \
