@@ -11,6 +11,10 @@ Key changes from V2:
 - BYPASSES sklearn preprocessing entirely (no RemoveConstantFeatures,
   no SquashingScaler, no SVD). Data goes directly to the model encoder
   which handles normalization per group internally.
+- Data augmentation: each batch = N/2 originals + N/2 augmented copies
+  (feature channel permutation, class label permutation, random per-feature
+  transforms: none, log, exp, squash, KDI, Kumaraswamy)
+- Eval uses softmax temperature T=0.9 (matching TabPFN default)
 
 Usage:
     python finetune_tabpfn_v3.py --n-steps 1000 --eval-every 1
@@ -61,6 +65,219 @@ from tabpfn_temporal import (
 
 # Global for signal handling
 _trainer_instance = None
+
+# Softmax temperature for evaluation (TabPFN default calibration)
+SOFTMAX_TEMPERATURE = 0.9
+
+
+# ============================================================================
+# Data Augmentation (feature transforms for augmented copy)
+# ============================================================================
+
+# Transform choices and parameter sampling:
+#   none     — identity
+#   log      — sign(x) * log(|x| + 1)
+#   exp      — sign(x) * (exp(|x|) - 1), |x| clipped to 10
+#   squash   — robust scaling (median/IQR) + soft clip to [-B, B]
+#   kdi      — Kernel Density Integral transform; alpha ~ LogNormal(0, 0.8²)
+#              clipped to [0.05, 10]; output_distribution ~ Uniform({normal, uniform})
+#   kuma     — Kumaraswamy CDF warp; a, b ~ LogNormal(0, 0.7²) clipped to [0.2, 5]
+#              min-max scaled to [0,1], warped, scaled back
+#
+# For KDI and Kumaraswamy, parameters are sampled per feature channel:
+#   log(alpha) ~ N(0, 0.8²)  →  alpha ∈ ~[0.05, 10]  (median=1)
+#   log(a), log(b) ~ N(0, 0.7²)  →  a,b ∈ ~[0.2, 5]  (median=1)
+#
+# This is data augmentation for training, NOT inference.
+# Statistics are computed on the FULL dataset (train+test pooled)
+# and transforms are applied consistently to the entire dataset.
+
+AUGMENT_TRANSFORM_CHOICES = ['none', 'log', 'exp', 'squash', 'kdi', 'kuma']
+# Weights: give 'none' higher weight so ~1/3 of features stay untouched
+AUGMENT_TRANSFORM_WEIGHTS = np.array([3.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+AUGMENT_TRANSFORM_WEIGHTS = AUGMENT_TRANSFORM_WEIGHTS / AUGMENT_TRANSFORM_WEIGHTS.sum()
+
+
+def _safe_log_transform(x: np.ndarray) -> np.ndarray:
+    """log(|x| + 1) * sign(x) — safe for any real values."""
+    return np.sign(x) * np.log1p(np.abs(x))
+
+
+def _safe_exp_transform(x: np.ndarray) -> np.ndarray:
+    """sign(x) * (exp(|x|) - 1), clipped to avoid overflow."""
+    clipped = np.clip(np.abs(x), 0, 10)  # exp(10) ≈ 22k, safe
+    return np.sign(x) * np.expm1(clipped)
+
+
+def _squash_feature(X_block: np.ndarray, max_abs: float = 3.0) -> np.ndarray:
+    """Robust scaling + soft clip for one feature channel (all T timesteps).
+
+    X_block: shape (n_samples, T). Stats computed on entire block.
+    """
+    X = X_block.copy().astype(np.float64)
+
+    vals = X.ravel()
+    finite = vals[np.isfinite(vals)]
+    if len(finite) == 0:
+        return X.astype(np.float32)
+
+    median = np.median(finite)
+    q_lo = np.percentile(finite, 25.0)
+    q_hi = np.percentile(finite, 75.0)
+
+    if q_hi != q_lo:
+        scale = 1.0 / (q_hi - q_lo)
+    else:
+        vmin, vmax = np.min(finite), np.max(finite)
+        if vmax != vmin:
+            scale = 2.0 / (vmax - vmin)
+        else:
+            return np.zeros_like(X, dtype=np.float32)
+
+    X = (X - median) * scale
+    # Soft clip: z / sqrt(1 + (z/B)^2)
+    X = X / np.sqrt(1.0 + (X / max_abs) ** 2)
+    return X.astype(np.float32)
+
+
+def _kdi_feature(X_block: np.ndarray, alpha: float,
+                 output_dist: str) -> np.ndarray:
+    """KDI transform for one feature channel (all T timesteps).
+
+    Fits on all data pooled, transforms each timestep column.
+    X_block: shape (n_samples, T).
+    """
+    T = X_block.shape[1]
+    X = X_block.copy()
+
+    try:
+        from tabpfn.preprocessing.steps.kdi_transformer import KDITransformerWithNaN
+        all_vals = X.ravel().reshape(-1, 1).astype(np.float64)
+        kdi = KDITransformerWithNaN(alpha=alpha, output_distribution=output_dist)
+        kdi.fit(all_vals)
+        for t in range(T):
+            col = X[:, t:t + 1].astype(np.float64)
+            out = kdi.transform(col).astype(np.float32)
+            if np.all(np.isfinite(out)):
+                X[:, t:t + 1] = out
+    except Exception:
+        pass  # keep original on failure
+    return X.astype(np.float32)
+
+
+def _kuma_feature(X_block: np.ndarray, a: float, b: float) -> np.ndarray:
+    """Kumaraswamy warp for one feature channel (all T timesteps).
+
+    Min-max scales to [0,1] using full data stats, applies CDF warp,
+    scales back to original range.
+    X_block: shape (n_samples, T).
+    """
+    X = X_block.copy().astype(np.float64)
+
+    vals = X.ravel()
+    finite = vals[np.isfinite(vals)]
+    if len(finite) == 0:
+        return X.astype(np.float32)
+
+    xmin, xmax = np.min(finite), np.max(finite)
+    if xmax <= xmin:
+        return X.astype(np.float32)
+
+    # Scale to [0, 1]
+    X_norm = np.clip((X - xmin) / (xmax - xmin), 1e-12, 1.0 - 1e-12)
+
+    # Kumaraswamy CDF: F(x) = 1 - (1 - x^a)^b
+    X_warp = 1.0 - (1.0 - np.power(X_norm, a)) ** b
+
+    # Scale back to original range
+    X_out = X_warp * (xmax - xmin) + xmin
+
+    if np.all(np.isfinite(X_out)):
+        return X_out.astype(np.float32)
+    return X_block.astype(np.float32)
+
+
+def augment_dataset(data: dict, rng: np.random.RandomState) -> dict:
+    """Create an augmented copy of a synthetic dataset.
+
+    Augmentations applied:
+    1. Feature channel permutation (permute m channels, keep T order)
+    2. Class label permutation (shuffle class indices)
+    3. Random per-feature-channel transform chosen from:
+       none, log, exp, squash, kdi, kuma
+       Transforms are applied consistently to the entire dataset
+       (train+test concatenated, then split back).
+    """
+    m = data['n_features_orig']
+    T = data['T']
+    n_classes = data['n_classes']
+    n_tr = data['X_train'].shape[0]
+
+    # Concatenate train+test for consistent transforms
+    X_all = np.concatenate([data['X_train'], data['X_test']], axis=0).copy()
+    y_train = data['y_train'].copy()
+    y_test = data['y_test'].copy()
+
+    # 1. Feature channel permutation
+    n_all = X_all.shape[0]
+    feat_perm = rng.permutation(m)
+    X_all = X_all.reshape(n_all, m, T)[:, feat_perm, :].reshape(n_all, m * T)
+
+    # 2. Class label permutation
+    class_perm = rng.permutation(n_classes)
+    y_train = class_perm[y_train]
+    y_test = class_perm[y_test]
+
+    # 3. Random per-feature-channel transform
+    for j in range(m):
+        col_s = j * T
+        col_e = j * T + T
+        transform = rng.choice(AUGMENT_TRANSFORM_CHOICES,
+                               p=AUGMENT_TRANSFORM_WEIGHTS)
+
+        if transform == 'none':
+            continue
+
+        elif transform == 'log':
+            X_all[:, col_s:col_e] = _safe_log_transform(X_all[:, col_s:col_e])
+
+        elif transform == 'exp':
+            X_all[:, col_s:col_e] = _safe_exp_transform(X_all[:, col_s:col_e])
+
+        elif transform == 'squash':
+            X_all[:, col_s:col_e] = _squash_feature(X_all[:, col_s:col_e])
+
+        elif transform == 'kdi':
+            # alpha ~ LogNormal(0, 0.8²), clipped to [0.05, 10]
+            alpha = float(np.clip(np.exp(rng.randn() * 0.8), 0.05, 10.0))
+            output_dist = rng.choice(['normal', 'uniform'])
+            X_all[:, col_s:col_e] = _kdi_feature(
+                X_all[:, col_s:col_e], alpha, output_dist)
+
+        elif transform == 'kuma':
+            # log(a), log(b) ~ N(0, 0.7²), clipped to [0.2, 5]
+            a = float(np.clip(np.exp(rng.randn() * 0.7), 0.2, 5.0))
+            b = float(np.clip(np.exp(rng.randn() * 0.7), 0.2, 5.0))
+            X_all[:, col_s:col_e] = _kuma_feature(
+                X_all[:, col_s:col_e], a, b)
+
+    # Sanitise after transforms
+    X_all = np.nan_to_num(X_all, nan=0.0, posinf=1e6, neginf=-1e6)
+    X_all = np.clip(X_all, -1e6, 1e6).astype(np.float32)
+
+    # Split back into train and test
+    return {
+        'X_train': X_all[:n_tr],
+        'X_test': X_all[n_tr:],
+        'y_train': y_train.astype(np.int64),
+        'y_test': y_test.astype(np.int64),
+        'n_classes': n_classes,
+        'n_features': data['n_features'],
+        'n_features_orig': m,
+        'T': T,
+        'n_samples': data['n_samples'],
+        '_augmented': True,
+    }
 
 
 # ============================================================================
@@ -544,7 +761,7 @@ class TabPFNTemporalFineTuner:
                         logits = output
                     logits = logits[:, :data['n_classes']]
 
-                    proba = torch.softmax(logits, dim=-1)
+                    proba = torch.softmax(logits / SOFTMAX_TEMPERATURE, dim=-1)
                     proba_np = proba.cpu().numpy()
 
                 # Free GPU tensors
@@ -686,6 +903,9 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     print("  feature shuffle: DISABLED, no new params")
     print("  sklearn preprocessing: BYPASSED (no RemoveConst/Scaler/SVD)")
     print("  normalization: model-internal per group (z-score)")
+    print(f"  augmentation: N/2 orig + N/2 augmented (feat perm + "
+          f"class perm + none/log/exp/squash/KDI/kuma per feature)")
+    print(f"  eval temperature: T={SOFTMAX_TEMPERATURE}")
     print("=" * 60)
 
     # Synthetic generator
@@ -744,19 +964,31 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
           f"lr={config.lr}  eval_every={config.eval_every}")
     t0 = time.time()
 
+    aug_rng = np.random.RandomState(config.seed + 7777)
+
     for step in range(trainer.current_step, config.n_steps):
         step_t = time.time()
 
-        batch = []
-        for _ in range(config.batch_size):
+        # Generate N/2 unique datasets, then create augmented copy of each
+        n_unique = config.batch_size // 2
+        originals = []
+        for _ in range(n_unique):
             try:
-                batch.append(synth_gen.generate_one())
+                originals.append(synth_gen.generate_one())
             except Exception as e:
                 print(f"  Gen error: {e}", flush=True)
 
-        if not batch:
+        if not originals:
             print(f"Step {step}: no valid datasets")
             continue
+
+        # Build batch: originals + augmented copies
+        batch = list(originals)
+        for orig in originals:
+            try:
+                batch.append(augment_dataset(orig, aug_rng))
+            except Exception:
+                batch.append(orig)  # fallback: use original if augment fails
 
         result = trainer.train_step(batch)
         trainer.train_losses.append(result['loss'])
