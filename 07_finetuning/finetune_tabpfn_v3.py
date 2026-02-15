@@ -662,12 +662,17 @@ class TabPFNTemporalFineTuner:
 
     def train_step(self, batch: List[Dict]) -> Dict[str, float]:
         self.model.train()
-        self.optimizer.zero_grad()
 
         total_loss, total_acc, n_valid = 0.0, 0.0, 0
 
+        # Pre-allocate gradient accumulator (per-dataset clipping)
+        params = [p for p in self.model.parameters() if p.requires_grad]
+        grad_accum = [torch.zeros_like(p) for p in params]
+
         for i, data in enumerate(batch):
             try:
+                self.optimizer.zero_grad()
+
                 out = self.forward_single_dataset(
                     data['X_train'], data['y_train'],
                     data['X_test'], data['y_test'],
@@ -676,6 +681,17 @@ class TabPFNTemporalFineTuner:
 
                 if out['loss'].requires_grad:
                     out['loss'].backward()
+
+                    # Per-dataset clip: no single dataset can dominate
+                    if self.config.grad_clip > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            params, self.config.grad_clip)
+
+                    # Accumulate clipped gradients
+                    for j, p in enumerate(params):
+                        if p.grad is not None:
+                            grad_accum[j] += p.grad
+
                     total_loss += out['loss'].item()
                     total_acc += out['accuracy'].item()
                     n_valid += 1
@@ -688,14 +704,14 @@ class TabPFNTemporalFineTuner:
                 torch.cuda.empty_cache()
 
         if n_valid > 0:
-            for p in self.model.parameters():
-                if p.grad is not None:
-                    p.grad /= n_valid
-            if self.config.grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.config.grad_clip)
+            # Set averaged clipped gradients as final .grad
+            for j, p in enumerate(params):
+                p.grad = grad_accum[j] / n_valid
             self.optimizer.step()
             self.scheduler.step()
+
+        # Free accumulator
+        del grad_accum
 
         self.current_step += 1
         return {
