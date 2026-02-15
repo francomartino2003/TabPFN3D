@@ -11,13 +11,16 @@ Key changes from V2:
 - BYPASSES sklearn preprocessing entirely (no RemoveConstantFeatures,
   no SquashingScaler, no SVD). Data goes directly to the model encoder
   which handles normalization per group internally.
-- Data augmentation: each batch = N/2 originals + N/2 augmented copies
+- Data augmentation: each batch = N/4 originals + 3*N/4 augmented copies
   (feature channel permutation, class label permutation, random per-feature
   transforms: none, log, exp, squash, KDI, Kumaraswamy)
 - Eval uses softmax temperature T=0.9 (matching TabPFN default)
+- Per-dataset gradient clipping (no single outlier dataset dominates)
+- Fixed synthetic eval batches (2 x batch_size) for tracking synth metrics
+- LR schedule: linear warmup (20 steps) + cosine annealing to lr_min
 
 Usage:
-    python finetune_tabpfn_v3.py --n-steps 1000 --eval-every 1
+    python finetune_tabpfn_v3.py --n-steps 300 --eval-every 1
     python finetune_tabpfn_v3.py --debug
 """
 
@@ -26,6 +29,7 @@ import sys
 import os
 import time
 import json
+import math
 import signal
 from pathlib import Path
 from dataclasses import dataclass
@@ -289,10 +293,12 @@ class FinetuneConfig:
     """Configuration for fine-tuning temporal TabPFN."""
 
     # Training
-    lr: float = 1e-5
+    lr: float = 1e-4            # Peak LR (reached after warmup)
+    lr_min: float = 5e-6        # Final LR at end of cosine annealing
+    warmup_steps: int = 20      # Linear warmup steps (0 → lr)
     weight_decay: float = 0.01
-    batch_size: int = 64        # Number of datasets per gradient update
-    n_steps: int = 1000
+    batch_size: int = 128       # Number of datasets per gradient update
+    n_steps: int = 300
     grad_clip: float = 1.0
 
     # Evaluation
@@ -547,13 +553,30 @@ class TabPFNTemporalFineTuner:
         self.optimizer = AdamW(
             self.model.parameters(), lr=config.lr,
             weight_decay=config.weight_decay)
+
+        # LR schedule: linear warmup → cosine annealing to lr_min
+        warmup = config.warmup_steps
+        total  = config.n_steps
+        lr_max = config.lr
+        lr_min = config.lr_min
+
+        def _lr_lambda(step):
+            if step < warmup:
+                return step / max(1, warmup)          # 0 → 1
+            progress = (step - warmup) / max(1, total - warmup)
+            cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return lr_min / lr_max + (1.0 - lr_min / lr_max) * cosine
+
         self.scheduler = torch.optim.lr_scheduler.LambdaLR(
-            self.optimizer, lambda step: 1.0)
+            self.optimizer, _lr_lambda)
 
         self.train_losses: List[float] = []
         self.train_accs: List[float] = []
         self.eval_results: List[List[Dict]] = []
         self.eval_steps: List[int] = []
+        self.synth_eval_losses: List[float] = []
+        self.synth_eval_accs: List[float] = []
+        self.synth_eval_aucs: List[float] = []
         self.current_step = 0
 
     def _get_device(self) -> str:
@@ -643,7 +666,7 @@ class TabPFNTemporalFineTuner:
             with torch.no_grad():
                 acc = (logits_QL.argmax(dim=-1) == y_test_t).float().mean()
 
-            return {'loss': loss, 'accuracy': acc}
+            return {'loss': loss, 'accuracy': acc, 'logits': logits_QL.detach()}
 
         except Exception as e:
             if getattr(self, '_n_fwd_warns', 0) < 5:
@@ -656,6 +679,7 @@ class TabPFNTemporalFineTuner:
         return {
             'loss': torch.tensor(0.0, device=self.device, requires_grad=False),
             'accuracy': torch.tensor(0.0),
+            'logits': None,
         }
 
     # ── Training step ─────────────────────────────────────────────────────
@@ -815,6 +839,70 @@ class TabPFNTemporalFineTuner:
         self.model.train()
         return results
 
+    # ── Synthetic evaluation ─────────────────────────────────────────────
+
+    def evaluate_synthetic(self, synth_batches: List[List[Dict]]) -> Dict[str, float]:
+        """Evaluate on fixed synthetic batches (no_grad).
+
+        Returns dict with mean loss, accuracy, auc across all datasets
+        in all batches.
+        """
+        self.model.eval()
+        total_loss, total_acc, n_valid = 0.0, 0.0, 0
+        all_aucs = []
+
+        for batch in synth_batches:
+            for data in batch:
+                try:
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
+                    with torch.no_grad():
+                        out = self.forward_single_dataset(
+                            data['X_train'], data['y_train'],
+                            data['X_test'], data['y_test'],
+                            data['n_classes'],
+                            data['n_features_orig'], data['T'])
+
+                        if out['logits'] is None:
+                            del out
+                            continue
+
+                        total_loss += out['loss'].item()
+                        total_acc += out['accuracy'].item()
+                        n_valid += 1
+
+                        # Compute AUC from logits
+                        logits = out['logits']  # (n_test, n_classes)
+                        proba = torch.softmax(
+                            logits / SOFTMAX_TEMPERATURE, dim=-1
+                        ).cpu().numpy()
+
+                        y_test = data['y_test']
+                        try:
+                            if data['n_classes'] == 2:
+                                auc = float(roc_auc_score(y_test, proba[:, 1]))
+                            else:
+                                auc = float(roc_auc_score(
+                                    y_test, proba, multi_class='ovr'))
+                            all_aucs.append(auc)
+                        except Exception:
+                            pass
+
+                        del out
+                except Exception:
+                    continue
+
+        self.model.train()
+
+        n = max(1, n_valid)
+        return {
+            'loss': total_loss / n,
+            'accuracy': total_acc / n,
+            'auc': float(np.mean(all_aucs)) if all_aucs else 0.0,
+            'n_valid': n_valid,
+        }
+
     # ── Checkpoints ───────────────────────────────────────────────────────
 
     def save_checkpoint(self, path: Path, extra: Dict = None):
@@ -828,6 +916,9 @@ class TabPFNTemporalFineTuner:
             'train_accs': self.train_accs,
             'eval_results': self.eval_results,
             'eval_steps': self.eval_steps,
+            'synth_eval_losses': self.synth_eval_losses,
+            'synth_eval_accs': self.synth_eval_accs,
+            'synth_eval_aucs': self.synth_eval_aucs,
             'config': self.config.__dict__,
             'version': 'v3_temporal_pe',
         }
@@ -846,6 +937,9 @@ class TabPFNTemporalFineTuner:
         self.train_accs = ckpt.get('train_accs', [])
         self.eval_results = ckpt.get('eval_results', [])
         self.eval_steps = ckpt.get('eval_steps', [])
+        self.synth_eval_losses = ckpt.get('synth_eval_losses', [])
+        self.synth_eval_accs = ckpt.get('synth_eval_accs', [])
+        self.synth_eval_aucs = ckpt.get('synth_eval_aucs', [])
         print(f"  Loaded checkpoint from step {self.current_step}", flush=True)
 
 
@@ -854,38 +948,66 @@ class TabPFNTemporalFineTuner:
 # ============================================================================
 
 def plot_training_curves(trainer: TabPFNTemporalFineTuner, log_dir: Path):
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig, axes = plt.subplots(3, 2, figsize=(14, 14))
 
+    # Row 0: Training loss & accuracy (per-step, on random synthetic batches)
     if trainer.train_losses:
         axes[0, 0].plot(trainer.train_losses, alpha=0.7)
-        axes[0, 0].set(xlabel='Step', ylabel='Loss', title='Training Loss')
+        axes[0, 0].set(xlabel='Step', ylabel='Loss', title='Training Loss (random synth)')
         axes[0, 0].set_yscale('log')
 
     if trainer.train_accs:
         axes[0, 1].plot(trainer.train_accs, alpha=0.7)
-        axes[0, 1].set(xlabel='Step', ylabel='Accuracy', title='Training Accuracy')
+        axes[0, 1].set(xlabel='Step', ylabel='Accuracy', title='Training Acc (random synth)')
 
+    # Row 1: Fixed synthetic eval (loss, AUC, Acc)
+    if trainer.synth_eval_losses:
+        steps = list(range(len(trainer.synth_eval_losses)))
+        axes[1, 0].plot(steps, trainer.synth_eval_losses, alpha=0.7, color='tab:blue')
+        axes[1, 0].set(xlabel='Step', ylabel='Loss', title='Synth Eval Loss (fixed batches)')
+        axes[1, 0].set_yscale('log')
+        if trainer.synth_eval_losses:
+            axes[1, 0].axhline(y=trainer.synth_eval_losses[0], color='r',
+                               ls='--', alpha=0.5, label='Baseline')
+            axes[1, 0].legend()
+
+    if trainer.synth_eval_aucs:
+        steps = list(range(len(trainer.synth_eval_aucs)))
+        ax_auc = axes[1, 1]
+        ax_auc.plot(steps, trainer.synth_eval_aucs, 'o-', color='tab:green',
+                    markersize=2, label='AUC')
+        if trainer.synth_eval_accs:
+            ax_auc.plot(steps, trainer.synth_eval_accs, 'o-', color='tab:orange',
+                        markersize=2, label='Acc')
+        ax_auc.set(xlabel='Step', ylabel='Score',
+                   title='Synth Eval AUC & Acc (fixed batches)')
+        if trainer.synth_eval_aucs:
+            ax_auc.axhline(y=trainer.synth_eval_aucs[0], color='r',
+                           ls='--', alpha=0.3, label='AUC baseline')
+        ax_auc.legend()
+
+    # Row 2: Real dataset eval
     if trainer.eval_results:
         mean_aucs = [
             np.mean([r['auc'] for r in sr if r.get('auc') is not None]) or 0
             for sr in trainer.eval_results]
-        axes[1, 0].plot(trainer.eval_steps, mean_aucs, 'o-')
-        axes[1, 0].set(xlabel='Step', ylabel='Mean AUC', title='Real Dataset AUC')
+        axes[2, 0].plot(trainer.eval_steps, mean_aucs, 'o-')
+        axes[2, 0].set(xlabel='Step', ylabel='Mean AUC', title='Real Dataset AUC')
         if mean_aucs:
-            axes[1, 0].axhline(y=mean_aucs[0], color='r', ls='--', alpha=0.5,
+            axes[2, 0].axhline(y=mean_aucs[0], color='r', ls='--', alpha=0.5,
                                label='Baseline')
-            axes[1, 0].legend()
+            axes[2, 0].legend()
 
         mean_accs = [
             np.mean([r['accuracy'] for r in sr
                      if r.get('accuracy') is not None]) or 0
             for sr in trainer.eval_results]
-        axes[1, 1].plot(trainer.eval_steps, mean_accs, 'o-')
-        axes[1, 1].set(xlabel='Step', ylabel='Mean Acc', title='Real Dataset Acc')
+        axes[2, 1].plot(trainer.eval_steps, mean_accs, 'o-')
+        axes[2, 1].set(xlabel='Step', ylabel='Mean Acc', title='Real Dataset Acc')
         if mean_accs:
-            axes[1, 1].axhline(y=mean_accs[0], color='r', ls='--', alpha=0.5,
+            axes[2, 1].axhline(y=mean_accs[0], color='r', ls='--', alpha=0.5,
                                label='Baseline')
-            axes[1, 1].legend()
+            axes[2, 1].legend()
 
     plt.tight_layout()
     plt.savefig(log_dir / 'training_curves.png', dpi=150)
@@ -919,14 +1041,42 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     print("  feature shuffle: DISABLED, no new params")
     print("  sklearn preprocessing: BYPASSED (no RemoveConst/Scaler/SVD)")
     print("  normalization: model-internal per group (z-score)")
-    print(f"  augmentation: N/2 orig + N/2 augmented (feat perm + "
+    print(f"  augmentation: N/4 orig + 3N/4 augmented (feat perm + "
           f"class perm + none/log/exp/squash/KDI/kuma per feature)")
+    print(f"  LR schedule: warmup {config.warmup_steps} steps → "
+          f"{config.lr:.1e}, cosine → {config.lr_min:.1e}")
+    print(f"  per-dataset gradient clipping: {config.grad_clip}")
     print(f"  eval temperature: T={SOFTMAX_TEMPERATURE}")
     print("=" * 60)
 
     # Synthetic generator
     print("\nInitializing DAG-based synthetic generator (folder 11)...")
     synth_gen = SyntheticDataGenerator(config, seed=config.seed)
+
+    # ── Generate 2 fixed synthetic eval batches ──
+    print("\nGenerating 2 fixed synthetic eval batches...")
+    synth_eval_rng = np.random.RandomState(config.seed + 9999)
+    synth_eval_gen = SyntheticDataGenerator(config, seed=config.seed + 5000)
+    synth_eval_batches: List[List[Dict]] = []
+    for batch_idx in range(2):
+        n_orig = config.batch_size // 4     # 32 originals per eval batch
+        originals_eval = []
+        for _ in range(n_orig):
+            try:
+                originals_eval.append(synth_eval_gen.generate_one())
+            except Exception:
+                continue
+        # Build batch: originals + 3 augmented copies each
+        eval_batch = list(originals_eval)
+        for orig in originals_eval:
+            for _ in range(3):
+                try:
+                    eval_batch.append(augment_dataset(orig, synth_eval_rng))
+                except Exception:
+                    eval_batch.append(orig)
+        synth_eval_batches.append(eval_batch)
+        print(f"  Eval batch {batch_idx+1}: {len(eval_batch)} datasets "
+              f"({len(originals_eval)} orig + {len(eval_batch)-len(originals_eval)} aug)")
 
     # Real datasets
     print("\nLoading real datasets for evaluation...")
@@ -948,15 +1098,26 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     best_acc, best_auc = None, None
     best_acc_step, best_auc_step = None, None
 
-    # Baseline evaluation
+    # ── Baseline evaluations ──
+    # Synthetic baseline
+    print("\nSynthetic baseline evaluation...")
+    synth_base = trainer.evaluate_synthetic(synth_eval_batches)
+    trainer.synth_eval_losses.append(synth_base['loss'])
+    trainer.synth_eval_accs.append(synth_base['accuracy'])
+    trainer.synth_eval_aucs.append(synth_base['auc'])
+    print(f"  SYNTH BASELINE: Loss={synth_base['loss']:.4f}  "
+          f"Acc={synth_base['accuracy']:.4f}  AUC={synth_base['auc']:.4f}  "
+          f"({synth_base['n_valid']} valid)")
+
+    # Real baseline
     if real_datasets:
-        print(f"\nBaseline evaluation ({len(real_datasets)} datasets)...")
+        print(f"\nReal baseline evaluation ({len(real_datasets)} datasets)...")
         eval_res = trainer.evaluate_all(real_datasets)
         aucs = [r['auc'] for r in eval_res if r.get('auc') is not None]
         accs = [r['accuracy'] for r in eval_res if r.get('accuracy') is not None]
         mean_auc = np.mean(aucs)
         mean_acc = np.mean(accs)
-        print(f"  BASELINE: AUC={mean_auc:.4f}  Acc={mean_acc:.4f}  "
+        print(f"  REAL BASELINE: AUC={mean_auc:.4f}  Acc={mean_acc:.4f}  "
               f"({len(aucs)}/{len(real_datasets)} OK)\n")
         trainer.eval_steps.append(trainer.current_step)
         trainer.eval_results.append(eval_res)
@@ -977,7 +1138,7 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
 
     # Training
     print(f"Training {config.n_steps} steps  batch={config.batch_size}  "
-          f"lr={config.lr}  eval_every={config.eval_every}")
+          f"lr={config.lr}  lr_min={config.lr_min}  eval_every={config.eval_every}")
     t0 = time.time()
 
     aug_rng = np.random.RandomState(config.seed + 7777)
@@ -985,8 +1146,8 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     for step in range(trainer.current_step, config.n_steps):
         step_t = time.time()
 
-        # Generate N/2 unique datasets, then create augmented copy of each
-        n_unique = config.batch_size // 2
+        # Generate N/4 unique datasets + 3 augmented copies each = N total
+        n_unique = config.batch_size // 4
         originals = []
         for _ in range(n_unique):
             try:
@@ -998,21 +1159,29 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
             print(f"Step {step}: no valid datasets")
             continue
 
-        # Build batch: originals + augmented copies
+        # Build batch: originals + 3 augmented copies per original
         batch = list(originals)
         for orig in originals:
-            try:
-                batch.append(augment_dataset(orig, aug_rng))
-            except Exception:
-                batch.append(orig)  # fallback: use original if augment fails
+            for _ in range(3):
+                try:
+                    batch.append(augment_dataset(orig, aug_rng))
+                except Exception:
+                    batch.append(orig)  # fallback: use original if augment fails
 
         result = trainer.train_step(batch)
         trainer.train_losses.append(result['loss'])
         trainer.train_accs.append(result['accuracy'])
 
+        # Synthetic eval on fixed batches (every step)
+        synth_res = trainer.evaluate_synthetic(synth_eval_batches)
+        trainer.synth_eval_losses.append(synth_res['loss'])
+        trainer.synth_eval_accs.append(synth_res['accuracy'])
+        trainer.synth_eval_aucs.append(synth_res['auc'])
+
         dt = time.time() - step_t
         print(f"Step {step:5d} | Loss {result['loss']:.4f} | "
               f"Acc {result['accuracy']:.4f} | "
+              f"SynthEval L={synth_res['loss']:.4f} A={synth_res['auc']:.4f} | "
               f"LR {result['lr']:.2e} | {result['n_valid']}/{len(batch)} valid | "
               f"{dt:.1f}s", flush=True)
 
@@ -1074,6 +1243,9 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     json.dump({
         'train_losses': trainer.train_losses,
         'train_accs': trainer.train_accs,
+        'synth_eval_losses': trainer.synth_eval_losses,
+        'synth_eval_accs': trainer.synth_eval_accs,
+        'synth_eval_aucs': trainer.synth_eval_aucs,
         'eval_steps': trainer.eval_steps,
         'config': config.__dict__,
         'total_time': time.time() - t0,
@@ -1108,9 +1280,11 @@ def signal_handler(signum, frame):
 def main():
     parser = argparse.ArgumentParser(
         description='Fine-tune TabPFN V3 with temporal positional encoding')
-    parser.add_argument('--n-steps', type=int, default=1000)
-    parser.add_argument('--batch-size', type=int, default=64)
-    parser.add_argument('--lr', type=float, default=1e-5)
+    parser.add_argument('--n-steps', type=int, default=300)
+    parser.add_argument('--batch-size', type=int, default=128)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr-min', type=float, default=5e-6)
+    parser.add_argument('--warmup-steps', type=int, default=20)
     parser.add_argument('--eval-every', type=int, default=1)
     parser.add_argument('--device', type=str, default='auto')
     parser.add_argument('--resume', type=str, default=None)
@@ -1122,14 +1296,16 @@ def main():
 
     config = FinetuneConfig(
         n_steps=args.n_steps, batch_size=args.batch_size,
-        lr=args.lr, eval_every=args.eval_every,
+        lr=args.lr, lr_min=args.lr_min,
+        warmup_steps=args.warmup_steps,
+        eval_every=args.eval_every,
         device=args.device, seed=args.seed,
         run_name=args.run_name)
 
     if args.debug:
         print("DEBUG MODE")
         config.n_steps = 10
-        config.batch_size = 4
+        config.batch_size = 8
         config.eval_every = 5
 
     signal.signal(signal.SIGINT, signal_handler)

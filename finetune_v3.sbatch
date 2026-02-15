@@ -75,9 +75,12 @@ fi
 
 # Run name (for parallel experiments)
 RUN_NAME="${RUN_NAME:-default}"
-LR="${LR:-1e-5}"
+LR="${LR:-1e-4}"
+LR_MIN="${LR_MIN:-5e-6}"
+WARMUP="${WARMUP:-20}"
 BATCH="${BATCH:-128}"
-echo "RUN_NAME=$RUN_NAME  LR=$LR  BATCH=$BATCH"
+STEPS="${STEPS:-300}"
+echo "RUN_NAME=$RUN_NAME  LR=$LR  LR_MIN=$LR_MIN  WARMUP=$WARMUP  BATCH=$BATCH  STEPS=$STEPS"
 
 # Run
 if [ "${DEBUG:-0}" == "1" ]; then
@@ -86,9 +89,11 @@ if [ "${DEBUG:-0}" == "1" ]; then
 else
     echo "Full training..."
     python -u finetune_tabpfn_v3.py \
-        --n-steps 1000 \
+        --n-steps $STEPS \
         --batch-size $BATCH \
         --lr $LR \
+        --lr-min $LR_MIN \
+        --warmup-steps $WARMUP \
         --eval-every 1 \
         --run-name $RUN_NAME \
         $RESUME_ARGS
