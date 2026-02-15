@@ -293,12 +293,12 @@ class FinetuneConfig:
     """Configuration for fine-tuning temporal TabPFN."""
 
     # Training
-    lr: float = 1e-4            # Peak LR (reached after warmup)
-    lr_min: float = 5e-6        # Final LR at end of cosine annealing
-    warmup_steps: int = 20      # Linear warmup steps (0 → lr)
+    lr: float = 7e-5            # Peak LR (reached after warmup)
+    lr_min: float = 1e-7        # Final LR at end of cosine annealing
+    warmup_steps: int = 10      # Linear warmup steps (0 → lr)
     weight_decay: float = 0.01
     batch_size: int = 128       # Number of datasets per gradient update
-    n_steps: int = 300
+    n_steps: int = 1500
     grad_clip: float = 1.0
 
     # Evaluation
@@ -1094,9 +1094,9 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     if resume_from:
         trainer.load_checkpoint(Path(resume_from))
 
-    # Best validation tracking (updated each eval)
-    best_acc, best_auc = None, None
-    best_acc_step, best_auc_step = None, None
+    # Best synth eval loss tracking
+    best_synth_loss = None
+    best_synth_loss_step = None
 
     # ── Baseline evaluations ──
     # Synthetic baseline
@@ -1105,9 +1105,15 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     trainer.synth_eval_losses.append(synth_base['loss'])
     trainer.synth_eval_accs.append(synth_base['accuracy'])
     trainer.synth_eval_aucs.append(synth_base['auc'])
+    best_synth_loss = synth_base['loss']
+    best_synth_loss_step = trainer.current_step
     print(f"  SYNTH BASELINE: Loss={synth_base['loss']:.4f}  "
           f"Acc={synth_base['accuracy']:.4f}  AUC={synth_base['auc']:.4f}  "
           f"({synth_base['n_valid']} valid)")
+    trainer.save_checkpoint(
+        ckpt_dir / "checkpoint_best_synth_loss.pt",
+        extra={'best_synth_loss': best_synth_loss,
+               'best_synth_loss_step': best_synth_loss_step})
 
     # Real baseline
     if real_datasets:
@@ -1122,18 +1128,6 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
         trainer.eval_steps.append(trainer.current_step)
         trainer.eval_results.append(eval_res)
         trainer.baseline_auc = mean_auc
-        best_acc, best_auc = mean_acc, mean_auc
-        best_acc_step, best_auc_step = trainer.current_step, trainer.current_step
-        trainer.save_checkpoint(
-            ckpt_dir / "checkpoint_best_acc.pt",
-            extra={'best_accuracy': best_acc, 'best_accuracy_step': best_acc_step,
-                   'best_auc': best_auc, 'best_auc_step': best_auc_step,
-                   'step_eval_results': eval_res})
-        trainer.save_checkpoint(
-            ckpt_dir / "checkpoint_best_auc.pt",
-            extra={'best_accuracy': best_acc, 'best_accuracy_step': best_acc_step,
-                   'best_auc': best_auc, 'best_auc_step': best_auc_step,
-                   'step_eval_results': eval_res})
         save_eval_json(trainer, log_dir)
 
     # Training
@@ -1178,6 +1172,17 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
         trainer.synth_eval_accs.append(synth_res['accuracy'])
         trainer.synth_eval_aucs.append(synth_res['auc'])
 
+        # Save checkpoint if best synth eval loss
+        if best_synth_loss is None or synth_res['loss'] < best_synth_loss:
+            best_synth_loss = synth_res['loss']
+            best_synth_loss_step = step + 1
+            trainer.save_checkpoint(
+                ckpt_dir / "checkpoint_best_synth_loss.pt",
+                extra={'best_synth_loss': best_synth_loss,
+                       'best_synth_loss_step': best_synth_loss_step})
+            print(f"  >> New best synth loss: {best_synth_loss:.4f} @ step {best_synth_loss_step}",
+                  flush=True)
+
         dt = time.time() - step_t
         print(f"Step {step:5d} | Loss {result['loss']:.4f} | "
               f"Acc {result['accuracy']:.4f} | "
@@ -1196,25 +1201,6 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
                   flush=True)
             trainer.eval_steps.append(step + 1)
             trainer.eval_results.append(eval_res)
-
-            # Update and save best-by-accuracy checkpoint
-            if best_acc is None or mean_acc > best_acc:
-                best_acc, best_acc_step = mean_acc, step + 1
-                trainer.save_checkpoint(
-                    ckpt_dir / "checkpoint_best_acc.pt",
-                    extra={'best_accuracy': best_acc, 'best_accuracy_step': best_acc_step,
-                           'best_auc': best_auc, 'best_auc_step': best_auc_step,
-                           'step_eval_results': eval_res})
-                print(f"  >> New best Acc: {best_acc:.4f} @ step {best_acc_step}", flush=True)
-            # Update and save best-by-AUC checkpoint
-            if best_auc is None or mean_auc > best_auc:
-                best_auc, best_auc_step = mean_auc, step + 1
-                trainer.save_checkpoint(
-                    ckpt_dir / "checkpoint_best_auc.pt",
-                    extra={'best_accuracy': best_acc, 'best_accuracy_step': best_acc_step,
-                           'best_auc': best_auc, 'best_auc_step': best_auc_step,
-                           'step_eval_results': eval_res})
-                print(f"  >> New best AUC: {best_auc:.4f} @ step {best_auc_step}", flush=True)
 
             if (step + 1) % 50 == 0:
                 trainer.save_checkpoint(
@@ -1280,11 +1266,11 @@ def signal_handler(signum, frame):
 def main():
     parser = argparse.ArgumentParser(
         description='Fine-tune TabPFN V3 with temporal positional encoding')
-    parser.add_argument('--n-steps', type=int, default=300)
+    parser.add_argument('--n-steps', type=int, default=1500)
     parser.add_argument('--batch-size', type=int, default=128)
-    parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--lr-min', type=float, default=5e-6)
-    parser.add_argument('--warmup-steps', type=int, default=20)
+    parser.add_argument('--lr', type=float, default=7e-5)
+    parser.add_argument('--lr-min', type=float, default=1e-7)
+    parser.add_argument('--warmup-steps', type=int, default=10)
     parser.add_argument('--eval-every', type=int, default=1)
     parser.add_argument('--device', type=str, default='auto')
     parser.add_argument('--resume', type=str, default=None)

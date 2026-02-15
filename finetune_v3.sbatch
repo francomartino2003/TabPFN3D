@@ -4,7 +4,7 @@
 #SBATCH --error=logs/finetune_v3_%j.err
 #SBATCH --partition=pi_dbertsim
 #SBATCH --gres=gpu:1
-#SBATCH --time=12:00:00
+#SBATCH --time=48:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=4
 
@@ -75,11 +75,11 @@ fi
 
 # Run name (for parallel experiments)
 RUN_NAME="${RUN_NAME:-default}"
-LR="${LR:-1e-4}"
-LR_MIN="${LR_MIN:-5e-6}"
-WARMUP="${WARMUP:-20}"
+LR="${LR:-7e-5}"
+LR_MIN="${LR_MIN:-1e-7}"
+WARMUP="${WARMUP:-10}"
 BATCH="${BATCH:-128}"
-STEPS="${STEPS:-300}"
+STEPS="${STEPS:-1500}"
 echo "RUN_NAME=$RUN_NAME  LR=$LR  LR_MIN=$LR_MIN  WARMUP=$WARMUP  BATCH=$BATCH  STEPS=$STEPS"
 
 # Run
