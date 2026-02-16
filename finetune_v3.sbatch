@@ -80,12 +80,13 @@ LR_MIN="${LR_MIN:-1e-7}"
 WARMUP="${WARMUP:-10}"
 BATCH="${BATCH:-128}"
 STEPS="${STEPS:-1500}"
-echo "RUN_NAME=$RUN_NAME  LR=$LR  LR_MIN=$LR_MIN  WARMUP=$WARMUP  BATCH=$BATCH  STEPS=$STEPS"
+FREEZE="${FREEZE:-0}"
+echo "RUN_NAME=$RUN_NAME  LR=$LR  LR_MIN=$LR_MIN  WARMUP=$WARMUP  BATCH=$BATCH  STEPS=$STEPS  FREEZE=$FREEZE"
 
 # Run
 if [ "${DEBUG:-0}" == "1" ]; then
     echo "DEBUG MODE"
-    python -u finetune_tabpfn_v3.py --debug --run-name $RUN_NAME --lr $LR $RESUME_ARGS
+    python -u finetune_tabpfn_v3.py --debug --run-name $RUN_NAME --lr $LR --freeze-middle $FREEZE $RESUME_ARGS
 else
     echo "Full training..."
     python -u finetune_tabpfn_v3.py \
@@ -96,6 +97,7 @@ else
         --warmup-steps $WARMUP \
         --eval-every 1 \
         --run-name $RUN_NAME \
+        --freeze-middle $FREEZE \
         $RESUME_ARGS
 fi
 

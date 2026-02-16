@@ -300,6 +300,7 @@ class FinetuneConfig:
     batch_size: int = 128       # Number of datasets per gradient update
     n_steps: int = 400
     grad_clip: float = 1.0
+    freeze_middle: int = 0      # Freeze this many middle transformer layers (0=all trainable)
 
     # Evaluation
     eval_every: int = 1         # Evaluate on real datasets every N steps
@@ -544,14 +545,47 @@ class TabPFNTemporalFineTuner:
         self.model, self.clf = build_temporal_tabpfn(device=self.device)
         self.model.to(self.device)
         self.model.train()
-        for param in self.model.parameters():
-            param.requires_grad = True
 
-        n_params = sum(p.numel() for p in self.model.parameters())
-        print(f"  Parameters: {n_params:,} (all trainable)")
+        # Freeze middle transformer layers if requested
+        n_total = sum(p.numel() for p in self.model.parameters())
+        if config.freeze_middle > 0:
+            layers = list(self.model.transformer_encoder.layers)
+            n_layers = len(layers)
+            n_freeze = min(config.freeze_middle, n_layers)
+            # Freeze from the end of the "first trainable" block
+            # Keep first (n_layers - n_freeze) // 2 ... actually:
+            # Keep last N trainable, freeze the rest starting after input layers
+            n_trainable_tail = n_layers - n_freeze  # split between head and tail
+            n_head = n_trainable_tail // 2
+            n_tail = n_trainable_tail - n_head
+            freeze_start = n_head
+            freeze_end = n_layers - n_tail
+
+            # First: all trainable
+            for param in self.model.parameters():
+                param.requires_grad = True
+            # Freeze middle layers
+            for i in range(freeze_start, freeze_end):
+                for param in layers[i].parameters():
+                    param.requires_grad = False
+
+            n_frozen = sum(p.numel() for p in self.model.parameters()
+                           if not p.requires_grad)
+            n_train = n_total - n_frozen
+            print(f"  Parameters: {n_total:,} total, {n_train:,} trainable "
+                  f"({100*n_train/n_total:.1f}%)")
+            print(f"  Frozen: layers {freeze_start}-{freeze_end-1} "
+                  f"({n_freeze}/{n_layers} layers, {n_frozen:,} params)")
+            print(f"  Trainable: layers 0-{freeze_start-1} + "
+                  f"{freeze_end}-{n_layers-1} + encoder/decoder")
+        else:
+            for param in self.model.parameters():
+                param.requires_grad = True
+            print(f"  Parameters: {n_total:,} (all trainable)")
 
         self.optimizer = AdamW(
-            self.model.parameters(), lr=config.lr,
+            filter(lambda p: p.requires_grad, self.model.parameters()),
+            lr=config.lr,
             weight_decay=config.weight_decay)
 
         # LR schedule: linear warmup → cosine annealing to lr_min
@@ -1278,6 +1312,8 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--run-name', type=str, default='default',
                         help='Run name (separates checkpoints/logs per experiment)')
+    parser.add_argument('--freeze-middle', type=int, default=0,
+                        help='Freeze N middle transformer layers (0=all trainable)')
     args = parser.parse_args()
 
     config = FinetuneConfig(
@@ -1286,7 +1322,8 @@ def main():
         warmup_steps=args.warmup_steps,
         eval_every=args.eval_every,
         device=args.device, seed=args.seed,
-        run_name=args.run_name)
+        run_name=args.run_name,
+        freeze_middle=args.freeze_middle)
 
     if args.debug:
         print("DEBUG MODE")
