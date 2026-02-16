@@ -298,7 +298,7 @@ class FinetuneConfig:
     warmup_steps: int = 10      # Linear warmup steps (0 → lr)
     weight_decay: float = 0.01
     batch_size: int = 128       # Number of datasets per gradient update
-    n_steps: int = 1500
+    n_steps: int = 500
     grad_clip: float = 1.0
 
     # Evaluation
