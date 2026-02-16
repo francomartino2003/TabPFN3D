@@ -86,7 +86,7 @@ echo "RUN_NAME=$RUN_NAME  LR=$LR  LR_MIN=$LR_MIN  WARMUP=$WARMUP  BATCH=$BATCH  
 # Run
 if [ "${DEBUG:-0}" == "1" ]; then
     echo "DEBUG MODE"
-    python -u finetune_tabpfn_v3.py --debug --run-name $RUN_NAME --lr $LR --freeze-middle $FREEZE $RESUME_ARGS
+    python -u finetune_tabpfn_v3.py --debug --run-name $RUN_NAME --lr $LR $RESUME_ARGS
 else
     echo "Full training..."
     python -u finetune_tabpfn_v3.py \
@@ -95,9 +95,9 @@ else
         --lr $LR \
         --lr-min $LR_MIN \
         --warmup-steps $WARMUP \
+        --freeze-layers $FREEZE \
         --eval-every 1 \
         --run-name $RUN_NAME \
-        --freeze-middle $FREEZE \
         $RESUME_ARGS
 fi
 
