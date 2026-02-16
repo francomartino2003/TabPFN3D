@@ -296,9 +296,9 @@ class FinetuneConfig:
     lr: float = 7e-5            # Peak LR (reached after warmup)
     lr_min: float = 1e-7        # Final LR at end of cosine annealing
     warmup_steps: int = 10      # Linear warmup steps (0 → lr)
-    weight_decay: float = 0.01
+    weight_decay: float = 0.0001
     batch_size: int = 128       # Number of datasets per gradient update
-    n_steps: int = 500
+    n_steps: int = 400
     grad_clip: float = 1.0
 
     # Evaluation
