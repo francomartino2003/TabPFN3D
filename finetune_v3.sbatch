@@ -4,7 +4,7 @@
 #SBATCH --error=logs/finetune_v3_%j.err
 #SBATCH --partition=pi_dbertsim
 #SBATCH --gres=gpu:1
-#SBATCH --time=30:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=4
 
