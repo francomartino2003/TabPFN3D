@@ -141,7 +141,7 @@ def load_real_datasets():
                 'X_train': X_tr, 'X_test': X_te,
                 'y_train': le.transform(ds.y_train).astype(np.int64),
                 'y_test': le.transform(ds.y_test).astype(np.int64),
-                'n_classes': n_classes, 'n_features': flat, 'm': m, 'T': T,
+                'n_classes': n_classes, 'n_features': m * T, 'm': m, 'T': T,
             })
         except Exception:
             continue
