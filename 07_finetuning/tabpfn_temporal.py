@@ -308,8 +308,8 @@ def build_temporal_tabpfn_fpg8(device: str = "auto"):
     )
 
     # Xavier init the new Linear layer
-    for step in new_encoder.steps:
-        from tabpfn.architectures.base.encoders import LinearInputEncoderStep
+    from tabpfn.architectures.base.encoders import LinearInputEncoderStep
+    for step in new_encoder:
         if isinstance(step, LinearInputEncoderStep):
             nn.init.xavier_uniform_(step.layer.weight)
             if step.layer.bias is not None:
