@@ -4,17 +4,18 @@
 #SBATCH --error=logs/finetune_v3_%j.err
 #SBATCH --partition=pi_dbertsim
 #SBATCH --gres=gpu:1
-#SBATCH --time=12:00:00
-#SBATCH --mem=32G
+#SBATCH --time=18:00:00
+#SBATCH --mem=48G
 #SBATCH --cpus-per-task=4
 
-# Fine-tune TabPFN V3 — Temporal Positional Encoding
+# Fine-tune TabPFN V3 — Temporal PE (fpg=8)
 #
-# Changes from V2:
-#   - features_per_group=3 (kept as pretrained, same speed/memory)
-#   - Feature shuffle disabled, T padded to multiple of 3
+# Architecture:
+#   - features_per_group=8 (new input encoder Linear(16->192) Xavier init)
+#   - All other weights pretrained, dual-LR optimizer
+#   - T padded to multiple of 8
 #   - Structured group embeddings: feature_emb(j) + sinusoidal_PE(group_idx)
-#   - 100% pretrained weights, no new parameters
+#   - Data limits: T<=1024, m<=10, m*T<=1200
 #
 # Usage:
 #   sbatch finetune_v3.sbatch

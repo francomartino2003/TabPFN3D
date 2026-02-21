@@ -36,9 +36,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / '00_TabPFN' / 'src'))
 
 from tabpfn import TabPFNClassifier
 from tabpfn_temporal import (
-    build_temporal_tabpfn,
+    build_temporal_tabpfn_fpg8,
     set_temporal_info,
-    pad_to_group3,
+    pad_to_group,
 )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -46,8 +46,11 @@ from tabpfn_temporal import (
 # ═════════════════════════════════════════════════════════════════════════════
 
 MAX_SAMPLES = 1000
-MAX_FLAT_FEATURES = 500
+MAX_T = 1024
+MAX_M = 10
+MAX_M_TIMES_T = 1200
 MAX_CLASSES = 10
+GROUP_SIZE = 8
 N_ENSEMBLE_ITERS = 4
 ENSEMBLE_SEED = 42
 SOFTMAX_TEMPERATURE = 0.9  # TabPFN default calibration temperature
@@ -169,9 +172,8 @@ def load_real_datasets():
             n = X_train.shape[0] + X_test.shape[0]
             m = X_train.shape[1]
             T = X_train.shape[2]
-            flat = m * T
 
-            if n > MAX_SAMPLES or flat > MAX_FLAT_FEATURES:
+            if n > MAX_SAMPLES or T > MAX_T or m > MAX_M or m * T > MAX_M_TIMES_T:
                 continue
             n_classes = len(np.unique(ds.y_train))
             if n_classes > MAX_CLASSES or n_classes < 2:
@@ -197,7 +199,7 @@ def load_real_datasets():
                 'y_train': le.transform(ds.y_train).astype(np.int64),
                 'y_test': le.transform(ds.y_test).astype(np.int64),
                 'n_classes': n_classes,
-                'n_features': flat,
+                'n_features': m * T,
                 'm': m,
                 'T': T,
             })
@@ -213,11 +215,10 @@ def load_real_datasets():
 
 def evaluate_single_bypass(model, X_train, y_train, X_test, n_classes, m, T, device):
     """Single forward pass (no ensemble). Returns proba (n_test, n_classes)."""
-    # Pad
-    X_tr_padded, T_padded = pad_to_group3(X_train, m, T)
-    X_te_padded, _ = pad_to_group3(X_test, m, T)
+    X_tr_padded, T_padded = pad_to_group(X_train, m, T, group_size=GROUP_SIZE)
+    X_te_padded, _ = pad_to_group(X_test, m, T, group_size=GROUP_SIZE)
 
-    set_temporal_info(model, m, T_padded)
+    set_temporal_info(model, m, T_padded, group_size=GROUP_SIZE)
 
     X_tr_t = torch.as_tensor(X_tr_padded, dtype=torch.float32, device=device)
     y_tr_t = torch.as_tensor(y_train, dtype=torch.float32, device=device)
@@ -282,12 +283,10 @@ def evaluate_ensemble(model, X_train, y_train, X_test, n_classes, m, T, device,
                 X_tr_proc = X_tr_perm.copy()
                 X_te_proc = X_te_perm.copy()
 
-            # --- Pad to group3 ---
-            X_tr_padded, T_padded = pad_to_group3(X_tr_proc, m, T)
-            X_te_padded, _ = pad_to_group3(X_te_proc, m, T)
+            X_tr_padded, T_padded = pad_to_group(X_tr_proc, m, T, group_size=GROUP_SIZE)
+            X_te_padded, _ = pad_to_group(X_te_proc, m, T, group_size=GROUP_SIZE)
 
-            # --- Set temporal info (same m, shuffled doesn't change m/T) ---
-            set_temporal_info(model, m, T_padded)
+            set_temporal_info(model, m, T_padded, group_size=GROUP_SIZE)
 
             # --- Forward pass ---
             X_tr_t = torch.as_tensor(X_tr_padded, dtype=torch.float32, device=device)
@@ -477,8 +476,8 @@ def main():
     print(f"  D) V3 finetuned   — ensemble ({n_ens} iters: scaler/none + feat shuffle + class perm)")
     print(f"Checkpoint: {checkpoint_path}")
     print(f"Device:     {device}")
-    print(f"Constraints: samples≤{MAX_SAMPLES}, features≤{MAX_FLAT_FEATURES}, "
-          f"classes≤{MAX_CLASSES}")
+    print(f"Constraints: samples≤{MAX_SAMPLES}, T≤{MAX_T}, m≤{MAX_M}, "
+          f"m*T≤{MAX_M_TIMES_T}, classes≤{MAX_CLASSES}")
 
     # ── Load datasets ──
     print("\nLoading real datasets...")
@@ -489,9 +488,9 @@ def main():
     print("\nBuilding vanilla TabPFN (no temporal PE)...")
     vanilla_model, vanilla_clf = build_vanilla_tabpfn(device=device)
 
-    # ── Build temporal TabPFN + load checkpoint (for C and D) ──
-    print("\nBuilding temporal TabPFN + loading checkpoint...")
-    ft_model, ft_clf = build_temporal_tabpfn(device=device)
+    # ── Build temporal TabPFN (fpg=8) + load checkpoint (for C and D) ──
+    print("\nBuilding temporal TabPFN (fpg=8) + loading checkpoint...")
+    ft_model, ft_clf, _ = build_temporal_tabpfn_fpg8(device=device)
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     ft_model.load_state_dict(ckpt['model_state_dict'])
     ft_model.eval()

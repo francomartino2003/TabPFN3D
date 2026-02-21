@@ -1,23 +1,22 @@
 """
-Fine-tune TabPFN with Temporal Positional Encoding (V3).
+Fine-tune TabPFN with Temporal Positional Encoding (V3 — fpg=8).
 
-Key changes from V2:
-- Keeps features_per_group=3 (same architecture, same speed, same memory)
+Key changes:
+- features_per_group=8: each token = 8 consecutive timesteps from same feature
+- Input encoder Linear(16->192) Xavier-initialized (pretrained used fpg=3)
+- All other weights (24 transformer layers, y_encoder, decoder) pretrained
+- Dual-LR optimizer: higher LR for new encoder, lower for pretrained weights
+- Supports T<=1024, m<=10, m*T<=1200 (~85% of AEON datasets)
 - Feature shuffle disabled (temporal order must be preserved)
-- Pads T to multiple of 3 so groups align to consecutive timesteps
+- Pads T to multiple of 8 so groups align to consecutive timesteps
 - Structured group embeddings: feature_emb(j) + sinusoidal_PE(group_idx)
-- 100% pretrained weights — NO new parameters, pure fine-tuning
-- Synthetic data from 11_final_generator (same as V2)
-- BYPASSES sklearn preprocessing entirely (no RemoveConstantFeatures,
-  no SquashingScaler, no SVD). Data goes directly to the model encoder
-  which handles normalization per group internally.
+- Synthetic data from 11_final_generator
+- BYPASSES sklearn preprocessing entirely
 - Data augmentation: each batch = N/4 originals + 3*N/4 augmented copies
-  (feature channel permutation, class label permutation, random per-feature
-  transforms: none, log, exp, squash, KDI, Kumaraswamy)
 - Eval uses softmax temperature T=0.9 (matching TabPFN default)
 - Per-dataset gradient clipping (no single outlier dataset dominates)
 - Fixed synthetic eval batches (2 x batch_size) for tracking synth metrics
-- LR schedule: linear warmup (20 steps) + cosine annealing to lr_min
+- LR schedule: linear warmup + cosine annealing to lr_min
 
 Usage:
     python finetune_tabpfn_v3.py --n-steps 300 --eval-every 1
@@ -61,10 +60,10 @@ from hyperparameters import GeneratorHyperparameters
 
 # Import temporal TabPFN wrapper
 from tabpfn_temporal import (
-    build_temporal_tabpfn,
+    build_temporal_tabpfn_fpg8,
     set_temporal_info,
     clear_temporal_info,
-    pad_to_group3,
+    pad_to_group,
 )
 
 # Global for signal handling
@@ -307,8 +306,12 @@ class FinetuneConfig:
 
     # Data constraints
     max_samples: int = 1000
-    max_flat_features: int = 500
+    max_T: int = 1024
+    max_m: int = 10
+    max_m_times_T: int = 1200
     max_classes: int = 10
+    group_size: int = 8
+    encoder_lr_mult: float = 10.0  # LR multiplier for new encoder params
 
     # Paths (run_name allows parallel runs without overwriting)
     run_name: str = "default"
@@ -375,23 +378,26 @@ class SyntheticDataGenerator:
                 if len(y_train) == 0 or len(y_test) == 0:
                     continue
 
-                # Flatten 3D → 2D: (n, m, T) → (n, m*T)
+                # Constraints on raw dimensions
+                if T > self.config.max_T:
+                    continue
+                if n_features_orig > self.config.max_m:
+                    continue
+                if n_features_orig * T > self.config.max_m_times_T:
+                    continue
+                if n_classes > self.config.max_classes or n_classes < 2:
+                    continue
+
+                # Flatten 3D -> 2D: (n, m, T) -> (n, m*T)
                 n_train = X_train_3d.shape[0]
                 n_test  = X_test_3d.shape[0]
                 X_train = X_train_3d.reshape(n_train, -1).astype(np.float32)
                 X_test  = X_test_3d.reshape(n_test, -1).astype(np.float32)
 
-                # Pad T to multiple of 3 for fpg=3 grouping
-                # NB: must use original T for both calls (don't overwrite before 2nd)
-                X_train, T_padded = pad_to_group3(X_train, n_features_orig, T)
-                X_test, _         = pad_to_group3(X_test, n_features_orig, T)
+                gs = self.config.group_size
+                X_train, T_padded = pad_to_group(X_train, n_features_orig, T, group_size=gs)
+                X_test, _         = pad_to_group(X_test, n_features_orig, T, group_size=gs)
                 T = T_padded
-
-                # Constraint: flattened features
-                if X_train.shape[1] > self.config.max_flat_features:
-                    continue
-                if n_classes > self.config.max_classes or n_classes < 2:
-                    continue
 
                 # Sanitise
                 X_train = np.nan_to_num(X_train, nan=0.0, posinf=1e6, neginf=-1e6)
@@ -476,11 +482,14 @@ def load_real_datasets(config: FinetuneConfig) -> List[Dict[str, Any]]:
             n_samples = X_train.shape[0] + X_test.shape[0]
             n_channels = X_train.shape[1]  # m (original features/channels)
             T = X_train.shape[2]            # T (timesteps/length)
-            flat_features = n_channels * T
 
             if n_samples > config.max_samples:
                 continue
-            if flat_features > config.max_flat_features:
+            if T > config.max_T:
+                continue
+            if n_channels > config.max_m:
+                continue
+            if n_channels * T > config.max_m_times_T:
                 continue
 
             n_classes = len(np.unique(y_train))
@@ -490,9 +499,9 @@ def load_real_datasets(config: FinetuneConfig) -> List[Dict[str, Any]]:
             X_train_flat = X_train.reshape(X_train.shape[0], -1).astype(np.float32)
             X_test_flat  = X_test.reshape(X_test.shape[0], -1).astype(np.float32)
 
-            # Pad T to multiple of 3 for fpg=3 grouping
-            X_train_flat, T_padded = pad_to_group3(X_train_flat, n_channels, T)
-            X_test_flat, _         = pad_to_group3(X_test_flat, n_channels, T)
+            gs = config.group_size
+            X_train_flat, T_padded = pad_to_group(X_train_flat, n_channels, T, group_size=gs)
+            X_test_flat, _         = pad_to_group(X_test_flat, n_channels, T, group_size=gs)
             T = T_padded
 
             le = LabelEncoder()
@@ -541,10 +550,14 @@ class TabPFNTemporalFineTuner:
         print(f"  Device: {self.device}")
         print(f"  LR: {config.lr}  Batch: {config.batch_size}")
 
-        # Build temporal model
-        self.model, self.clf = build_temporal_tabpfn(device=self.device)
+        # Build temporal model with fpg=8
+        self.model, self.clf, new_encoder_params = build_temporal_tabpfn_fpg8(
+            device=self.device)
         self.model.to(self.device)
         self.model.train()
+
+        # Track new encoder param ids for dual-LR optimizer
+        new_param_ids = {id(p) for p in new_encoder_params}
 
         # Freeze first N transformer layers if requested
         n_total_layers = len(list(self.model.transformer_encoder.layers))
@@ -567,10 +580,19 @@ class TabPFNTemporalFineTuner:
             print(f"  Frozen: first {n_freeze}/{n_total_layers} transformer layers "
                   f"({100*n_frozen/n_params:.1f}%)")
 
-        # Only pass trainable parameters to optimizer
-        self.optimizer = AdamW(
-            [p for p in self.model.parameters() if p.requires_grad],
-            lr=config.lr, weight_decay=config.weight_decay)
+        # Dual-LR optimizer: higher LR for new encoder, lower for pretrained
+        pretrained_params = [p for p in self.model.parameters()
+                            if p.requires_grad and id(p) not in new_param_ids]
+        new_trainable = [p for p in new_encoder_params if p.requires_grad]
+
+        encoder_lr = config.lr * config.encoder_lr_mult
+        print(f"  Optimizer: pretrained LR={config.lr:.1e}, "
+              f"encoder LR={encoder_lr:.1e} ({config.encoder_lr_mult}x)")
+
+        self.optimizer = AdamW([
+            {'params': pretrained_params, 'lr': config.lr},
+            {'params': new_trainable, 'lr': encoder_lr},
+        ], weight_decay=config.weight_decay)
 
         # LR schedule: linear warmup → cosine annealing to lr_min
         warmup = config.warmup_steps
@@ -631,7 +653,7 @@ class TabPFNTemporalFineTuner:
         """Forward pass bypassing sklearn preprocessing entirely.
 
         Data goes directly to the model. The model's internal encoder handles:
-        - RemoveEmptyFeaturesEncoderStep (per group of 3)
+        - RemoveEmptyFeaturesEncoderStep (per group of 8)
         - NanHandling
         - InputNormalizationEncoderStep (z-score per group, train-only)
         - VariableNumFeaturesEncoderStep (pad + rescale per group)
@@ -640,8 +662,8 @@ class TabPFNTemporalFineTuner:
         try:
             y_test_t = torch.tensor(y_test, dtype=torch.long, device=self.device)
 
-            # Set temporal info so add_embeddings knows m and T
-            set_temporal_info(self.model, n_features_orig, T)
+            set_temporal_info(self.model, n_features_orig, T,
+                              group_size=self.config.group_size)
 
             # Convert to tensors — shape (1, n_samples, n_features)
             X_train_t = torch.as_tensor(
@@ -784,9 +806,9 @@ class TabPFNTemporalFineTuner:
                     torch.cuda.empty_cache()
 
                 with torch.no_grad():
-                    # Set temporal info
                     set_temporal_info(self.model, data['n_features_orig'],
-                                     data['T'])
+                                     data['T'],
+                                     group_size=self.config.group_size)
 
                     # Build tensors on device
                     X_train_t = torch.as_tensor(
@@ -938,7 +960,7 @@ class TabPFNTemporalFineTuner:
             'synth_eval_accs': self.synth_eval_accs,
             'synth_eval_aucs': self.synth_eval_aucs,
             'config': self.config.__dict__,
-            'version': 'v3_temporal_pe',
+            'version': 'v3_temporal_pe_fpg8',
         }
         if extra:
             ckpt.update(extra)
@@ -1052,17 +1074,22 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     log_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("FINE-TUNING TABPFN V3  —  Temporal Positional Encoding")
-    print("  features_per_group=3 (kept as pretrained)")
-    print("  groups = 3 consecutive timesteps from same feature")
+    print("FINE-TUNING TABPFN V3  —  Temporal PE (fpg=8)")
+    print(f"  features_per_group={config.group_size}")
+    print(f"  groups = {config.group_size} consecutive timesteps from same feature")
+    print("  input encoder: Linear(16->192) Xavier init (new)")
     print("  embeddings = feature_emb(j) + sinusoidal_PE(group_idx)")
-    print("  feature shuffle: DISABLED, no new params")
+    print("  feature shuffle: DISABLED")
     print("  sklearn preprocessing: BYPASSED (no RemoveConst/Scaler/SVD)")
     print("  normalization: model-internal per group (z-score)")
+    print(f"  data limits: T<={config.max_T}, m<={config.max_m}, "
+          f"m*T<={config.max_m_times_T}")
     print(f"  augmentation: N/4 orig + 3N/4 augmented (feat perm + "
           f"class perm + none/log/exp/squash/KDI/kuma per feature)")
-    print(f"  LR schedule: warmup {config.warmup_steps} steps → "
-          f"{config.lr:.1e}, cosine → {config.lr_min:.1e}")
+    print(f"  LR schedule: warmup {config.warmup_steps} steps -> "
+          f"{config.lr:.1e}, cosine -> {config.lr_min:.1e}")
+    print(f"  encoder LR: {config.lr * config.encoder_lr_mult:.1e} "
+          f"({config.encoder_lr_mult}x)")
     print(f"  per-dataset gradient clipping: {config.grad_clip}")
     print(f"  eval temperature: T={SOFTMAX_TEMPERATURE}")
     print("=" * 60)

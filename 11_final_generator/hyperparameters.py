@@ -53,7 +53,7 @@ class RoleHyperparameters:
     univariate_prob: float = 0.75
 
     # If not univariate: log-uniform range for n_features (can still be 1)
-    n_features_range: Tuple[int, int] = (1, 12)
+    n_features_range: Tuple[int, int] = (1, 10)
 
 
 # ── Propagation (operations per node) ─────────────────────────────────────────
@@ -117,10 +117,10 @@ class DatasetHyperparameters:
     max_samples: int = 1000
 
     # Time-series length T (uniform int, further constrained by feat*T)
-    t_range: Tuple[int, int] = (20, 500)
+    t_range: Tuple[int, int] = (20, 1024)
 
     # Constraint: n_features * T <= this
-    max_feat_times_t: int = 500
+    max_feat_times_t: int = 1200
 
     # Train / test split ratio
     train_ratio: float = 0.8

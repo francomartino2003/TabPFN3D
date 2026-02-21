@@ -56,11 +56,18 @@ AEON_PKL_PATH = (
 # ============================================================
 
 def load_real_stats():
-    """Load AEON classification_stats.json and filter by constraints."""
+    """Load AEON classification_stats.json and filter by constraints.
+
+    Returns (filtered_list, total_count, pct_passing).
+    """
     with open(AEON_STATS_PATH) as f:
         all_stats = json.load(f)
 
+    total = len(all_stats)
     filtered = []
+    fail_reasons = {"samples": 0, "features": 0, "timesteps": 0,
+                    "feat_x_t": 0, "classes": 0}
+
     for ds in all_stats:
         n_samples   = ds["n_samples"]
         n_features  = ds.get("n_dimensions", 1)
@@ -70,28 +77,40 @@ def load_real_stats():
         balance     = ds.get("class_balance", 1.0)
         missing     = ds.get("missing_pct", 0.0)
 
-        if (n_samples <= MAX_SAMPLES
-                and n_features <= MAX_FEATURES
-                and timesteps <= MAX_TIMESTEPS
-                and feat_x_t <= MAX_FEAT_T
-                and n_classes <= MAX_CLASSES):
+        if n_samples   > MAX_SAMPLES:   fail_reasons["samples"]   += 1; continue
+        if n_features  > MAX_FEATURES:  fail_reasons["features"]  += 1; continue
+        if timesteps   > MAX_TIMESTEPS: fail_reasons["timesteps"] += 1; continue
+        if feat_x_t    > MAX_FEAT_T:    fail_reasons["feat_x_t"]  += 1; continue
+        if n_classes   > MAX_CLASSES:   fail_reasons["classes"]   += 1; continue
 
-            avg_per_class = n_samples / n_classes
-            min_spc = int(balance * avg_per_class)
+        avg_per_class = n_samples / n_classes
+        min_spc = int(balance * avg_per_class)
 
-            filtered.append({
-                "name": ds["name"],
-                "n_samples": n_samples,
-                "n_features": n_features,
-                "timesteps": timesteps,
-                "feat_x_t": feat_x_t,
-                "n_classes": n_classes,
-                "class_balance": balance,
-                "missing_pct": missing,
-                "min_samples_per_class": min_spc,
-                "train_size": ds.get("train_size", 0),
-                "test_size": ds.get("test_size", 0),
-            })
+        filtered.append({
+            "name": ds["name"],
+            "n_samples": n_samples,
+            "n_features": n_features,
+            "timesteps": timesteps,
+            "feat_x_t": feat_x_t,
+            "n_classes": n_classes,
+            "class_balance": balance,
+            "missing_pct": missing,
+            "min_samples_per_class": min_spc,
+            "train_size": ds.get("train_size", 0),
+            "test_size": ds.get("test_size", 0),
+        })
+
+    pct = 100.0 * len(filtered) / total if total > 0 else 0.0
+    print(f"\n  AEON total datasets:  {total}")
+    print(f"  Passing constraints:  {len(filtered)}  ({pct:.1f}%)")
+    print(f"  Constraints: samples<={MAX_SAMPLES}, features<={MAX_FEATURES}, "
+          f"T<={MAX_TIMESTEPS}, m*T<={MAX_FEAT_T}, classes<={MAX_CLASSES}")
+    print(f"  Rejected by: samples={fail_reasons['samples']}, "
+          f"features={fail_reasons['features']}, "
+          f"T={fail_reasons['timesteps']}, "
+          f"m*T={fail_reasons['feat_x_t']}, "
+          f"classes={fail_reasons['classes']}")
+
     return filtered
 
 
@@ -216,8 +235,8 @@ def run_tabpfn(tabpfn, X_train, y_train, X_test, y_test, n_classes):
         y_train = le.fit_transform(y_train)
         y_test = le.transform(y_test)
 
-    # Skip if flattened features exceed TabPFN limit
-    if X_tr.shape[1] > 500:
+    # Skip if flattened features exceed TabPFN vanilla limit
+    if X_tr.shape[1] > MAX_FEAT_T:
         return None, None
 
     # Need at least 2 classes in train
@@ -570,7 +589,6 @@ def main():
     # ── 1. Load real AEON stats ─────────────────────────────────────────
     print("\nLoading real AEON dataset stats...")
     real_stats = load_real_stats()
-    print(f"  {len(real_stats)} datasets meet constraints")
 
     # ── 2. Generate synthetic datasets ──────────────────────────────────
     print(f"\nGenerating {args.n_synthetic} synthetic datasets (seed={args.seed})...")
