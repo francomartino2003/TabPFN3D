@@ -20,17 +20,17 @@ class DAGHyperparameters:
     """Hyperparameters that control the DAG topology."""
 
     # Root latent dimension d  (log-uniform int)
-    root_d_range: Tuple[int, int] = (1, 8)
+    root_d_range: Tuple[int, int] = (1, 16)
 
     # Number of hidden layers (log-uniform int — favors smaller)
     n_layers_range: Tuple[int, int] = (2, 8)
 
     # Number of nodes per hidden layer (log-uniform int per layer — favors smaller)
-    nodes_per_layer_range: Tuple[int, int] = (2, 20)
+    nodes_per_layer_range: Tuple[int, int] = (2, 8)
 
     # Probability that a node is "series" (vs tabular/discrete)
     # Sampled uniform float once per DAG
-    series_node_prob_range: Tuple[float, float] = (0.75, 1)
+    series_node_prob_range: Tuple[float, float] = (0.3, 1)
 
     # Among non-series nodes, probability that a node is "discrete" (vs continuous tabular)
     # Sampled uniform float once per DAG
@@ -72,18 +72,18 @@ class PropagationHyperparameters:
     root_uniform_a_range: Tuple[float, float] = (0.5, 1.5)
 
     # Conv1 (pointwise, K=1): output channels (log-uniform int per series node)
-    series_hidden_channels_range: Tuple[int, int] = (1, 16)
+    series_hidden_channels_range: Tuple[int, int] = (1, 32)
 
     # Conv2 (temporal): kernel size (log-uniform int per series node)
-    kernel_size_range: Tuple[int, int] = (1, 10)
+    kernel_size_range: Tuple[int, int] = (1, 16)
 
     # Conv2 (temporal): dilation factor (log-uniform int per series node)
-    dilation_range: Tuple[int, int] = (1, 15)
+    dilation_range: Tuple[int, int] = (1, 16)
 
-    # Extra time-index channels for series nodes (uniform int per node)
+    # Extra time-index channels for series nodes (log-uniform int per node — favors 0/1)
     # All series: add this many extra t-index channels.
     # Series with no series parents: +1 mandatory on top.
-    n_extra_time_indices_range: Tuple[int, int] = (0, 3)
+    n_extra_time_indices_range: Tuple[int, int] = (0, 4)
 
     # Per-node output noise: std sampled log-uniform (favors small values)
     noise_std_range: Tuple[float, float] = (1e-4, 1)
@@ -128,8 +128,15 @@ class DatasetHyperparameters:
     # Minimum total observations per class (classes below this are dropped)
     min_samples_per_class: int = 6
 
+    # Padding policy for dilated conv in series nodes — sampled once per dataset,
+    # all nodes share the same policy.
+    #   'left'   → causal (zero-pad left, output[t] sees only past)
+    #   'right'  → anti-causal (zero-pad right, output[t] sees only future)
+    #   'center' → symmetric (zero-pad both sides, output[t] sees past + future)
+    padding_policy_choices: Tuple[str, ...] = ('left', 'center', 'right')
+
     # Probability of applying Kumaraswamy warping to one random feature/series
-    warping_prob: float = 0.2
+    warping_prob: float = 0.1
 
     # Kumaraswamy CDF params F(x)=1-(1-x^a)^b (sampled per application)
     kumaraswamy_a_range: Tuple[float, float] = (1.5, 5.0)

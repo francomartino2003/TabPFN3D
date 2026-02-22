@@ -92,31 +92,43 @@ def batch_pointwise_conv(x: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     return np.einsum('oc,nct->not', kernel, x)
 
 
-def batch_dilated_causal_conv(x: np.ndarray, kernel: np.ndarray,
-                              dilation: int = 1) -> np.ndarray:
+def batch_dilated_conv(x: np.ndarray, kernel: np.ndarray,
+                       dilation: int = 1,
+                       padding: str = 'left') -> np.ndarray:
     """
-    Dilated causal conv with left zero-padding to preserve length T.
+    Dilated conv with configurable zero-padding to preserve length T.
 
-    x:      (N, C_in, T)
-    kernel: (C_out, C_in, K)
-    dilation: int  (spacing between kernel taps)
-    output: (N, C_out, T)
-
-    Effective receptive field: D * (K - 1) + 1.
-    Left zero-pad of D * (K - 1) ensures causality and same output length.
+    x:        (N, C_in, T)
+    kernel:   (C_out, C_in, K)
+    dilation: spacing between kernel taps
+    padding:
+      'left'   → causal:      output[t] sees input[t-k*D] for k=0..K-1
+      'right'  → anti-causal: output[t] sees input[t+k*D] for k=0..K-1
+      'center' → symmetric:   output[t] sees a window centered on t
+    output:   (N, C_out, T)
     """
     C_out, C_in, K = kernel.shape
     N, _, T = x.shape
     pad_len = dilation * (K - 1)
 
-    # Left zero-pad for causality
-    x_padded = np.pad(x, ((0, 0), (0, 0), (pad_len, 0)), mode='constant')
+    if padding == 'left':
+        pad_left, pad_right = pad_len, 0
+        offsets = [-k * dilation for k in range(K)]
+    elif padding == 'right':
+        pad_left, pad_right = 0, pad_len
+        offsets = [k * dilation for k in range(K)]
+    else:  # center
+        pad_left = pad_len // 2
+        pad_right = pad_len - pad_left
+        start = -((K - 1) // 2) * dilation
+        offsets = [start + k * dilation for k in range(K)]
+
+    x_padded = np.pad(x, ((0, 0), (0, 0), (pad_left, pad_right)), mode='constant')
 
     y = np.zeros((N, C_out, T))
     for t in range(T):
-        t_p = t + pad_len  # position in padded array
-        # Gather K samples at dilation spacing, going backwards from t_p
-        indices = [t_p - k * dilation for k in range(K)]
+        t_p = t + pad_left
+        indices = [t_p + off for off in offsets]
         x_slice = x_padded[:, :, indices]  # (N, C_in, K)
         y[:, :, t] = np.einsum('nck,ock->no', x_slice, kernel)
     return y
@@ -173,6 +185,9 @@ class DatasetGenerator:
             self.root_std = float(self.rng.uniform(*hp_p.root_normal_std_range))
         else:
             self.root_a = float(self.rng.uniform(*hp_p.root_uniform_a_range))
+
+        # Padding policy — shared across all series nodes in this dataset
+        self.padding_policy = str(self.rng.choice(hp_d.padding_policy_choices))
 
     # ── 3. Build per-node operations ─────────────────────────────────────
 
@@ -268,10 +283,7 @@ class DatasetGenerator:
         hp_p = self.hp.propagation
 
         has_series_parent = any(pt == 'series' for pt in parent_types)
-        n_extra = int(self.rng.integers(
-            hp_p.n_extra_time_indices_range[0],
-            hp_p.n_extra_time_indices_range[1] + 1,
-        ))
+        n_extra = self._log_uniform_int(*hp_p.n_extra_time_indices_range)
         n_time_indices = (0 if has_series_parent else 1) + n_extra
         c_in = len(parent_types) + n_time_indices
 
@@ -295,6 +307,7 @@ class DatasetGenerator:
             'kernel1': kernel1,
             'kernel2': kernel2,
             'dilation': D2,
+            'padding': self.padding_policy,
             'act1': act1,
             'act2': act2,
             'noise_std': self._sample_noise_std(),
@@ -419,8 +432,8 @@ class DatasetGenerator:
         x = batch_pointwise_conv(x, ops['kernel1'])
         x = apply_activation(x, ops['act1'])
 
-        # Conv2 dilated causal → (n, 1, T) + act2
-        x = batch_dilated_causal_conv(x, ops['kernel2'], ops['dilation'])
+        # Conv2 dilated → (n, 1, T) + act2
+        x = batch_dilated_conv(x, ops['kernel2'], ops['dilation'], ops['padding'])
         x = apply_activation(x, ops['act2'])
 
         # Squeeze to (n, T)
@@ -547,9 +560,10 @@ class DatasetGenerator:
                 K2 = ops['kernel2'].shape[2]
                 D2 = ops['dilation']
                 n_t = ops['n_time_indices']
+                pad = ops.get('padding', 'left')
                 lines.append(
                     f'  node {nid} (series): pw({ops["kernel1"].shape[1]}→{d_h}) → '
-                    f'{ops["act1"]} → conv(K={K2},D={D2},{d_h}→1) → '
+                    f'{ops["act1"]} → conv(K={K2},D={D2},pad={pad},{d_h}→1) → '
                     f'{ops["act2"]}, t_idx={n_t}{noise}')
         return '\n'.join(lines)
 
