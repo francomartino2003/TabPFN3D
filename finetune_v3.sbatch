@@ -82,7 +82,8 @@ WARMUP="${WARMUP:-10}"
 BATCH="${BATCH:-128}"
 STEPS="${STEPS:-1500}"
 FREEZE="${FREEZE:-0}"
-echo "RUN_NAME=$RUN_NAME  LR=$LR  LR_MIN=$LR_MIN  WARMUP=$WARMUP  BATCH=$BATCH  STEPS=$STEPS  FREEZE=$FREEZE"
+ENC_LR_MULT="${ENC_LR_MULT:-10.0}"
+echo "RUN_NAME=$RUN_NAME  LR=$LR  LR_MIN=$LR_MIN  WARMUP=$WARMUP  BATCH=$BATCH  STEPS=$STEPS  FREEZE=$FREEZE  ENC_LR_MULT=$ENC_LR_MULT"
 
 # Run
 if [ "${DEBUG:-0}" == "1" ]; then
@@ -97,6 +98,7 @@ else
         --lr-min $LR_MIN \
         --warmup-steps $WARMUP \
         --freeze-layers $FREEZE \
+        --encoder-lr-mult $ENC_LR_MULT \
         --eval-every 1 \
         --run-name $RUN_NAME \
         $RESUME_ARGS

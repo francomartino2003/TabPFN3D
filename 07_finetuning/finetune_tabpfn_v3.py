@@ -1325,6 +1325,8 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--run-name', type=str, default='default',
                         help='Run name (separates checkpoints/logs per experiment)')
+    parser.add_argument('--encoder-lr-mult', type=float, default=10.0,
+                        help='LR multiplier for new encoder params (1.0 = same as backbone)')
     args = parser.parse_args()
 
     config = FinetuneConfig(
@@ -1334,7 +1336,8 @@ def main():
         freeze_layers=args.freeze_layers,
         eval_every=args.eval_every,
         device=args.device, seed=args.seed,
-        run_name=args.run_name)
+        run_name=args.run_name,
+        encoder_lr_mult=args.encoder_lr_mult)
 
     if args.debug:
         print("DEBUG MODE")
