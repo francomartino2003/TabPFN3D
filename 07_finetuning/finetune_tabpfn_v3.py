@@ -10,7 +10,7 @@ Key changes:
 - Feature shuffle disabled (temporal order must be preserved)
 - Pads T to multiple of 8 so groups align to consecutive timesteps
 - Structured group embeddings: feature_emb(j) + sinusoidal_PE(group_idx)
-- Synthetic data from 11_final_generator
+- Synthetic data from 12_kernel_dag_generator
 - BYPASSES sklearn preprocessing entirely
 - Data augmentation: each batch = N/4 originals + 3*N/4 augmented copies
 - Eval uses softmax temperature T=0.9 (matching TabPFN default)
@@ -48,13 +48,13 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # Add generator to path
-sys.path.insert(0, str(Path(__file__).parent.parent / '11_final_generator'))
+sys.path.insert(0, str(Path(__file__).parent.parent / '12_kernel_dag_generator'))
 sys.path.insert(0, str(Path(__file__).parent.parent / '00_TabPFN' / 'src'))
 
 from tabpfn import TabPFNClassifier
 from tabpfn.preprocessing.configs import ClassifierEnsembleConfig, PreprocessorConfig
 
-# Import DAG-based generator (folder 11)
+# Import kernel-DAG generator (folder 12)
 from generator import DatasetGenerator
 from hyperparameters import GeneratorHyperparameters
 
@@ -337,7 +337,7 @@ class FinetuneConfig:
 
 
 # ============================================================================
-# Synthetic Data Generation (using 11_final_generator)
+# Synthetic Data Generation (using 12_kernel_dag_generator)
 # ============================================================================
 
 class SyntheticDataGenerator:

@@ -1,12 +1,13 @@
 """
-Hyperparameters for the final dataset generator.
+Hyperparameters for the kernel-DAG dataset generator.
 
-Every sampable quantity has:
-  - A distribution type (uniform, log_uniform, geometric, choice, …)
-  - A range or parameter set
-
-This file is the SINGLE SOURCE OF TRUTH for all defaults.
-New hyper-parameters are added here as the generator grows.
+Key differences from 11_final_generator:
+  - Root nodes can be SERIES (GP-sampled with kernel bank) or TABULAR.
+  - Internal series nodes use a single Conv1D (no pointwise → temporal split).
+  - No time-index channels — series ancestry is guaranteed by DAG structure.
+  - Kernel bank: Linear, RBF, Periodic (parameters sampled per root).
+  - Conv1D: kernel length from {1,7,9,11}, centered N(0,1) weights, dilation
+    sampled exponentially, padding causal or centered (Bernoulli 0.5).
 """
 
 from dataclasses import dataclass, field
@@ -20,21 +21,22 @@ class DAGHyperparameters:
     """Hyperparameters that control the DAG topology."""
 
     # Root latent dimension d  (log-uniform int)
-    root_d_range: Tuple[int, int] = (1, 16)
+    root_d_range: Tuple[int, int] = (1, 6)
 
     # Number of hidden layers (log-uniform int — favors smaller)
-    n_layers_range: Tuple[int, int] = (2, 8)
+    n_layers_range: Tuple[int, int] = (2, 6)
 
     # Number of nodes per hidden layer (log-uniform int per layer — favors smaller)
-    nodes_per_layer_range: Tuple[int, int] = (2, 8)
+    nodes_per_layer_range: Tuple[int, int] = (2, 6)
 
-    # Probability that a node is "series" (vs tabular/discrete)
-    # Sampled uniform float once per DAG
-    series_node_prob_range: Tuple[float, float] = (0.3, 1)
+    # Probability that a ROOT node is "series" (vs tabular/discrete)
+    root_series_prob: float = 0.5
 
-    # Among non-series nodes, probability that a node is "discrete" (vs continuous tabular)
-    # Sampled uniform float once per DAG
-    discrete_node_prob_range: Tuple[float, float] = (0.1, 1)
+    # Probability that a HIDDEN node is "series" (vs tabular/discrete)
+    series_node_prob_range: Tuple[float, float] = (0.3, 1.0)
+
+    # Among non-series nodes, probability that a node is "discrete" (vs tabular)
+    discrete_node_prob_range: Tuple[float, float] = (0.1, 1.0)
 
     # Probability of DROPPING a connection (uniform float, once per DAG)
     connection_drop_prob_range: Tuple[float, float] = (0.0, 0.8)
@@ -52,8 +54,31 @@ class RoleHyperparameters:
     # Probability of univariate (1 feature)
     univariate_prob: float = 0.75
 
-    # If not univariate: log-uniform range for n_features (can still be 1)
+    # If not univariate: log-uniform range for n_features
     n_features_range: Tuple[int, int] = (1, 10)
+
+
+# ── GP kernel bank (for series roots) ─────────────────────────────────────────
+
+@dataclass
+class GPKernelHyperparameters:
+    """Hyperparameters for Gaussian Process kernel sampling at series roots."""
+
+    # Which kernels can be sampled (uniform choice)
+    kernel_choices: Tuple[str, ...] = ('linear', 'rbf', 'periodic')
+
+    # Linear kernel: k(t,t') = sigma^2 * (t - c) * (t' - c)
+    linear_sigma_range: Tuple[float, float] = (0.1, 1.5)
+    linear_c_range: Tuple[float, float] = (-0.5, 0.5)
+
+    # RBF kernel: k(t,t') = sigma^2 * exp(-(t-t')^2 / (2 * ell^2))
+    rbf_sigma_range: Tuple[float, float] = (0.1, 1.5)
+    rbf_lengthscale_range: Tuple[float, float] = (0.01, 0.5)
+
+    # Periodic kernel: k(t,t') = sigma^2 * exp(-2*sin^2(pi*|t-t'|/p) / ell^2)
+    periodic_sigma_range: Tuple[float, float] = (0.1, 1.5)
+    periodic_period_range: Tuple[float, float] = (0.05, 1.0)
+    periodic_lengthscale_range: Tuple[float, float] = (0.1, 2.0)
 
 
 # ── Propagation (operations per node) ─────────────────────────────────────────
@@ -62,36 +87,37 @@ class RoleHyperparameters:
 class PropagationHyperparameters:
     """Hyperparameters for how node values are computed."""
 
-    # Root initialisation distribution
+    # Tabular root initialisation distribution
     root_init_choices: Tuple[str, ...] = ('normal', 'uniform')
 
-    # N(0, std):  std sampled uniform in range
+    # N(0, std):  std sampled uniform in range (per tabular root)
     root_normal_std_range: Tuple[float, float] = (0.5, 1.5)
 
-    # U(-a, a):  a sampled uniform in range
+    # U(-a, a):  a sampled uniform in range (per tabular root)
     root_uniform_a_range: Tuple[float, float] = (0.5, 1.5)
 
-    # Conv1 (pointwise, K=1): output channels (log-uniform int per series node)
-    series_hidden_channels_range: Tuple[int, int] = (1, 32)
+    # GP kernels for series roots
+    gp_kernels: GPKernelHyperparameters = field(default_factory=GPKernelHyperparameters)
 
-    # Conv2 (temporal): kernel size (log-uniform int per series node)
-    kernel_size_range: Tuple[int, int] = (1, 16)
+    # ── Internal series nodes: single Conv1D ──
 
-    # Conv2 (temporal): dilation factor (log-uniform int per series node)
-    dilation_range: Tuple[int, int] = (1, 16)
+    # Kernel length choices (uniform discrete)
+    conv_kernel_length_choices: Tuple[int, ...] = (1, 7, 9, 11)
 
-    # Extra time-index channels for series nodes (log-uniform int per node — favors 0/1)
-    # All series: add this many extra t-index channels.
-    # Series with no series parents: +1 mandatory on top.
-    n_extra_time_indices_range: Tuple[int, int] = (0, 8)
+    # Max exponent A for dilation: d = floor(2^x), x ~ U(0, A)
+    # A = log2((T-1)/(K-1)) computed at runtime; this is just a hard cap
+    conv_max_dilation_exp: float = 10.0
+
+    # Padding: 'left' (causal) or 'center' — sampled Bernoulli(0.5) per node
+    conv_padding_causal_prob: float = 0.5
 
     # Per-node output noise: std sampled log-uniform (favors small values)
-    noise_std_range: Tuple[float, float] = (1e-4, 1)
+    noise_std_range: Tuple[float, float] = (1e-4, 1.0)
 
-    # Discrete nodes: number of classes k per node (log-uniform int — favors fewer)
+    # Discrete nodes: number of classes k per node (log-uniform int)
     discrete_classes_range: Tuple[int, int] = (2, 10)
 
-    # Activation bank (same as folder 10)
+    # Activation bank
     activation_choices: Tuple[str, ...] = (
         'identity',   # f(x) = x
         'log',        # f(x) = sign(x) * log(1 + |x|)
@@ -127,13 +153,6 @@ class DatasetHyperparameters:
 
     # Minimum total observations per class (classes below this are dropped)
     min_samples_per_class: int = 6
-
-    # Padding policy for dilated conv in series nodes — sampled once per dataset,
-    # all nodes share the same policy.
-    #   'left'   → causal (zero-pad left, output[t] sees only past)
-    #   'right'  → anti-causal (zero-pad right, output[t] sees only future)
-    #   'center' → symmetric (zero-pad both sides, output[t] sees past + future)
-    padding_policy_choices: Tuple[str, ...] = ('left', 'center', 'right')
 
     # Probability of applying Kumaraswamy warping to one random feature/series
     warping_prob: float = 0.1
