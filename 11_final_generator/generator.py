@@ -117,11 +117,10 @@ def batch_dilated_conv(x: np.ndarray, kernel: np.ndarray,
     elif padding == 'right':
         pad_left, pad_right = 0, pad_len
         offsets = [k * dilation for k in range(K)]
-    else:  # center
-        pad_left = pad_len // 2
+    else:  # center — pad each side exactly as much as the kernel reaches in that direction
+        pad_left = ((K - 1) // 2) * dilation
         pad_right = pad_len - pad_left
-        start = -((K - 1) // 2) * dilation
-        offsets = [start + k * dilation for k in range(K)]
+        offsets = [-pad_left + k * dilation for k in range(K)]
 
     x_padded = np.pad(x, ((0, 0), (0, 0), (pad_left, pad_right)), mode='constant')
 
@@ -192,10 +191,13 @@ class DatasetGenerator:
     # ── 3. Build per-node operations ─────────────────────────────────────
 
     def _log_uniform_int(self, lo: int, hi: int) -> int:
-        """Sample int from log-uniform distribution (favors smaller values)."""
+        """Sample int from log-uniform distribution (favors smaller values).
+
+        Works for lo=0 by shifting the range to (lo+1, hi+1) and subtracting 1.
+        """
         if lo == hi:
             return lo
-        val = np.exp(self.rng.uniform(np.log(lo), np.log(hi)))
+        val = np.exp(self.rng.uniform(np.log(lo + 1), np.log(hi + 1))) - 1
         return int(np.clip(np.round(val), lo, hi))
 
     def _sample_noise_std(self):
