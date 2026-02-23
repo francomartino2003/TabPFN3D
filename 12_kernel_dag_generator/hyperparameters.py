@@ -21,13 +21,13 @@ class DAGHyperparameters:
     """Hyperparameters that control the DAG topology."""
 
     # Root latent dimension d  (log-uniform int)
-    root_d_range: Tuple[int, int] = (1, 6)
+    root_d_range: Tuple[int, int] = (1, 8)
 
     # Number of hidden layers (log-uniform int — favors smaller)
-    n_layers_range: Tuple[int, int] = (2, 6)
+    n_layers_range: Tuple[int, int] = (1, 8)
 
     # Number of nodes per hidden layer (log-uniform int per layer — favors smaller)
-    nodes_per_layer_range: Tuple[int, int] = (2, 6)
+    nodes_per_layer_range: Tuple[int, int] = (1, 8)
 
     # Probability that a ROOT node is "series" (vs tabular/discrete)
     root_series_prob: float = 0.5
@@ -39,7 +39,7 @@ class DAGHyperparameters:
     discrete_node_prob_range: Tuple[float, float] = (0.1, 1.0)
 
     # Probability of DROPPING a connection (uniform float, once per DAG)
-    connection_drop_prob_range: Tuple[float, float] = (0.0, 0.8)
+    connection_drop_prob_range: Tuple[float, float] = (0.4, 0.8)
 
     # Minimum parents per non-root node after dropping
     min_parents: int = 1
@@ -64,19 +64,22 @@ class RoleHyperparameters:
 class GPKernelHyperparameters:
     """Hyperparameters for Gaussian Process kernel sampling at series roots."""
 
+    # Number of base kernels J to combine (log-uniform int, favors 1)
+    n_kernels_range: Tuple[int, int] = (1, 5)
+
     # Which kernels can be sampled (uniform choice)
     kernel_choices: Tuple[str, ...] = ('linear', 'rbf', 'periodic')
 
     # Linear kernel: k(t,t') = sigma^2 * (t - c) * (t' - c)
-    linear_sigma_range: Tuple[float, float] = (0.1, 1.5)
+    linear_sigma_range: Tuple[float, float] = (0.1, 1)
     linear_c_range: Tuple[float, float] = (-0.5, 0.5)
 
     # RBF kernel: k(t,t') = sigma^2 * exp(-(t-t')^2 / (2 * ell^2))
-    rbf_sigma_range: Tuple[float, float] = (0.1, 1.5)
+    rbf_sigma_range: Tuple[float, float] = (0.1, 1)
     rbf_lengthscale_range: Tuple[float, float] = (0.01, 0.5)
 
     # Periodic kernel: k(t,t') = sigma^2 * exp(-2*sin^2(pi*|t-t'|/p) / ell^2)
-    periodic_sigma_range: Tuple[float, float] = (0.1, 1.5)
+    periodic_sigma_range: Tuple[float, float] = (0.1, 1)
     periodic_period_range: Tuple[float, float] = (0.05, 1.0)
     periodic_lengthscale_range: Tuple[float, float] = (0.1, 2.0)
 
@@ -88,10 +91,10 @@ class PropagationHyperparameters:
     """Hyperparameters for how node values are computed."""
 
     # Tabular root initialisation distribution
-    root_init_choices: Tuple[str, ...] = ('normal', 'uniform')
+    root_init_choices: Tuple[str, ...] = ('normal',)
 
     # N(0, std):  std sampled uniform in range (per tabular root)
-    root_normal_std_range: Tuple[float, float] = (0.5, 1.5)
+    root_normal_std_range: Tuple[float, float] = (0.5, 1)
 
     # U(-a, a):  a sampled uniform in range (per tabular root)
     root_uniform_a_range: Tuple[float, float] = (0.5, 1.5)
@@ -112,7 +115,7 @@ class PropagationHyperparameters:
     conv_padding_causal_prob: float = 0.5
 
     # Per-node output noise: std sampled log-uniform (favors small values)
-    noise_std_range: Tuple[float, float] = (1e-4, 1.0)
+    noise_std_range: Tuple[float, float] = (1e-5, 1.0)
 
     # Discrete nodes: number of classes k per node (log-uniform int)
     discrete_classes_range: Tuple[int, int] = (2, 10)

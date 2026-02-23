@@ -239,35 +239,78 @@ class DatasetGenerator:
             elif node.node_type == 'series':
                 self._build_series_ops(node, parent_types, acts)
 
-    def _build_root_series_ops(self, node):
-        """Build GP kernel for a series root."""
-        gp_hp = self.hp.propagation.gp_kernels
-        T = self.T
+    def _sample_base_kernel(self, T: int) -> tuple:
+        """Sample one base kernel matrix and a description string.
 
-        kernel_type = str(self.rng.choice(gp_hp.kernel_choices))
-        if kernel_type == 'linear':
+        Returns (K_matrix: (T,T), description: str).
+        """
+        gp_hp = self.hp.propagation.gp_kernels
+        ktype = str(self.rng.choice(gp_hp.kernel_choices))
+        if ktype == 'linear':
             params = {
                 'sigma': float(self.rng.uniform(*gp_hp.linear_sigma_range)),
-                'c': float(self.rng.uniform(*gp_hp.linear_c_range)),
+                'c':     float(self.rng.uniform(*gp_hp.linear_c_range)),
             }
-        elif kernel_type == 'rbf':
+        elif ktype == 'rbf':
             params = {
                 'sigma': float(self.rng.uniform(*gp_hp.rbf_sigma_range)),
-                'ell': float(self.rng.uniform(*gp_hp.rbf_lengthscale_range)),
+                'ell':   float(self.rng.uniform(*gp_hp.rbf_lengthscale_range)),
             }
         else:  # periodic
             params = {
-                'sigma': float(self.rng.uniform(*gp_hp.periodic_sigma_range)),
+                'sigma':  float(self.rng.uniform(*gp_hp.periodic_sigma_range)),
                 'period': float(self.rng.uniform(*gp_hp.periodic_period_range)),
-                'ell': float(self.rng.uniform(*gp_hp.periodic_lengthscale_range)),
+                'ell':    float(self.rng.uniform(*gp_hp.periodic_lengthscale_range)),
             }
+        K = build_gp_kernel(T, ktype, params)
+        desc = f'{ktype}({", ".join(f"{k}={v:.3g}" for k, v in params.items())})'
+        return K, desc
 
-        K = build_gp_kernel(T, kernel_type, params)
+    def _build_root_series_ops(self, node):
+        """Build a composed GP kernel for a series root.
+
+        1. Sample J ~ log_uniform(1, 5) base kernels.
+        2. While >1 kernel: pick 2, combine with + or ×, replace by result.
+        3. The final (T,T) matrix is the covariance for GP(0, K).
+        """
+        gp_hp = self.hp.propagation.gp_kernels
+        T = self.T
+
+        J = self._log_uniform_int(*gp_hp.n_kernels_range)
+
+        kernels = []
+        descs = []
+        for _ in range(J):
+            K_base, d = self._sample_base_kernel(T)
+            kernels.append(K_base)
+            descs.append(d)
+
+        while len(kernels) > 1:
+            # Pick two random distinct indices and combine them
+            i, j = self.rng.choice(len(kernels), size=2, replace=False)
+            i, j = int(min(i, j)), int(max(i, j))
+            op = '+' if self.rng.random() < 0.5 else '*'
+            if op == '+':
+                combined = kernels[i] + kernels[j]
+                combined += 1e-6 * np.eye(T)
+            else:
+                combined = kernels[i] * kernels[j]
+                combined += 1e-6 * np.eye(T)
+            desc_combined = f'({descs[i]} {op} {descs[j]})'
+            # Remove j first (higher index), then i
+            kernels.pop(j); descs.pop(j)
+            kernels.pop(i); descs.pop(i)
+            kernels.append(combined)
+            descs.append(desc_combined)
+
+        K_final = kernels[0]
+        kernel_desc = descs[0]
+
         self.node_ops[node.id] = {
             'kind': 'root_series',
-            'kernel_type': kernel_type,
-            'kernel_params': params,
-            'cov_matrix': K,
+            'kernel_desc': kernel_desc,
+            'n_base_kernels': J,
+            'cov_matrix': K_final,
         }
 
     def _input_dim(self, parent_types, T):
@@ -539,10 +582,10 @@ class DatasetGenerator:
                 lines.append(
                     f'  node {nid} (root discrete): k={ops["k"]}')
             elif kind == 'root_series':
-                ktype = ops['kernel_type']
-                kp = ops['kernel_params']
+                J = ops.get('n_base_kernels', 1)
+                desc = ops.get('kernel_desc', '?')
                 lines.append(
-                    f'  node {nid} (root series): GP({ktype}, {kp})')
+                    f'  node {nid} (root series): GP(J={J}, K={desc})')
             elif kind == 'tabular':
                 lines.append(
                     f'  node {nid} (tabular): W({len(ops["W"])}), '
