@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Compare distributions of real AEON datasets vs synthetic datasets from the
-final generator (folder 11).
+kernel-DAG generator (folder 12).
 
 Produces:
   1. Console table with side-by-side statistics (distributions)

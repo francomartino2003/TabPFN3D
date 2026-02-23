@@ -21,7 +21,7 @@ class DAGHyperparameters:
     """Hyperparameters that control the DAG topology."""
 
     # Root latent dimension d  (log-uniform int)
-    root_d_range: Tuple[int, int] = (1, 5)
+    root_d_range: Tuple[int, int] = (1, 4)
 
     # Number of hidden layers (log-uniform int — favors smaller)
     n_layers_range: Tuple[int, int] = (1, 5)
@@ -116,7 +116,7 @@ class PropagationHyperparameters:
 
     # Per-node noise probability: sampled log-uniform (favors small/no noise)
     # Each internal node activates noise only with this probability.
-    node_noise_prob_range: Tuple[float, float] = (0.05, 1.0)
+    node_noise_prob_range: Tuple[float, float] = (0.5, 1.0)
 
     # Per-node output noise: std sampled log-uniform (favors small values)
     noise_std_range: Tuple[float, float] = (1e-5, 1.0)
