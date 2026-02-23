@@ -311,7 +311,8 @@ class FinetuneConfig:
     max_m_times_T: int = 1200
     max_classes: int = 10
     group_size: int = 8
-    encoder_lr_mult: float = 10.0  # LR multiplier for new encoder params
+    encoder_lr_mult: float = 10.0  # LR multiplier for fresh (new-init) params
+    n_fresh_transformer_layers: int = 4  # first N transformer layers reinited from scratch
 
     # Paths (run_name allows parallel runs without overwriting)
     run_name: str = "default"
@@ -551,13 +552,15 @@ class TabPFNTemporalFineTuner:
         print(f"  LR: {config.lr}  Batch: {config.batch_size}")
 
         # Build temporal model with fpg=8
-        self.model, self.clf, new_encoder_params = build_temporal_tabpfn_fpg8(
-            device=self.device)
+        # fresh_params = encoder + emb_proj + first n_fresh_transformer_layers
+        self.model, self.clf, fresh_params = build_temporal_tabpfn_fpg8(
+            device=self.device,
+            n_fresh_transformer_layers=config.n_fresh_transformer_layers)
         self.model.to(self.device)
         self.model.train()
 
-        # Track new encoder param ids for dual-LR optimizer
-        new_param_ids = {id(p) for p in new_encoder_params}
+        # Track fresh param ids for dual-LR optimizer
+        fresh_param_ids = {id(p) for p in fresh_params}
 
         # Freeze first N transformer layers if requested
         n_total_layers = len(list(self.model.transformer_encoder.layers))
@@ -580,18 +583,18 @@ class TabPFNTemporalFineTuner:
             print(f"  Frozen: first {n_freeze}/{n_total_layers} transformer layers "
                   f"({100*n_frozen/n_params:.1f}%)")
 
-        # Dual-LR optimizer: higher LR for new encoder, lower for pretrained
+        # Dual-LR optimizer: higher LR for fresh params, lower for pretrained
         pretrained_params = [p for p in self.model.parameters()
-                            if p.requires_grad and id(p) not in new_param_ids]
-        new_trainable = [p for p in new_encoder_params if p.requires_grad]
+                             if p.requires_grad and id(p) not in fresh_param_ids]
+        fresh_trainable = [p for p in fresh_params if p.requires_grad]
 
-        encoder_lr = config.lr * config.encoder_lr_mult
+        fresh_lr = config.lr * config.encoder_lr_mult
         print(f"  Optimizer: pretrained LR={config.lr:.1e}, "
-              f"encoder LR={encoder_lr:.1e} ({config.encoder_lr_mult}x)")
+              f"fresh LR={fresh_lr:.1e} ({config.encoder_lr_mult}x)")
 
         self.optimizer = AdamW([
             {'params': pretrained_params, 'lr': config.lr},
-            {'params': new_trainable, 'lr': encoder_lr},
+            {'params': fresh_trainable,   'lr': fresh_lr},
         ], weight_decay=config.weight_decay)
 
         # LR schedule: linear warmup → cosine annealing to lr_min
@@ -1077,7 +1080,9 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
     print("FINE-TUNING TABPFN V3  —  Temporal PE (fpg=8)")
     print(f"  features_per_group={config.group_size}")
     print(f"  groups = {config.group_size} consecutive timesteps from same feature")
-    print("  input encoder: Linear(16->192) Xavier init (new)")
+    print(f"  fresh init: encoder + emb_proj + first "
+          f"{config.n_fresh_transformer_layers} transformer layers (Xavier)")
+    print(f"  pretrained: remaining transformer layers + decoder")
     print("  embeddings = feature_emb(j) + sinusoidal_PE(group_idx)")
     print("  feature shuffle: DISABLED")
     print("  sklearn preprocessing: BYPASSED (no RemoveConst/Scaler/SVD)")
@@ -1088,7 +1093,7 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
           f"class perm + none/log/exp/squash/KDI/kuma per feature)")
     print(f"  LR schedule: warmup {config.warmup_steps} steps -> "
           f"{config.lr:.1e}, cosine -> {config.lr_min:.1e}")
-    print(f"  encoder LR: {config.lr * config.encoder_lr_mult:.1e} "
+    print(f"  fresh params LR: {config.lr * config.encoder_lr_mult:.1e} "
           f"({config.encoder_lr_mult}x)")
     print(f"  per-dataset gradient clipping: {config.grad_clip}")
     print(f"  eval temperature: T={SOFTMAX_TEMPERATURE}")

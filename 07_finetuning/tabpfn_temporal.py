@@ -4,7 +4,7 @@ Temporal-aware TabPFN wrapper.
 Supports two modes:
   - fpg=3 (v2): keeps pretrained architecture exactly, no new parameters
   - fpg=8 (v3): replaces input encoder Linear(6->192) with Linear(16->192)
-    Xavier-initialized from scratch; all other weights remain pretrained
+    Xavier-initialized from scratch; selected other weights also re-initialized
 
 Strategy (both modes):
 - Reorder flattened columns so that each group of `fpg` timesteps belongs to
@@ -14,6 +14,12 @@ Strategy (both modes):
   * Feature embedding: same pseudo-random subspace embedding for all groups
     from the same original feature (m unique embeddings, reusing COL_EMBEDDING)
   * Temporal PE: sinusoidal encoding based on the group index within its feature
+
+Fresh-init scope in fpg=8 mode (n_fresh_transformer_layers controls depth):
+  1. model.encoder   — input tokenization Linear(16->192), Xavier
+  2. model.feature_positional_embedding_embeddings — embedding projection, Xavier
+  3. transformer_encoder.layers[:n_fresh_transformer_layers] — Xavier + LayerNorm reset
+  All other weights (remaining transformer layers, decoder) stay pretrained.
 
 Column layout after flattening (for m=2, T=8, fpg=8):
   flat: [f0_t0..f0_t7, f1_t0..f1_t7]
@@ -25,7 +31,8 @@ Usage:
     set_temporal_info(model, n_features=m, T=T, group_size=3)
 
     # fpg=8 (new)
-    model, clf, new_params = build_temporal_tabpfn_fpg8(device="cuda")
+    model, clf, new_params = build_temporal_tabpfn_fpg8(device="cuda",
+                                                         n_fresh_transformer_layers=4)
     set_temporal_info(model, n_features=m, T=T, group_size=8)
 """
 
@@ -249,24 +256,40 @@ def build_temporal_tabpfn(device: str = "auto"):
 # Build temporal-aware model (fpg=8, new input encoder)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_temporal_tabpfn_fpg8(device: str = "auto"):
+def _reinit_module(module: nn.Module):
+    """Xavier-reinitialize all Linear and LayerNorm submodules in-place."""
+    for m in module.modules():
+        if isinstance(m, nn.Linear):
+            nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        elif isinstance(m, nn.LayerNorm):
+            if m.weight is not None:
+                nn.init.ones_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        elif isinstance(m, nn.Embedding):
+            nn.init.normal_(m.weight, std=0.02)
+
+
+def build_temporal_tabpfn_fpg8(device: str = "auto",
+                                n_fresh_transformer_layers: int = 4):
     """
     Build a TabPFN model for temporal time-series with features_per_group=8.
 
-    1. Load pretrained TabPFN v2.5 (fpg=3)
-    2. Replace features_per_group 3 -> 8
-    3. Rebuild the input encoder with correct input dimension (8+8=16 -> 192)
-       using Xavier initialization (cannot reuse pretrained 3+3=6 -> 192 weights)
-    4. All other weights (transformer layers, y_encoder, decoder, subspace
-       projection) remain pretrained.
+    Fresh-initialized components (Xavier / LayerNorm reset):
+      1. model.encoder   — input tokenization Linear(16->192)
+      2. model.feature_positional_embedding_embeddings — embedding projection
+      3. transformer_encoder.layers[:n_fresh_transformer_layers]
+
+    All remaining transformer layers + decoder keep pretrained TabPFN weights.
 
     Returns:
         model: the modified PerFeatureTransformer
         clf: the TabPFNClassifier
-        new_encoder_params: list of nn.Parameter that are freshly initialized
+        fresh_params: list[nn.Parameter] — all freshly initialized parameters
     """
     from tabpfn.architectures.base import get_encoder
-    from tabpfn.architectures.base.config import ModelConfig
 
     clf = TabPFNClassifier(
         device=device,
@@ -282,16 +305,20 @@ def build_temporal_tabpfn_fpg8(device: str = "auto"):
     old_fpg = model.features_per_group
     new_fpg = 8
     emsize = model.ninp
-    nlayers = len(list(model.transformer_encoder.layers))
+    layers = list(model.transformer_encoder.layers)
+    nlayers = len(layers)
+    n_fresh = min(n_fresh_transformer_layers, nlayers)
+    n_pretrained_layers = nlayers - n_fresh
 
     print(f"  features_per_group: {old_fpg} -> {new_fpg}")
     print(f"  emsize={emsize}, nlayers={nlayers}")
+    print(f"  Fresh layers: encoder + emb_proj + first {n_fresh} transformer layers")
+    print(f"  Pretrained layers: {n_pretrained_layers} transformer layers + decoder")
 
-    # ── Change features_per_group ──
+    # ── 1. Change features_per_group ──
     model.features_per_group = new_fpg
 
-    # ── Rebuild encoder with fpg=8 ──
-    # The factory uses the same config as the pretrained model but with new fpg
+    # ── 2. Rebuild + reinit input encoder (tokenization) ──
     new_encoder = get_encoder(
         num_features=new_fpg,
         embedding_size=emsize,
@@ -306,35 +333,54 @@ def build_temporal_tabpfn_fpg8(device: str = "auto"):
         encoder_use_bias=False,
         encoder_type="linear",
     )
-
-    # Xavier init the new Linear layer
     from tabpfn.architectures.base.encoders import LinearInputEncoderStep
     for step in new_encoder:
         if isinstance(step, LinearInputEncoderStep):
             nn.init.xavier_uniform_(step.layer.weight)
             if step.layer.bias is not None:
                 nn.init.zeros_(step.layer.bias)
-
-    # Collect new encoder params before moving to device
-    new_encoder_params = list(new_encoder.parameters())
-
     model.encoder = new_encoder
-    print(f"  New encoder: Linear({new_fpg * 2}->{emsize}) Xavier init")
+    print(f"  [fresh] encoder: Linear({new_fpg * 2}->{emsize}) Xavier init")
 
-    # ── Patch add_embeddings ──
+    # ── 3. Reinit embedding projection ──
+    _reinit_module(model.feature_positional_embedding_embeddings)
+    print(f"  [fresh] feature_positional_embedding_embeddings: Xavier reinit")
+
+    # ── 4. Reinit first n_fresh transformer layers ──
+    for i, layer in enumerate(layers[:n_fresh]):
+        _reinit_module(layer)
+    print(f"  [fresh] transformer_encoder.layers[0:{n_fresh}]: Xavier reinit")
+
+    # ── 5. Patch add_embeddings ──
     model.add_embeddings = types.MethodType(temporal_add_embeddings, model)
     print(f"  Patched add_embeddings: feature_emb(j) + sinusoidal_PE(group_idx)")
+
+    # ── 6. Collect fresh parameter ids ──
+    fresh_modules = (
+        [model.encoder, model.feature_positional_embedding_embeddings]
+        + list(layers[:n_fresh])
+    )
+    # Use id() to deduplicate (parameters shared across modules counted once)
+    seen_ids: set = set()
+    fresh_params: list = []
+    for mod in fresh_modules:
+        for p in mod.parameters():
+            if id(p) not in seen_ids:
+                seen_ids.add(id(p))
+                fresh_params.append(p)
 
     model.to(device if device != "auto" else "cpu")
 
     n_params = sum(p.numel() for p in model.parameters())
-    n_new = sum(p.numel() for p in new_encoder_params)
-    n_pretrained = n_params - n_new
+    n_fresh_count = sum(p.numel() for p in fresh_params)
+    n_pretrained_count = n_params - n_fresh_count
     print(f"  Total parameters: {n_params:,}")
-    print(f"    Pretrained: {n_pretrained:,}")
-    print(f"    New (encoder): {n_new:,}")
+    print(f"    Fresh (new init): {n_fresh_count:,}  "
+          f"({100 * n_fresh_count / n_params:.1f}%)")
+    print(f"    Pretrained:       {n_pretrained_count:,}  "
+          f"({100 * n_pretrained_count / n_params:.1f}%)")
 
-    return model, clf, new_encoder_params
+    return model, clf, fresh_params
 
 
 # ─────────────────────────────────────────────────────────────────────────────
