@@ -65,9 +65,10 @@ def apply_activation(z: np.ndarray, name: str) -> np.ndarray:
     if name == 'tanh':      return np.tanh(z)
     if name == 'square':    return z ** 2
     if name == 'power':     return np.sign(z) * np.sqrt(np.abs(z))
-    if name == 'softplus':  return np.log1p(np.exp(np.clip(z, -500, 500)))
-    if name == 'step':      return (z >= 0).astype(z.dtype)
-    if name == 'modulo':    return np.mod(z, 1.0)
+    if name == 'softplus':    return np.log1p(np.exp(np.clip(z, -500, 500)))
+    if name == 'smooth_relu': return z / (1.0 + np.exp(-np.clip(z, -500, 500)))  # SiLU
+    if name == 'step':        return (z >= 0).astype(z.dtype)
+    if name == 'modulo':      return np.mod(z, 1.0)
     return z
 
 
@@ -198,6 +199,19 @@ class DatasetGenerator:
         lo, hi = self.hp.propagation.noise_std_range
         return float(np.exp(self.rng.uniform(np.log(lo), np.log(hi))))
 
+    def _sample_noise_prob(self):
+        """Log-uniform noise probability — favors small values (often near 0)."""
+        lo, hi = self.hp.propagation.node_noise_prob_range
+        return float(np.exp(self.rng.uniform(np.log(lo), np.log(hi))))
+
+    def _sample_series_activation(self) -> str:
+        """Sample activation for a temporal (series) node, with 'identity' boosted."""
+        acts = list(self.hp.propagation.activation_choices)
+        w = self.hp.propagation.series_identity_weight
+        weights = np.array([w if a == 'identity' else 1.0 for a in acts])
+        weights /= weights.sum()
+        return str(self.rng.choice(acts, p=weights))
+
     # ── Build operations ──────────────────────────────────────────────
 
     def _build_operations(self):
@@ -325,6 +339,7 @@ class DatasetGenerator:
             'b': float(self.rng.normal(0, 0.1)),
             'act': str(self.rng.choice(acts)),
             'noise_std': self._sample_noise_std(),
+            'noise_prob': self._sample_noise_prob(),
         }
 
     def _build_discrete_ops(self, node, parent_types, T, hp_p):
@@ -343,6 +358,7 @@ class DatasetGenerator:
             'prototypes': prototypes,
             'class_values': class_values,
             'noise_std': self._sample_noise_std(),
+            'noise_prob': self._sample_noise_prob(),
         }
 
     def _build_series_ops(self, node, parent_types, acts):
@@ -378,8 +394,8 @@ class DatasetGenerator:
         # Padding: causal (left) or centered — Bernoulli
         padding = 'left' if self.rng.random() < hp_p.conv_padding_causal_prob else 'center'
 
-        # Activation
-        act = str(self.rng.choice(acts))
+        # Activation — identity heavily favored for temporal nodes
+        act = self._sample_series_activation()
 
         self.node_ops[node.id] = {
             'kind': 'series',
@@ -389,6 +405,7 @@ class DatasetGenerator:
             'padding': padding,
             'act': act,
             'noise_std': self._sample_noise_std(),
+            'noise_prob': self._sample_noise_prob(),
         }
 
     # ── Propagation ──────────────────────────────────────────────────────
@@ -452,7 +469,8 @@ class DatasetGenerator:
         x = self._gather_flat(node, vals, n)
         out = np.sum(x * ops['W'][None, :], axis=1) + ops['b']
         out = apply_activation(out, ops['act'])
-        out += self.rng.normal(0, ops['noise_std'], size=(n,))
+        if self.rng.random() < ops['noise_prob']:
+            out += self.rng.normal(0, ops['noise_std'], size=(n,))
         return out
 
     # ── Discrete propagation ──────────────────────────────────────────────
@@ -463,7 +481,8 @@ class DatasetGenerator:
         dists = np.sum((x[:, None, :] - prototypes[None, :, :]) ** 2, axis=2)
         indices = np.argmin(dists, axis=1)
         cont_vals = ops['class_values'][indices]
-        cont_vals = cont_vals + self.rng.normal(0, ops['noise_std'], size=(n,))
+        if self.rng.random() < ops['noise_prob']:
+            cont_vals = cont_vals + self.rng.normal(0, ops['noise_std'], size=(n,))
         return cont_vals, indices
 
     # ── Series propagation (single Conv1D) ────────────────────────────────
@@ -491,7 +510,8 @@ class DatasetGenerator:
         x = apply_activation(x, ops['act'])
 
         out = x[:, 0, :]  # (n, T)
-        out = out + self.rng.normal(0, ops['noise_std'], size=(n, T))
+        if self.rng.random() < ops['noise_prob']:
+            out = out + self.rng.normal(0, ops['noise_std'], size=(n, T))
         return out
 
     # ── Dataset extraction ────────────────────────────────────────────────
@@ -587,22 +607,25 @@ class DatasetGenerator:
                 lines.append(
                     f'  node {nid} (root series): GP(J={J}, K={desc})')
             elif kind == 'tabular':
+                np_ = ops.get('noise_prob', 1.0)
                 lines.append(
                     f'  node {nid} (tabular): W({len(ops["W"])}), '
-                    f'act={ops["act"]}, noise={ops["noise_std"]:.1e}')
+                    f'act={ops["act"]}, noise={ops["noise_std"]:.1e}@p={np_:.2f}')
             elif kind == 'discrete':
+                np_ = ops.get('noise_prob', 1.0)
                 lines.append(
                     f'  node {nid} (discrete): k={ops["k"]}, '
                     f'proto({ops["prototypes"].shape}), '
-                    f'noise={ops["noise_std"]:.1e}')
+                    f'noise={ops["noise_std"]:.1e}@p={np_:.2f}')
             elif kind == 'series':
                 c_in, K = ops['kernel'].shape
                 D = ops['dilation']
                 pad = ops['padding']
+                np_ = ops.get('noise_prob', 1.0)
                 lines.append(
                     f'  node {nid} (series): conv1d({c_in}→1, K={K}, D={D}, '
                     f'pad={pad}) + act={ops["act"]}, '
-                    f'noise={ops["noise_std"]:.1e}')
+                    f'noise={ops["noise_std"]:.1e}@p={np_:.2f}')
         return '\n'.join(lines)
 
 

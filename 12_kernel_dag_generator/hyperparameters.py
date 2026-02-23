@@ -21,13 +21,13 @@ class DAGHyperparameters:
     """Hyperparameters that control the DAG topology."""
 
     # Root latent dimension d  (log-uniform int)
-    root_d_range: Tuple[int, int] = (1, 8)
+    root_d_range: Tuple[int, int] = (1, 5)
 
     # Number of hidden layers (log-uniform int — favors smaller)
-    n_layers_range: Tuple[int, int] = (1, 8)
+    n_layers_range: Tuple[int, int] = (1, 5)
 
     # Number of nodes per hidden layer (log-uniform int per layer — favors smaller)
-    nodes_per_layer_range: Tuple[int, int] = (1, 8)
+    nodes_per_layer_range: Tuple[int, int] = (2, 6)
 
     # Probability that a ROOT node is "series" (vs tabular/discrete)
     root_series_prob: float = 0.5
@@ -114,25 +114,35 @@ class PropagationHyperparameters:
     # Padding: 'left' (causal) or 'center' — sampled Bernoulli(0.5) per node
     conv_padding_causal_prob: float = 0.5
 
+    # Per-node noise probability: sampled log-uniform (favors small/no noise)
+    # Each internal node activates noise only with this probability.
+    node_noise_prob_range: Tuple[float, float] = (0.05, 1.0)
+
     # Per-node output noise: std sampled log-uniform (favors small values)
     noise_std_range: Tuple[float, float] = (1e-5, 1.0)
 
     # Discrete nodes: number of classes k per node (log-uniform int)
     discrete_classes_range: Tuple[int, int] = (2, 10)
 
-    # Activation bank
+    # Activation bank (no plain relu — smooth_relu avoids dying neurons)
     activation_choices: Tuple[str, ...] = (
-        'identity',   # f(x) = x
-        'log',        # f(x) = sign(x) * log(1 + |x|)
-        'sigmoid',    # f(x) = 1/(1+exp(-x))
-        'abs',        # f(x) = |x|
-        'sin',        # f(x) = sin(x)
-        'tanh',       # f(x) = tanh(x)
-        'square',     # f(x) = x^2
-        'power',      # f(x) = sign(x) * |x|^0.5
-        'softplus',   # f(x) = log(1 + exp(x))
-        'modulo',     # f(x) = x mod 1
+        'identity',     # f(x) = x
+        'log',          # f(x) = sign(x) * log(1 + |x|)
+        'sigmoid',      # f(x) = 1/(1+exp(-x))
+        'abs',          # f(x) = |x|
+        'sin',          # f(x) = sin(x)
+        'tanh',         # f(x) = tanh(x)
+        'square',       # f(x) = x^2
+        'power',        # f(x) = sign(x) * |x|^0.5
+        'softplus',     # f(x) = log(1 + exp(x))
+        'smooth_relu',  # f(x) = x * sigmoid(x)  (SiLU / Swish)
+        'modulo',       # f(x) = x mod 1
     )
+
+    # Relative weight of 'identity' when sampling activations for series
+    # (temporal) nodes.  Other activations each get weight 1.
+    # e.g. 5 → identity is ~5x more likely than any other single activation.
+    series_identity_weight: float = 5.0
 
 
 # ── Dataset-level parameters ──────────────────────────────────────────────────
