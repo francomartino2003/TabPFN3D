@@ -12,7 +12,8 @@
 #
 # Architecture:
 #   - features_per_group=8 (new input encoder Linear(16->192) Xavier init)
-#   - All other weights pretrained, dual-LR optimizer
+#   - Fresh init: encoder + emb_proj + first N_FRESH transformer layers (default 4)
+#   - Pretrained: remaining transformer layers + decoder, dual-LR optimizer
 #   - T padded to multiple of 8
 #   - Structured group embeddings: feature_emb(j) + sinusoidal_PE(group_idx)
 #   - Data limits: T<=1024, m<=10, m*T<=1200
@@ -83,7 +84,8 @@ BATCH="${BATCH:-128}"
 STEPS="${STEPS:-1500}"
 FREEZE="${FREEZE:-0}"
 ENC_LR_MULT="${ENC_LR_MULT:-10.0}"
-echo "RUN_NAME=$RUN_NAME  LR=$LR  LR_MIN=$LR_MIN  WARMUP=$WARMUP  BATCH=$BATCH  STEPS=$STEPS  FREEZE=$FREEZE  ENC_LR_MULT=$ENC_LR_MULT"
+N_FRESH="${N_FRESH:-4}"
+echo "RUN_NAME=$RUN_NAME  LR=$LR  LR_MIN=$LR_MIN  WARMUP=$WARMUP  BATCH=$BATCH  STEPS=$STEPS  FREEZE=$FREEZE  ENC_LR_MULT=$ENC_LR_MULT  N_FRESH=$N_FRESH"
 
 # Run
 if [ "${DEBUG:-0}" == "1" ]; then
@@ -99,6 +101,7 @@ else
         --warmup-steps $WARMUP \
         --freeze-layers $FREEZE \
         --encoder-lr-mult $ENC_LR_MULT \
+        --n-fresh-transformer-layers $N_FRESH \
         --eval-every 1 \
         --run-name $RUN_NAME \
         $RESUME_ARGS

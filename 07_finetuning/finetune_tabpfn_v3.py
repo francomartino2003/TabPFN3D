@@ -1331,7 +1331,9 @@ def main():
     parser.add_argument('--run-name', type=str, default='default',
                         help='Run name (separates checkpoints/logs per experiment)')
     parser.add_argument('--encoder-lr-mult', type=float, default=10.0,
-                        help='LR multiplier for new encoder params (1.0 = same as backbone)')
+                        help='LR multiplier for fresh params (1.0 = same as backbone)')
+    parser.add_argument('--n-fresh-transformer-layers', type=int, default=4,
+                        help='First N transformer layers reinited from scratch (default 4)')
     args = parser.parse_args()
 
     config = FinetuneConfig(
@@ -1342,7 +1344,8 @@ def main():
         eval_every=args.eval_every,
         device=args.device, seed=args.seed,
         run_name=args.run_name,
-        encoder_lr_mult=args.encoder_lr_mult)
+        encoder_lr_mult=args.encoder_lr_mult,
+        n_fresh_transformer_layers=args.n_fresh_transformer_layers)
 
     if args.debug:
         print("DEBUG MODE")
