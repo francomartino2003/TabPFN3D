@@ -105,7 +105,7 @@ AUGMENT_TEMPORAL_PROBS = np.array([0.55, 0.35, 0.10])   # identity / pool / inte
 # Pool type: mean, max, global (global doubles m → mean+max channels)
 AUGMENT_POOL_TYPE_PROBS = np.array([0.4, 0.4, 0.2])     # mean / max / global
 # Probability that a given feature channel gets missing values
-AUGMENT_MISSING_FEATURE_PROB = 0.15
+AUGMENT_MISSING_FEATURE_PROB = 0.05
 
 
 def _safe_log_transform(x: np.ndarray) -> np.ndarray:
