@@ -1335,6 +1335,7 @@ def main():
     parser.add_argument('--n-fresh-transformer-layers', type=int, default=4,
                         help='First N transformer layers reinited from scratch (default 4)')
     args = parser.parse_args()
+    print(f"[ARG] n_fresh_transformer_layers = {args.n_fresh_transformer_layers}")
 
     config = FinetuneConfig(
         n_steps=args.n_steps, batch_size=args.batch_size,

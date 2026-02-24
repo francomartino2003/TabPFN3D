@@ -90,9 +90,11 @@ echo "RUN_NAME=$RUN_NAME  LR=$LR  LR_MIN=$LR_MIN  WARMUP=$WARMUP  BATCH=$BATCH  
 # Run
 if [ "${DEBUG:-0}" == "1" ]; then
     echo "DEBUG MODE"
-    python -u finetune_tabpfn_v3.py --debug --run-name $RUN_NAME --lr $LR $RESUME_ARGS
+    python -u finetune_tabpfn_v3.py --debug --run-name $RUN_NAME --lr $LR \
+        --n-fresh-transformer-layers $N_FRESH $RESUME_ARGS
 else
     echo "Full training..."
+    echo "  [DEBUG] N_FRESH=$N_FRESH -> --n-fresh-transformer-layers $N_FRESH"
     python -u finetune_tabpfn_v3.py \
         --n-steps $STEPS \
         --batch-size $BATCH \
