@@ -100,6 +100,13 @@ AUGMENT_TRANSFORM_CHOICES = ['none', 'log', 'exp', 'squash', 'kdi', 'kuma']
 AUGMENT_TRANSFORM_WEIGHTS = np.array([3.0, 1.0, 1.0, 1.0, 1.0, 1.0])
 AUGMENT_TRANSFORM_WEIGHTS = AUGMENT_TRANSFORM_WEIGHTS / AUGMENT_TRANSFORM_WEIGHTS.sum()
 
+# Temporal granularity: identity (most likely), pooling, interpolation
+AUGMENT_TEMPORAL_PROBS = np.array([0.55, 0.35, 0.10])   # identity / pool / interp
+# Pool type: mean, max, global (global doubles m → mean+max channels)
+AUGMENT_POOL_TYPE_PROBS = np.array([0.4, 0.4, 0.2])     # mean / max / global
+# Probability that a given feature channel gets missing values
+AUGMENT_MISSING_FEATURE_PROB = 0.15
+
 
 def _safe_log_transform(x: np.ndarray) -> np.ndarray:
     """log(|x| + 1) * sign(x) — safe for any real values."""
@@ -200,86 +207,195 @@ def _kuma_feature(X_block: np.ndarray, a: float, b: float) -> np.ndarray:
     return X_block.astype(np.float32)
 
 
-def augment_dataset(data: dict, rng: np.random.RandomState) -> dict:
+def _pool_channels(X_3d: np.ndarray, K: int, S: int,
+                   pool_type: str) -> np.ndarray:
+    """Sliding-window pooling on (n, m, T) → (n, m_out, T_new).
+
+    pool_type: 'mean' or 'max'  → m_out = m
+               'global'         → m_out = 2*m  (mean concat max)
+    """
+    from numpy.lib.stride_tricks import sliding_window_view
+    n, m, T = X_3d.shape
+    # windows: (n, m, T_new, K)
+    windows = sliding_window_view(X_3d, K, axis=2)[:, :, ::S, :]
+    T_new = windows.shape[2]
+    if pool_type == 'mean':
+        return windows.mean(axis=3).astype(np.float32)          # (n, m, T_new)
+    elif pool_type == 'max':
+        return windows.max(axis=3).astype(np.float32)           # (n, m, T_new)
+    else:  # global: mean + max concatenated along m axis
+        mean_ch = windows.mean(axis=3).astype(np.float32)       # (n, m, T_new)
+        max_ch  = windows.max(axis=3).astype(np.float32)        # (n, m, T_new)
+        return np.concatenate([mean_ch, max_ch], axis=1)        # (n, 2m, T_new)
+
+
+def _interp_channels(X_3d: np.ndarray, T_new: int) -> np.ndarray:
+    """Vectorised linear interpolation of (n, m, T) → (n, m, T_new)."""
+    n, m, T = X_3d.shape
+    t_old = np.arange(T, dtype=np.float64)
+    t_new = np.linspace(0, T - 1, T_new)
+    idx_lo = np.floor(t_new).astype(int).clip(0, T - 2)
+    idx_hi = idx_lo + 1
+    frac   = (t_new - idx_lo).astype(np.float32)          # (T_new,)
+    # X_3d[:, :, idx_lo]: (n, m, T_new)
+    out = (X_3d[:, :, idx_lo] * (1.0 - frac)
+           + X_3d[:, :, idx_hi] * frac)
+    return out.astype(np.float32)
+
+
+def _temporal_granularity_transform(
+        X_3d: np.ndarray, m: int, T: int, rng,
+        max_T: int = 1024, max_m: int = 10,
+        max_m_times_T: int = 1200) -> tuple:
+    """Dataset-level temporal granularity transform.
+
+    Returns (X_out, T_new, m_new).  Falls back to identity if constraints
+    would be violated.
+    """
+    mode = rng.choice(['identity', 'pooling', 'interp'], p=AUGMENT_TEMPORAL_PROBS)
+
+    if mode == 'identity':
+        return X_3d, T, m
+
+    if mode == 'pooling':
+        K = int(rng.choice([2, 3, 4, 5]))
+        S = int(rng.randint(1, K + 1))                      # stride ∈ [1, K]
+        T_new = (T - K) // S + 1
+        if T_new < 8:                                        # too short → identity
+            return X_3d, T, m
+
+        pool_type = rng.choice(['mean', 'max', 'global'], p=AUGMENT_POOL_TYPE_PROBS)
+        m_new = 2 * m if pool_type == 'global' else m
+
+        # Constraint check — fall back if violated
+        if m_new > max_m or m_new * T_new > max_m_times_T:
+            if pool_type == 'global':
+                pool_type = rng.choice(['mean', 'max'])
+                m_new = m
+            if m_new * T_new > max_m_times_T:
+                return X_3d, T, m
+
+        X_out = _pool_channels(X_3d, K, S, pool_type)
+        return X_out, T_new, m_new
+
+    else:  # interpolation
+        T_max = min(max_T, max_m_times_T // max(m, 1))
+        if T_max <= T:
+            return X_3d, T, m
+        T_new = int(rng.randint(T + 1, T_max + 1))
+        X_out = _interp_channels(X_3d, T_new)
+        return X_out, T_new, m
+
+
+def _apply_missings(X_3d: np.ndarray, m: int, T: int,
+                    rng, missing_feature_prob: float = AUGMENT_MISSING_FEATURE_PROB
+                    ) -> np.ndarray:
+    """Per-feature independent missing values (NaN), log-uniform missing rate.
+
+    Only the first T columns are candidates for missing; padded zeros are untouched.
+    """
+    X_out = X_3d.copy()
+    n = X_3d.shape[0]
+    for j in range(m):
+        if rng.random() < missing_feature_prob:
+            r = float(np.exp(rng.uniform(np.log(0.01), np.log(0.3))))
+            mask = rng.random(size=(n, T)) < r
+            X_out[:, j, :][mask] = np.nan
+    return X_out
+
+
+def augment_dataset(data: dict, rng: np.random.RandomState,
+                    max_T: int = 1024, max_m: int = 10,
+                    max_m_times_T: int = 1200,
+                    group_size: int = 8) -> dict:
     """Create an augmented copy of a synthetic dataset.
 
-    Augmentations applied:
-    1. Feature channel permutation (permute m channels, keep T order)
-    2. Class label permutation (shuffle class indices)
-    3. Random per-feature-channel transform chosen from:
-       none, log, exp, squash, kdi, kuma
-       Transforms are applied consistently to the entire dataset
-       (train+test concatenated, then split back).
+    Pipeline (all applied to train+test concatenated):
+      1. Feature channel permutation
+      2. Class label permutation
+      3. Per-feature-channel value transform (none/log/exp/squash/kdi/kuma)
+         [accidental NaN/Inf sanitised here]
+      4. Temporal granularity transform — dataset-level:
+           identity (55%) | pooling mean/max/global (35%) | interpolation (10%)
+      5. Per-feature independent missing values (NaN, low probability)
+      6. Re-pad T to multiple of group_size
     """
     m = data['n_features_orig']
     T = data['T']
     n_classes = data['n_classes']
     n_tr = data['X_train'].shape[0]
 
-    # Concatenate train+test for consistent transforms
-    X_all = np.concatenate([data['X_train'], data['X_test']], axis=0).copy()
+    # Work in 3D: (n, m, T)
+    X_all_3d = np.concatenate([
+        data['X_train'].reshape(-1, m, T),
+        data['X_test'].reshape(-1, m, T),
+    ], axis=0).copy()                                       # (n, m, T)
+    n_all = X_all_3d.shape[0]
     y_train = data['y_train'].copy()
-    y_test = data['y_test'].copy()
+    y_test  = data['y_test'].copy()
 
-    # 1. Feature channel permutation
-    n_all = X_all.shape[0]
+    # ── 1. Feature channel permutation ───────────────────────────────────
     feat_perm = rng.permutation(m)
-    X_all = X_all.reshape(n_all, m, T)[:, feat_perm, :].reshape(n_all, m * T)
+    X_all_3d = X_all_3d[:, feat_perm, :]
 
-    # 2. Class label permutation
+    # ── 2. Class label permutation ────────────────────────────────────────
     class_perm = rng.permutation(n_classes)
     y_train = class_perm[y_train]
-    y_test = class_perm[y_test]
+    y_test  = class_perm[y_test]
 
-    # 3. Random per-feature-channel transform
+    # ── 3. Per-feature-channel value transform ────────────────────────────
+    X_all = X_all_3d.reshape(n_all, m * T)   # flatten for col-slice access
     for j in range(m):
         col_s = j * T
         col_e = j * T + T
-        transform = rng.choice(AUGMENT_TRANSFORM_CHOICES,
-                               p=AUGMENT_TRANSFORM_WEIGHTS)
-
+        transform = rng.choice(AUGMENT_TRANSFORM_CHOICES, p=AUGMENT_TRANSFORM_WEIGHTS)
         if transform == 'none':
             continue
-
         elif transform == 'log':
             X_all[:, col_s:col_e] = _safe_log_transform(X_all[:, col_s:col_e])
-
         elif transform == 'exp':
             X_all[:, col_s:col_e] = _safe_exp_transform(X_all[:, col_s:col_e])
-
         elif transform == 'squash':
             X_all[:, col_s:col_e] = _squash_feature(X_all[:, col_s:col_e])
-
         elif transform == 'kdi':
-            # alpha ~ LogNormal(0, 0.8²), clipped to [0.05, 10]
-            alpha = float(np.clip(np.exp(rng.randn() * 0.8), 0.05, 10.0))
+            alpha      = float(np.clip(np.exp(rng.randn() * 0.8), 0.05, 10.0))
             output_dist = rng.choice(['normal', 'uniform'])
-            X_all[:, col_s:col_e] = _kdi_feature(
-                X_all[:, col_s:col_e], alpha, output_dist)
-
+            X_all[:, col_s:col_e] = _kdi_feature(X_all[:, col_s:col_e], alpha, output_dist)
         elif transform == 'kuma':
-            # log(a), log(b) ~ N(0, 0.7²), clipped to [0.2, 5]
             a = float(np.clip(np.exp(rng.randn() * 0.7), 0.2, 5.0))
             b = float(np.clip(np.exp(rng.randn() * 0.7), 0.2, 5.0))
-            X_all[:, col_s:col_e] = _kuma_feature(
-                X_all[:, col_s:col_e], a, b)
+            X_all[:, col_s:col_e] = _kuma_feature(X_all[:, col_s:col_e], a, b)
 
-    # Sanitise after transforms
+    # Sanitise accidental NaN/Inf from value transforms (before adding intentional NaN)
     X_all = np.nan_to_num(X_all, nan=0.0, posinf=1e6, neginf=-1e6)
     X_all = np.clip(X_all, -1e6, 1e6).astype(np.float32)
+    X_all_3d = X_all.reshape(n_all, m, T)
 
-    # Split back into train and test
+    # ── 4. Temporal granularity transform (dataset-level) ─────────────────
+    X_all_3d, T_new, m_new = _temporal_granularity_transform(
+        X_all_3d, m, T, rng,
+        max_T=max_T, max_m=max_m, max_m_times_T=max_m_times_T)
+
+    # ── 5. Missing values (intentional NaN, per-feature) ──────────────────
+    X_all_3d = _apply_missings(X_all_3d, m_new, T_new, rng)
+
+    # ── 6. Re-pad T_new to multiple of group_size ─────────────────────────
+    X_all_flat = X_all_3d.reshape(n_all, m_new * T_new)
+    X_all_flat, T_new_padded = pad_to_group(
+        X_all_flat, m_new, T_new, group_size=group_size)
+    # pad_to_group replaces NaN padding with zeros (only at the new boundary)
+
     return {
-        'X_train': X_all[:n_tr],
-        'X_test': X_all[n_tr:],
-        'y_train': y_train.astype(np.int64),
-        'y_test': y_test.astype(np.int64),
-        'n_classes': n_classes,
-        'n_features': data['n_features'],
-        'n_features_orig': m,
-        'T': T,
-        'n_samples': data['n_samples'],
-        '_augmented': True,
+        'X_train':        X_all_flat[:n_tr],
+        'X_test':         X_all_flat[n_tr:],
+        'y_train':        y_train.astype(np.int64),
+        'y_test':         y_test.astype(np.int64),
+        'n_classes':      n_classes,
+        'n_features':     X_all_flat.shape[1],  # m_new * T_new_padded
+        'n_features_orig': m_new,
+        'T':              T_new_padded,
+        'n_samples':      data['n_samples'],
+        '_augmented':     True,
     }
 
 
@@ -1121,7 +1237,11 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
         for orig in originals_eval:
             for _ in range(3):
                 try:
-                    eval_batch.append(augment_dataset(orig, synth_eval_rng))
+                    eval_batch.append(augment_dataset(
+                        orig, synth_eval_rng,
+                        max_T=config.max_T, max_m=config.max_m,
+                        max_m_times_T=config.max_m_times_T,
+                        group_size=config.group_size))
                 except Exception:
                     eval_batch.append(orig)
         synth_eval_batches.append(eval_batch)
@@ -1208,7 +1328,11 @@ def train(config: FinetuneConfig, resume_from: Optional[str] = None):
         for orig in originals:
             for _ in range(3):
                 try:
-                    batch.append(augment_dataset(orig, aug_rng))
+                    batch.append(augment_dataset(
+                        orig, aug_rng,
+                        max_T=config.max_T, max_m=config.max_m,
+                        max_m_times_T=config.max_m_times_T,
+                        group_size=config.group_size))
                 except Exception:
                     batch.append(orig)  # fallback: use original if augment fails
 
