@@ -187,6 +187,14 @@ class DatasetGenerator:
         self.n_samples = int(self.rng.integers(hp_d.min_samples,
                                                 hp_d.max_samples + 1))
 
+        # Variable-length series: sample u_std once per dataset
+        if self.rng.random() < hp_d.variable_length_prob:
+            lo, hi = hp_d.variable_length_u_std_frac_range
+            frac = float(np.exp(self.rng.uniform(np.log(lo), np.log(hi))))
+            self.u_std = frac * self.T
+        else:
+            self.u_std = 0.0  # fixed-length dataset
+
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _log_uniform_int(self, lo: int, hi: int) -> int:
@@ -523,10 +531,21 @@ class DatasetGenerator:
 
         n_propagate = min(self.n_samples * 3, 3000)
         vals, disc = self.propagate(n_propagate)
-        X = np.stack([vals[fid] for fid in feat_ids], axis=1)
+        X = np.stack([vals[fid] for fid in feat_ids], axis=1)  # (n, m, T)
         y = disc[target_id].astype(int)
 
         hp_d = self.hp.dataset
+
+        # Variable-length: per-observation u_i ~ |N(0, u_std)|, zero-pad last u_i steps
+        if self.u_std > 0.0:
+            u_raw = np.abs(self.rng.normal(0.0, self.u_std, size=(n_propagate,)))
+            u_int = np.round(u_raw).astype(int)
+            max_u = max(0, self.T - hp_d.variable_length_min_t)
+            u_int = np.clip(u_int, 0, max_u)
+            for i, u in enumerate(u_int):
+                if u > 0:
+                    X[i, :, self.T - u:] = 0.0
+
         if hp_d.warping_prob > 0 and self.rng.random() < hp_d.warping_prob:
             j = self.rng.integers(0, self.n_features)
             a = float(self.rng.uniform(*hp_d.kumaraswamy_a_range))
@@ -587,9 +606,11 @@ class DatasetGenerator:
     # ── Summary ──────────────────────────────────────────────────────────
 
     def summary(self) -> str:
+        var_len_str = (f'  var_len=True(u_std={self.u_std:.1f})'
+                       if self.u_std > 0 else '  var_len=False')
         lines = [
             f'seed={self.seed}  n_samples={self.n_samples}  T={self.T}  '
-            f'n_features={self.n_features}  n_classes={self.n_classes}',
+            f'n_features={self.n_features}  n_classes={self.n_classes}{var_len_str}',
             self.dag.summary(),
             'Node operations:',
         ]
