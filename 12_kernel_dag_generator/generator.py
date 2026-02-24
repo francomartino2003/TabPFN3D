@@ -117,12 +117,16 @@ def sample_gp(K: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
 # ── Batch Conv1D ──────────────────────────────────────────────────────────────
 
 def batch_conv1d(x: np.ndarray, kernel: np.ndarray, bias: float,
-                 dilation: int = 1, padding: str = 'left') -> np.ndarray:
+                 dilation: int = 1, padding: str = 'left',
+                 pre_pad: bool = True, pad_mode: str = 'constant') -> np.ndarray:
     """
     Conv1D: (N, C_in, T) → (N, 1, T) preserving length.
 
-    kernel: (C_in, K) — note: single output channel
-    padding: 'left' (causal) or 'center'
+    kernel   : (C_in, K) — single output channel
+    padding  : 'left' (causal) or 'center'
+    pre_pad  : True  → pad input BEFORE conv (default, boundary effects distributed)
+               False → valid conv (no pre-padding), then pad output to restore T
+    pad_mode : 'constant' (zeros) or 'edge' (replicate edge value)
     """
     C_in, K = kernel.shape
     N, _, T = x.shape
@@ -130,22 +134,62 @@ def batch_conv1d(x: np.ndarray, kernel: np.ndarray, bias: float,
 
     if padding == 'left':
         pad_left, pad_right = pad_len, 0
-        offsets = [-k * dilation for k in range(K)]
     else:  # center
-        pad_left = ((K - 1) // 2) * dilation
+        pad_left  = ((K - 1) // 2) * dilation
         pad_right = pad_len - pad_left
-        offsets = [-pad_left + k * dilation for k in range(K)]
 
-    x_padded = np.pad(x, ((0, 0), (0, 0), (pad_left, pad_right)),
-                       mode='constant')
+    # K=1 has no receptive field beyond t=0 — treat as pre-pad (trivially same)
+    T_valid = T - pad_len
+    if K == 1 or T_valid <= 0:
+        pre_pad = True  # fallback: valid range too small
 
     y = np.zeros((N, 1, T))
-    for t in range(T):
-        t_p = t + pad_left
-        indices = [t_p + off for off in offsets]
-        x_slice = x_padded[:, :, indices]  # (N, C_in, K)
-        # sum over C_in and K: kernel[c, k] * x[n, c, k]
-        y[:, 0, t] = np.einsum('nck,ck->n', x_slice, kernel) + bias
+
+    if pre_pad:
+        # ── Pre-padding: pad input, then convolve at all T positions ──────
+        x_padded = np.pad(x, ((0, 0), (0, 0), (pad_left, pad_right)),
+                          mode=pad_mode)
+        if padding == 'left':
+            offsets = [-k * dilation for k in range(K)]
+        else:
+            offsets = [-pad_left + k * dilation for k in range(K)]
+
+        for t in range(T):
+            t_p      = t + pad_left
+            indices  = [t_p + off for off in offsets]
+            x_slice  = x_padded[:, :, indices]          # (N, C_in, K)
+            y[:, 0, t] = np.einsum('nck,ck->n', x_slice, kernel) + bias
+
+    else:
+        # ── Post-padding: valid conv (T_valid outputs), then pad to T ────
+        # Causal  valid: output[t_v] = conv(x[t_v + pad_len - k*d], k=0..K-1)
+        #   → uses x[t_v], x[t_v+d], ..., x[t_v+pad_len]  (same values, kernel reversed)
+        # Centered valid: output[t_v] = conv(x[t_v + k*d], k=0..K-1)
+        #   → uses x[t_v], x[t_v+d], ..., x[t_v+pad_len]
+        # In both cases the gathered positions are [t_v + k*d for k in range(K)];
+        # only the kernel weight order differs (causal: kernel is applied as-is
+        # to the reversed-time slice; centered: straight order).
+        valid_out = np.zeros((N, 1, T_valid))
+
+        if padding == 'left':
+            # Causal: position t (original) = t_v + pad_len
+            # x gathered: x[t_v+pad_len - k*d] = x[t_v+pad_len], x[t_v+pad_len-d], ..., x[t_v]
+            for t_v in range(T_valid):
+                indices = [t_v + pad_len - k * dilation for k in range(K)]
+                x_slice = x[:, :, indices]              # (N, C_in, K)
+                valid_out[:, 0, t_v] = np.einsum('nck,ck->n', x_slice, kernel) + bias
+        else:
+            # Centered: position t (original) = t_v + pad_left
+            # x gathered: x[t_v + k*d] for k=0..K-1
+            for t_v in range(T_valid):
+                indices = [t_v + k * dilation for k in range(K)]
+                x_slice = x[:, :, indices]              # (N, C_in, K)
+                valid_out[:, 0, t_v] = np.einsum('nck,ck->n', x_slice, kernel) + bias
+
+        # Post-pad to restore T (pad_left on left, pad_right on right)
+        y = np.pad(valid_out, ((0, 0), (0, 0), (pad_left, pad_right)),
+                   mode=pad_mode)
+
     return y
 
 
@@ -194,6 +238,10 @@ class DatasetGenerator:
             self.u_std = frac * self.T
         else:
             self.u_std = 0.0  # fixed-length dataset
+
+        # Conv padding strategy (dataset-level flags)
+        self.no_pre_padding = self.rng.random() < hp_d.no_pre_padding_prob
+        self.edge_padding   = self.rng.random() < hp_d.edge_padding_prob
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -441,10 +489,12 @@ class DatasetGenerator:
             elif ops['kind'] == 'root_series':
                 root_vals = sample_gp(ops['cov_matrix'], n, self.rng)  # (n, T)
                 if lengths is not None:
-                    # Zero-pad each observation beyond its effective length
                     for i, Li in enumerate(lengths):
                         if Li < T:
-                            root_vals[i, Li:] = 0.0
+                            if self.edge_padding and Li > 0:
+                                root_vals[i, Li:] = root_vals[i, Li - 1]
+                            else:
+                                root_vals[i, Li:] = 0.0
                 vals[nid] = root_vals
             else:  # root_tabular
                 if ops['init'] == 'normal':
@@ -526,8 +576,10 @@ class DatasetGenerator:
 
         x = np.stack(channels, axis=1)  # (n, c_in, T)
 
+        pad_mode = 'edge' if self.edge_padding else 'constant'
         x = batch_conv1d(x, ops['kernel'], ops['bias'],
-                          ops['dilation'], ops['padding'])
+                         ops['dilation'], ops['padding'],
+                         pre_pad=not self.no_pre_padding, pad_mode=pad_mode)
         x = apply_activation(x, ops['act'])
 
         out = x[:, 0, :]  # (n, T)
@@ -620,9 +672,12 @@ class DatasetGenerator:
     def summary(self) -> str:
         var_len_str = (f'  var_len=True(u_std={self.u_std:.1f})'
                        if self.u_std > 0 else '  var_len=False')
+        pad_str = ('post' if self.no_pre_padding else 'pre') + '-pad'
+        pad_str += '+edge' if self.edge_padding else '+zero'
         lines = [
             f'seed={self.seed}  n_samples={self.n_samples}  T={self.T}  '
-            f'n_features={self.n_features}  n_classes={self.n_classes}{var_len_str}',
+            f'n_features={self.n_features}  n_classes={self.n_classes}'
+            f'{var_len_str}  conv={pad_str}',
             self.dag.summary(),
             'Node operations:',
         ]

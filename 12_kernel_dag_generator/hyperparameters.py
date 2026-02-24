@@ -179,9 +179,21 @@ class DatasetHyperparameters:
     # timesteps and zero-padded to T before propagation.
     # u_std is sampled once per dataset (log-uniform, favors small values).
     # u_i ~ |N(0, u_std)| per observation, clipped to [0, T-1].
-    variable_length_prob: float = 0.2
+    variable_length_prob: float = 0.05
     # u_std = u_std_frac * T;  frac sampled log-uniform from this range
     variable_length_u_std_frac_range: Tuple[float, float] = (0.01, 0.3)
+
+    # ── Convolution padding mode ──
+    # With this probability, series internal nodes use POST-padding (valid conv):
+    #   apply Conv1D without padding (shorter output), then pad to restore T.
+    #   Causal → pad left;  centered → pad symmetrically.
+    # Otherwise (default): PRE-padding — pad input before conv, output is always T.
+    no_pre_padding_prob: float = 0.1
+
+    # With this probability the padding value is the EDGE of the signal
+    # (replicate last/first valid sample) instead of zero.
+    # Applies to: root variable-length padding, conv pre/post padding.
+    edge_padding_prob: float = 0.1
 
 
 # ── Collected defaults ─────────────────────────────────────────────────────────
