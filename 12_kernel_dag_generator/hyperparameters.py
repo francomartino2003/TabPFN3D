@@ -175,14 +175,13 @@ class DatasetHyperparameters:
     kumaraswamy_b_range: Tuple[float, float] = (1.5, 5.0)
 
     # ── Variable-length series ──
-    # With this probability, observations have varying lengths:
-    #   u_i ~ |N(0, u_std)| in timesteps,  T_i = T - u_i  (padded with zeros)
-    # u_std is sampled once per dataset as a fraction of T (log-uniform, favors small)
+    # With this probability, root series nodes are sampled with T_i = T - u_i
+    # timesteps and zero-padded to T before propagation.
+    # u_std is sampled once per dataset (log-uniform, favors small values).
+    # u_i ~ |N(0, u_std)| per observation, clipped to [0, T-1].
     variable_length_prob: float = 0.2
     # u_std = u_std_frac * T;  frac sampled log-uniform from this range
     variable_length_u_std_frac_range: Tuple[float, float] = (0.01, 0.3)
-    # Minimum effective length T_i (in timesteps) — prevents all-zero series
-    variable_length_min_t: int = 4
 
 
 # ── Collected defaults ─────────────────────────────────────────────────────────

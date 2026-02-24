@@ -418,7 +418,14 @@ class DatasetGenerator:
 
     # ── Propagation ──────────────────────────────────────────────────────
 
-    def propagate(self, n: int):
+    def propagate(self, n: int, lengths: np.ndarray | None = None):
+        """Propagate n observations through the DAG.
+
+        lengths: optional int array of shape (n,) with per-observation effective
+                 length T_i = T - u_i.  Root series nodes are zero-padded at
+                 positions [T_i:T] before propagation, so all downstream nodes
+                 naturally operate on the padded signal.
+        """
         T = self.T
         vals: Dict[int, np.ndarray] = {}
         disc: Dict[int, np.ndarray] = {}
@@ -432,7 +439,13 @@ class DatasetGenerator:
                 vals[nid] = ops['class_values'][idx]
                 disc[nid] = idx
             elif ops['kind'] == 'root_series':
-                vals[nid] = sample_gp(ops['cov_matrix'], n, self.rng)
+                root_vals = sample_gp(ops['cov_matrix'], n, self.rng)  # (n, T)
+                if lengths is not None:
+                    # Zero-pad each observation beyond its effective length
+                    for i, Li in enumerate(lengths):
+                        if Li < T:
+                            root_vals[i, Li:] = 0.0
+                vals[nid] = root_vals
             else:  # root_tabular
                 if ops['init'] == 'normal':
                     vals[nid] = self.rng.normal(0, ops['std'], (n,))
@@ -530,21 +543,20 @@ class DatasetGenerator:
         target_id = self.dag.target_node.id
 
         n_propagate = min(self.n_samples * 3, 3000)
-        vals, disc = self.propagate(n_propagate)
+
+        # Variable-length: sample per-observation lengths before propagation
+        if self.u_std > 0.0:
+            u_raw = np.abs(self.rng.normal(0.0, self.u_std, size=(n_propagate,)))
+            u_int = np.clip(np.round(u_raw).astype(int), 0, self.T - 1)
+            lengths = self.T - u_int  # T_i = T - u_i, each >= 1
+        else:
+            lengths = None
+
+        vals, disc = self.propagate(n_propagate, lengths=lengths)
         X = np.stack([vals[fid] for fid in feat_ids], axis=1)  # (n, m, T)
         y = disc[target_id].astype(int)
 
         hp_d = self.hp.dataset
-
-        # Variable-length: per-observation u_i ~ |N(0, u_std)|, zero-pad last u_i steps
-        if self.u_std > 0.0:
-            u_raw = np.abs(self.rng.normal(0.0, self.u_std, size=(n_propagate,)))
-            u_int = np.round(u_raw).astype(int)
-            max_u = max(0, self.T - hp_d.variable_length_min_t)
-            u_int = np.clip(u_int, 0, max_u)
-            for i, u in enumerate(u_int):
-                if u > 0:
-                    X[i, :, self.T - u:] = 0.0
 
         if hp_d.warping_prob > 0 and self.rng.random() < hp_d.warping_prob:
             j = self.rng.integers(0, self.n_features)
