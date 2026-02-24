@@ -239,9 +239,11 @@ class DatasetGenerator:
         else:
             self.u_std = 0.0  # fixed-length dataset
 
-        # Conv padding strategy (dataset-level flags)
-        self.no_pre_padding = self.rng.random() < hp_d.no_pre_padding_prob
-        self.edge_padding   = self.rng.random() < hp_d.edge_padding_prob
+        # Conv padding strategy (dataset-level flags — shared by ALL series nodes)
+        hp_p = self.hp.propagation
+        self.causal_padding  = self.rng.random() < hp_p.conv_padding_causal_prob
+        self.no_pre_padding  = self.rng.random() < hp_d.no_pre_padding_prob
+        self.edge_padding    = self.rng.random() < hp_d.edge_padding_prob
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -447,8 +449,8 @@ class DatasetGenerator:
         # Bias ~ U(-1, 1)
         bias = float(self.rng.uniform(-1, 1))
 
-        # Padding: causal (left) or centered — Bernoulli
-        padding = 'left' if self.rng.random() < hp_p.conv_padding_causal_prob else 'center'
+        # Padding: dataset-level causal/centered flag
+        padding = 'left' if self.causal_padding else 'center'
 
         # Activation — identity heavily favored for temporal nodes
         act = self._sample_series_activation()
@@ -672,7 +674,8 @@ class DatasetGenerator:
     def summary(self) -> str:
         var_len_str = (f'  var_len=True(u_std={self.u_std:.1f})'
                        if self.u_std > 0 else '  var_len=False')
-        pad_str = ('post' if self.no_pre_padding else 'pre') + '-pad'
+        pad_str  = 'causal' if self.causal_padding else 'centered'
+        pad_str += '+post' if self.no_pre_padding else '+pre'
         pad_str += '+edge' if self.edge_padding else '+zero'
         lines = [
             f'seed={self.seed}  n_samples={self.n_samples}  T={self.T}  '
