@@ -111,7 +111,7 @@ class PropagationHyperparameters:
     # A = log2((T-1)/(K-1)) computed at runtime; this is just a hard cap
     conv_max_dilation_exp: float = 10.0
 
-    # Padding: 'left' (causal) or 'center' — sampled Bernoulli(0.5) per node
+    # Padding: 'left' (causal) or 'center' — sampled Bernoulli(0.5) per dataset
     conv_padding_causal_prob: float = 0.5
 
     # Per-node noise probability: sampled log-uniform (favors small/no noise)

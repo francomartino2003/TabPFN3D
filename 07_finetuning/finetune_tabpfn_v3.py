@@ -97,15 +97,15 @@ SOFTMAX_TEMPERATURE = 0.9
 
 AUGMENT_TRANSFORM_CHOICES = ['none', 'log', 'exp', 'squash', 'kdi', 'kuma']
 # Weights: give 'none' higher weight so ~1/3 of features stay untouched
-AUGMENT_TRANSFORM_WEIGHTS = np.array([3.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+AUGMENT_TRANSFORM_WEIGHTS = np.array([5.0, 1.0, 1.0, 1.0, 1.0, 1.0])
 AUGMENT_TRANSFORM_WEIGHTS = AUGMENT_TRANSFORM_WEIGHTS / AUGMENT_TRANSFORM_WEIGHTS.sum()
 
 # Temporal granularity: identity (most likely), pooling, interpolation
-AUGMENT_TEMPORAL_PROBS = np.array([0.55, 0.35, 0.10])   # identity / pool / interp
+AUGMENT_TEMPORAL_PROBS = np.array([0.75, 0.25, 0.10])   # identity / pool / interp
 # Pool type: mean, max, global (global doubles m → mean+max channels)
-AUGMENT_POOL_TYPE_PROBS = np.array([0.4, 0.4, 0.2])     # mean / max / global
+AUGMENT_POOL_TYPE_PROBS = np.array([0.6, 0.2, 0.2])     # mean / max / global
 # Probability that a given feature channel gets missing values
-AUGMENT_MISSING_FEATURE_PROB = 0.05
+AUGMENT_MISSING_FEATURE_PROB = 0.01
 
 
 def _safe_log_transform(x: np.ndarray) -> np.ndarray:
@@ -380,7 +380,7 @@ def augment_dataset(data: dict, rng: np.random.RandomState,
     X_all_3d = _apply_missings(X_all_3d, m_new, T_new, rng)
 
     # ── 6. Re-pad T_new to multiple of group_size (left or right) ────────
-    # With prob 0.3 the padding zeros go at the BEGINNING (left); default right.
+    # With prob 0.1 the padding zeros go at the BEGINNING (left); default right.
     remainder = T_new % group_size
     if remainder == 0:
         T_new_padded = T_new
@@ -388,7 +388,7 @@ def augment_dataset(data: dict, rng: np.random.RandomState,
     else:
         pad_t = group_size - remainder
         T_new_padded = T_new + pad_t
-        pad_left_side = rng.random() < 0.3   # dataset-level coin flip
+        pad_left_side = rng.random() < 0.1   # dataset-level coin flip
         pad_before = pad_t if pad_left_side else 0
         pad_after  = 0     if pad_left_side else pad_t
         X_all_3d_padded = np.pad(

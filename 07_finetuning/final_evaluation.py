@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / '00_TabPFN' / 'src'))
 
 from tabpfn import TabPFNClassifier
 from tabpfn_temporal import build_temporal_tabpfn_fpg8, set_temporal_info, pad_to_group
+from build_scratch_model import build_tabpfn_from_scratch
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Constants (same as evaluate_v3_with_ensemble.py)
@@ -55,7 +56,7 @@ MAX_M = 10
 MAX_M_TIMES_T = 1200
 MAX_CLASSES = 10
 GROUP_SIZE = 8
-N_ENSEMBLE_ITERS = 4
+N_ENSEMBLE_ITERS = 1
 ENSEMBLE_SEED = 42
 SOFTMAX_TEMPERATURE = 0.9
 
@@ -197,7 +198,7 @@ def evaluate_ensemble(model, X_train, y_train, X_test, n_classes, m, T, device,
             class_perm = rng.permutation(n_classes)
             y_train_perm = class_perm[y_train]
 
-            if it % 2 == 0:
+            if it % 2 == 1:
                 X_tr_proc, X_te_proc = temporal_squashing_scaler(
                     X_tr_perm, X_te_perm, m, T)
             else:
@@ -262,7 +263,7 @@ def load_aeon_benchmarks_acc():
 # TEST 1: TabPFN standard (B) vs V3 finetuned ensemble (D)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run_test1(datasets, ft_model, device, output_dir):
+def run_test1(datasets, ft_model, device, output_dir, n_ensemble=N_ENSEMBLE_ITERS):
     print("\n" + "=" * 80)
     print("TEST 1: TabPFN standard (B) vs V3 finetuned ensemble (D)")
     print("=" * 80)
@@ -298,7 +299,7 @@ def run_test1(datasets, ft_model, device, output_dir):
             with torch.no_grad():
                 proba_d = evaluate_ensemble(
                     ft_model, ds['X_train'], ds['y_train'], ds['X_test'],
-                    nc, m, T, device)
+                    nc, m, T, device, n_iters=n_ensemble)
             if proba_d is not None:
                 acc_d, auc_d = compute_metrics(ds['y_test'], proba_d, nc)
                 res['D_acc'], res['D_auc'] = acc_d, auc_d
@@ -798,13 +799,30 @@ def main():
     datasets = load_real_datasets()
     print(f"  {len(datasets)} datasets meet constraints")
 
-    # ── Build model ──
-    print("\nBuilding temporal TabPFN (fpg=8) + loading checkpoint...")
-    ft_model, ft_clf, _ = build_temporal_tabpfn_fpg8(device=device)
+    # ── Load checkpoint & auto-detect architecture ──
+    print("\nLoading checkpoint...")
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    version = ckpt.get('version', 'unknown')
+    is_scratch = (version == 'scratch_v1')
+
+    if is_scratch:
+        # Detect nlayers from state_dict key indices
+        layer_indices = set()
+        for k in ckpt['model_state_dict']:
+            m = re.match(r'transformer_encoder\.layers\.(\d+)\.', k)
+            if m:
+                layer_indices.add(int(m.group(1)))
+        nlayers = max(layer_indices) + 1 if layer_indices else 12
+        print(f"  Detected scratch model: nlayers={nlayers}, version={version}")
+        ft_model, ft_clf, _ = build_tabpfn_from_scratch(nlayers=nlayers, device=device)
+    else:
+        print(f"  Detected pretrained model: version={version}")
+        print("  Building temporal TabPFN (fpg=8)...")
+        ft_model, ft_clf, _ = build_temporal_tabpfn_fpg8(device=device)
+
     ft_model.load_state_dict(ckpt['model_state_dict'])
     ft_model.eval()
-    print(f"  Step: {ckpt.get('step', '?')}, version: {ckpt.get('version', '?')}")
+    print(f"  Step: {ckpt.get('step', '?')}, version: {version}")
 
     # ══════════════════════════════════════════════════════════════════════
     # TEST 1
@@ -814,7 +832,8 @@ def main():
         print(f"\n  Skipping Test 1 — loading from {test1_csv}")
         test1_df = pd.read_csv(test1_csv)
     else:
-        test1_df = run_test1(datasets, ft_model, device, output_dir)
+        test1_df = run_test1(datasets, ft_model, device, output_dir,
+                             n_ensemble=args.n_ensemble)
 
     # ══════════════════════════════════════════════════════════════════════
     # TEST 2
