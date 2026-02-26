@@ -16,6 +16,10 @@
 # Usage:
 #   sbatch train_scratch_v1.sbatch
 #   sbatch --export=ALL,RUN_NAME=exp1,NLAYERS=12,LR=3e-4 train_scratch_v1.sbatch
+#
+# Resume from last checkpoint (trainer restores model + optimizer + scheduler):
+#   sbatch --export=ALL,RUN_NAME=exp1,NLAYERS=12,LR=2e-4,WARMUP=1000,BATCH=92,STEPS=1000000,\
+#          RESUME=07_finetuning/checkpoints_scratch/exp1/last.pt train_scratch_v1.sbatch
 
 set -e
 
@@ -57,6 +61,7 @@ N_STEPS="${N_STEPS:-4000}"
 GRAD_CLIP="${GRAD_CLIP:-1.0}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-60}"
+RESUME="${RESUME:-}"
 
 BATCH_DIR="scratch_batches/$RUN_NAME"
 CKPT_DIR="07_finetuning/checkpoints_scratch/$RUN_NAME"
@@ -65,6 +70,7 @@ LOG_DIR="07_finetuning/logs_scratch/$RUN_NAME"
 echo "RUN_NAME=$RUN_NAME  NLAYERS=$NLAYERS  LR=$LR  BATCH=$BATCH"
 echo "MAX_DATASETS=$MAX_DATASETS  N_STEPS=$N_STEPS"
 echo "BATCH_DIR=$BATCH_DIR  CKPT_DIR=$CKPT_DIR  LOG_DIR=$LOG_DIR"
+echo "RESUME=${RESUME:-(none)}"
 echo ""
 
 mkdir -p "$BATCH_DIR" "$CKPT_DIR" "$LOG_DIR"
@@ -97,6 +103,7 @@ CUDA_VISIBLE_DEVICES=1 python -u 07_finetuning/worker_trainer.py \
     --weight-decay $WEIGHT_DECAY \
     --grad-clip $GRAD_CLIP \
     --group-size 8 \
+    ${RESUME:+--resume "$RESUME"} \
     > "$LOG_DIR/trainer.log" 2>&1 &
 PID_TRAIN=$!
 echo "  Trainer PID=$PID_TRAIN"
