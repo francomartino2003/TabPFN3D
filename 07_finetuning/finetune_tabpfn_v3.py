@@ -379,8 +379,7 @@ def augment_dataset(data: dict, rng: np.random.RandomState,
     # ── 5. Missing values (intentional NaN, per-feature) ──────────────────
     X_all_3d = _apply_missings(X_all_3d, m_new, T_new, rng)
 
-    # ── 6. Re-pad T_new to multiple of group_size (left or right) ────────
-    # With prob 0.1 the padding zeros go at the BEGINNING (left); default right.
+    # ── 6. Re-pad T_new to multiple of group_size (always right-pad) ─────
     remainder = T_new % group_size
     if remainder == 0:
         T_new_padded = T_new
@@ -388,12 +387,9 @@ def augment_dataset(data: dict, rng: np.random.RandomState,
     else:
         pad_t = group_size - remainder
         T_new_padded = T_new + pad_t
-        pad_left_side = rng.random() < 0.1   # dataset-level coin flip
-        pad_before = pad_t if pad_left_side else 0
-        pad_after  = 0     if pad_left_side else pad_t
         X_all_3d_padded = np.pad(
             X_all_3d,
-            ((0, 0), (0, 0), (pad_before, pad_after)),
+            ((0, 0), (0, 0), (0, pad_t)),
             mode='constant', constant_values=0.0)
         X_all_flat = X_all_3d_padded.reshape(n_all, m_new * T_new_padded).astype(np.float32)
 
