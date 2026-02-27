@@ -180,9 +180,19 @@ def build_overlap_model(device="auto"):
     model.encoder = new_encoder
     print(f"  [fresh] encoder: Linear({WINDOW * 2}→{emsize}) Xavier")
 
-    # ── 3. Reinit embedding projection ──
+    # ── 3. Reinit feature embedding projection ──
     _reinit_module(model.feature_positional_embedding_embeddings)
     print(f"  [fresh] feature_positional_embedding_embeddings: Xavier")
+
+    # ── 3b. Reinit y_encoder linear projection (label embedding) ──
+    from tabpfn.architectures.base.encoders import LinearInputEncoderStep
+    for step in model.y_encoder:
+        if isinstance(step, LinearInputEncoderStep):
+            nn.init.xavier_uniform_(step.layer.weight)
+            if step.layer.bias is not None:
+                nn.init.zeros_(step.layer.bias)
+            print(f"  [fresh] y_encoder LinearInputEncoderStep "
+                  f"({step.layer.in_features}→{step.layer.out_features}): Xavier")
 
     # ── 4. Create 1 new PerFeatureEncoderLayer ──
     layer_config = ModelConfig(
@@ -224,6 +234,7 @@ def build_overlap_model(device="auto"):
     fresh_modules = [
         model.encoder,
         model.feature_positional_embedding_embeddings,
+        model.y_encoder,
         new_layer,
     ]
     fresh_ids = set()
