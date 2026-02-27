@@ -195,6 +195,16 @@ class DatasetHyperparameters:
     # Applies to: root variable-length padding, conv pre/post padding.
     edge_padding_prob: float = 0.1
 
+    # ── Predictive truncation ──
+    # With this probability, the last u timesteps are removed from X AFTER
+    # propagation, yielding shape (n, m, T-u) instead of (n, m, T).
+    # y is computed from the full T propagation, so labels can depend on the
+    # unobserved future — simulating event prediction / forecasting tasks.
+    # u = round(frac * T), frac sampled log-uniform (favors small truncations).
+    predictive_prob: float = 0.15
+    # Fraction of T to cut: log-uniform in [lo, hi]
+    predictive_u_frac_range: Tuple[float, float] = (0.05, 0.5)
+
 
 # ── Collected defaults ─────────────────────────────────────────────────────────
 

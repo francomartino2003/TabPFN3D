@@ -612,6 +612,17 @@ class DatasetGenerator:
 
         hp_d = self.hp.dataset
 
+        # ── Predictive truncation ──────────────────────────────────────────
+        # y was computed from the full T — now clip X to T_obs < T so that
+        # labels may depend on timesteps the model never sees.
+        T_obs = self.T
+        if self.rng.random() < hp_d.predictive_prob:
+            lo, hi = hp_d.predictive_u_frac_range
+            frac = float(np.exp(self.rng.uniform(np.log(lo), np.log(hi))))
+            u = max(1, min(int(round(frac * self.T)), self.T - 1))
+            T_obs = self.T - u
+            X = X[:, :, :T_obs]
+
         if hp_d.warping_prob > 0 and self.rng.random() < hp_d.warping_prob:
             j = self.rng.integers(0, self.n_features)
             a = float(self.rng.uniform(*hp_d.kumaraswamy_a_range))
@@ -659,13 +670,13 @@ class DatasetGenerator:
         return {
             'X_train': X[train_idx],
             'X_test': X[test_idx] if len(test_idx) > 0
-                      else np.empty((0, self.n_features, self.T)),
+                      else np.empty((0, self.n_features, T_obs)),
             'y_train': y[train_idx],
             'y_test': y[test_idx] if len(test_idx) > 0
                       else np.array([], dtype=int),
             'n_classes': n_classes,
             'n_features': self.n_features,
-            'T': self.T,
+            'T': T_obs,
             'n_samples': len(y),
         }
 
@@ -677,10 +688,13 @@ class DatasetGenerator:
         pad_str  = 'causal' if self.causal_padding else 'centered'
         pad_str += '+post' if self.no_pre_padding else '+pre'
         pad_str += '+edge' if self.edge_padding else '+zero'
+        hp_d = self.hp.dataset
+        pred_str = (f'  predictive(p={hp_d.predictive_prob:.2f},'
+                    f'u_frac={hp_d.predictive_u_frac_range})')
         lines = [
             f'seed={self.seed}  n_samples={self.n_samples}  T={self.T}  '
             f'n_features={self.n_features}  n_classes={self.n_classes}'
-            f'{var_len_str}  conv={pad_str}',
+            f'{var_len_str}  conv={pad_str}{pred_str}',
             self.dag.summary(),
             'Node operations:',
         ]
