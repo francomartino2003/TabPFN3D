@@ -5,8 +5,11 @@ Polls last.pt, evaluates on fixed synthetic + real datasets,
 saves best.pt and history.json.
 
 Key difference from worker_evaluator.py:
-  - Uses build_overlap_model (pretrained backbone + 1 new layer)
-  - Expands overlapping windows (16, stride 8) before each forward pass
+  - Uses build_overlap_model:
+      Fresh (Xavier): MLP encoder (32→64→192, GELU, no bias) +
+                      feature positional embedding projection (48→192)
+      Pretrained:     24 transformer layers + y_encoder + decoder
+  - Expands overlapping windows (window=16, stride=8) before each forward pass
 """
 
 import argparse

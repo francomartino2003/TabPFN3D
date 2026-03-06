@@ -20,6 +20,10 @@ Test 3: Finetuning log analysis (first 50 steps of job 9272951)
 Usage:
     python final_evaluation.py checkpoints_v3/v3_400s/checkpoint_best_synth_loss.pt \
         --log checkpoints_v3/v3_400s/finetune_v3_9272951.out
+
+    # Overlap model (from Engaging/cluster):
+    #   1. Download: scp user@cluster:~/TabPFN3D/07_finetuning/checkpoints_overlap/ov1/best.pt ./
+    #   2. Run:     python final_evaluation.py best.pt --device cuda
 """
 
 import sys
@@ -45,6 +49,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / '00_TabPFN' / 'src'))
 from tabpfn import TabPFNClassifier
 from tabpfn_temporal import build_temporal_tabpfn_fpg8, set_temporal_info, pad_to_group
 from build_scratch_model import build_tabpfn_from_scratch
+from build_overlap_model import build_overlap_model, pad_and_expand_overlap, WINDOW, STRIDE
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Constants (same as evaluate_v3_with_ensemble.py)
@@ -101,6 +106,26 @@ def temporal_squashing_scaler(X_train_flat, X_test_flat, m, T,
 def shuffle_features(X_flat, m, T, perm):
     n = X_flat.shape[0]
     return X_flat.reshape(n, m, T)[:, perm, :].reshape(n, m * T)
+
+
+def global_pool_16_8(X_flat, m, T, K=16, S=8):
+    """Sliding-window global pooling (mean+max): (n, m*T) → (n, 2m*T_new).
+
+    Window 16, stride 8. T_new = (T - K) // S + 1. Features doubled (mean concat max).
+    Returns (X_out, m_new, T_new) or None if T < K.
+    """
+    if T < K:
+        return None
+    from numpy.lib.stride_tricks import sliding_window_view
+    n = X_flat.shape[0]
+    X_3d = X_flat.reshape(n, m, T)
+    windows = sliding_window_view(X_3d, K, axis=2)[:, :, ::S, :]  # (n, m, T_new, K)
+    T_new = windows.shape[2]
+    mean_ch = windows.mean(axis=3).astype(np.float32)   # (n, m, T_new)
+    max_ch = windows.max(axis=3).astype(np.float32)    # (n, m, T_new)
+    X_out = np.concatenate([mean_ch, max_ch], axis=1)  # (n, 2m, T_new)
+    m_new = 2 * m
+    return X_out.reshape(n, m_new * T_new).astype(np.float32), m_new, T_new
 
 
 def load_real_datasets():
@@ -184,7 +209,7 @@ def evaluate_vanilla_standard(X_train, y_train, X_test, n_classes, device,
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def evaluate_ensemble(model, X_train, y_train, X_test, n_classes, m, T, device,
-                      n_iters=N_ENSEMBLE_ITERS, seed=ENSEMBLE_SEED):
+                      n_iters=N_ENSEMBLE_ITERS, seed=ENSEMBLE_SEED, use_overlap=False):
     rng = np.random.RandomState(seed)
     proba_sum = np.zeros((X_test.shape[0], n_classes), dtype=np.float64)
     n_valid = 0
@@ -204,9 +229,31 @@ def evaluate_ensemble(model, X_train, y_train, X_test, n_classes, m, T, device,
             else:
                 X_tr_proc, X_te_proc = X_tr_perm.copy(), X_te_perm.copy()
 
-            X_tr_padded, T_padded = pad_to_group(X_tr_proc, m, T, group_size=GROUP_SIZE)
-            X_te_padded, _ = pad_to_group(X_te_proc, m, T, group_size=GROUP_SIZE)
-            set_temporal_info(model, m, T_padded, group_size=GROUP_SIZE)
+            # Every 2 iters (it in [2,3, 6,7, ...]): apply global pooling 16/8
+            m_eff, T_eff = m, T
+            if ((it // 2) % 2 == 1) and (T >= 16):
+                pooled = global_pool_16_8(X_tr_proc, m, T)
+                if pooled is not None:
+                    X_tr_pooled, m_new, T_new = pooled
+                    if m_new * T_new <= MAX_M_TIMES_T:
+                        pooled_te = global_pool_16_8(X_te_proc, m, T)
+                        if pooled_te is not None:
+                            X_tr_proc = X_tr_pooled
+                            X_te_proc = pooled_te[0]
+                            m_eff, T_eff = m_new, T_new
+
+            if use_overlap:
+                X_tr_padded, T_pad, n_groups = pad_and_expand_overlap(
+                    X_tr_proc, m_eff, T_eff, WINDOW, STRIDE)
+                X_te_padded, _, _ = pad_and_expand_overlap(
+                    X_te_proc, m_eff, T_eff, WINDOW, STRIDE)
+                T_out = n_groups * WINDOW
+                set_temporal_info(model, m_eff, T_out, group_size=WINDOW)
+            else:
+                X_tr_padded, T_padded = pad_to_group(
+                    X_tr_proc, m_eff, T_eff, group_size=GROUP_SIZE)
+                X_te_padded, _ = pad_to_group(X_te_proc, m_eff, T_eff, group_size=GROUP_SIZE)
+                set_temporal_info(model, m_eff, T_padded, group_size=GROUP_SIZE)
 
             X_tr_t = torch.as_tensor(X_tr_padded, dtype=torch.float32, device=device)
             y_tr_t = torch.as_tensor(y_train_perm, dtype=torch.float32, device=device)
@@ -263,7 +310,8 @@ def load_aeon_benchmarks_acc():
 # TEST 1: TabPFN standard (B) vs V3 finetuned ensemble (D)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run_test1(datasets, ft_model, device, output_dir, n_ensemble=N_ENSEMBLE_ITERS):
+def run_test1(datasets, ft_model, device, output_dir, n_ensemble=N_ENSEMBLE_ITERS,
+              use_overlap=False):
     print("\n" + "=" * 80)
     print("TEST 1: TabPFN standard (B) vs V3 finetuned ensemble (D)")
     print("=" * 80)
@@ -299,7 +347,7 @@ def run_test1(datasets, ft_model, device, output_dir, n_ensemble=N_ENSEMBLE_ITER
             with torch.no_grad():
                 proba_d = evaluate_ensemble(
                     ft_model, ds['X_train'], ds['y_train'], ds['X_test'],
-                    nc, m, T, device, n_iters=n_ensemble)
+                    nc, m, T, device, n_iters=n_ensemble, use_overlap=use_overlap)
             if proba_d is not None:
                 acc_d, auc_d = compute_metrics(ds['y_test'], proba_d, nc)
                 res['D_acc'], res['D_auc'] = acc_d, auc_d
@@ -815,10 +863,17 @@ def main():
         nlayers = max(layer_indices) + 1 if layer_indices else 12
         print(f"  Detected scratch model: nlayers={nlayers}, version={version}")
         ft_model, ft_clf, _ = build_tabpfn_from_scratch(nlayers=nlayers, device=device)
+        use_overlap = False
+    elif version == 'overlap_v1':
+        print(f"  Detected overlap model: version={version}")
+        print("  Building overlap TabPFN (window=16, stride=8)...")
+        ft_model, ft_clf, _, _ = build_overlap_model(device=device)
+        use_overlap = True
     else:
         print(f"  Detected pretrained model: version={version}")
         print("  Building temporal TabPFN (fpg=8)...")
         ft_model, ft_clf, _ = build_temporal_tabpfn_fpg8(device=device)
+        use_overlap = False
 
     ft_model.load_state_dict(ckpt['model_state_dict'])
     ft_model.eval()
@@ -833,7 +888,7 @@ def main():
         test1_df = pd.read_csv(test1_csv)
     else:
         test1_df = run_test1(datasets, ft_model, device, output_dir,
-                             n_ensemble=args.n_ensemble)
+                             n_ensemble=args.n_ensemble, use_overlap=use_overlap)
 
     # ══════════════════════════════════════════════════════════════════════
     # TEST 2

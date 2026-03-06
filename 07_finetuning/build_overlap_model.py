@@ -4,11 +4,11 @@ Build a TabPFN with overlapping temporal groups (window=16, stride=8).
 Architecture:
   - Pretrained TabPFN v2.5 backbone (24 layers, emsize=192, nhead=3, nhid=384)
   - features_per_group = 16
-  - Fresh encoder: Linear(32→192) Xavier init
-  - Fresh feature positional embedding projection: Xavier init
-  - 1 NEW PerFeatureEncoderLayer prepended (Xavier init)
-  - 24 pretrained layers (original weights)
-  - Pretrained decoder + y_encoder (kept pretrained; reinit breaks in-context learning)
+  - Fresh encoder: MLP(32→64→192, GELU, no bias) Xavier init
+  - Fresh feature positional embedding projection: Linear(48→192) Xavier init
+    with new random seed (not 42) so random vectors differ from pretrained
+  - 24 pretrained layers (original weights, including attention + MLP)
+  - Pretrained decoder + y_encoder (kept pretrained)
 
 Input preparation (handled externally before model forward):
   1. Pad T to multiple of 16
@@ -33,9 +33,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / '00_TabPFN' / 'src'))
 
 from tabpfn import TabPFNClassifier
 from tabpfn.architectures.base import get_encoder
-from tabpfn.architectures.base.config import ModelConfig
-from tabpfn.architectures.base.layer import PerFeatureEncoderLayer
-from tabpfn.architectures.base.transformer import LayerStack
 
 from tabpfn_temporal import (
     _reinit_module,
@@ -126,8 +123,22 @@ def pad_and_expand_overlap(X_flat_np, m, T, window=WINDOW, stride=STRIDE):
 # Model builder
 # ─────────────────────────────────────────────────────────────────────────────
 
+ENCODER_HIDDEN = 64
+EMBEDDING_SEED = 137
+
+
 def build_overlap_model(device="auto"):
-    """Build TabPFN with overlapping groups: 1 fresh layer + 24 pretrained.
+    """Build TabPFN with overlapping groups: MLP encoder + 24 pretrained layers.
+
+    Fresh (from scratch):
+      - Encoder: MLP(32→64→192, GELU, no bias)
+      - Feature positional embedding projection: Linear(48→192)
+        (with changed random seed so input vectors differ from pretrained)
+
+    Pretrained (original weights):
+      - 24 transformer layers (attention + MLP)
+      - y_encoder (label projection)
+      - decoder (final prediction head)
 
     Returns (model, clf, fresh_params, pretrained_params).
     """
@@ -148,20 +159,18 @@ def build_overlap_model(device="auto"):
 
     emsize = model.ninp          # 192
     nhid_factor = model.nhid_factor  # 2
-    nhid = emsize * nhid_factor  # 384
-    pretrained_layers = list(model.transformer_encoder.layers)
-    nlayers_pretrained = len(pretrained_layers)  # 24
-    nhead = pretrained_layers[0].self_attn_between_items._nhead  # 3
+    nlayers = len(list(model.transformer_encoder.layers))  # 24
+    nhead = list(model.transformer_encoder.layers)[0].self_attn_between_items._nhead
 
     print(f"  Pretrained TabPFN: emsize={emsize}, nhead={nhead}, "
-          f"nhid_factor={nhid_factor}, nlayers={nlayers_pretrained}")
+          f"nhid_factor={nhid_factor}, nlayers={nlayers}")
     print(f"  Overlap config: window={WINDOW}, stride={STRIDE}")
 
     # ── 1. Change features_per_group to 16 ──
     model.features_per_group = WINDOW
     print(f"  features_per_group: 3 → {WINDOW}")
 
-    # ── 2. Rebuild + reinit input encoder: Linear(32→192) ──
+    # ── 2. Replace encoder with MLP(32→64→192, GELU, no bias) ──
     new_encoder = get_encoder(
         num_features=WINDOW,
         embedding_size=emsize,
@@ -174,59 +183,32 @@ def build_overlap_model(device="auto"):
         remove_outliers=False,
         normalize_by_used_features=True,
         encoder_use_bias=False,
-        encoder_type="linear",
+        encoder_type="mlp",
+        encoder_mlp_hidden_dim=ENCODER_HIDDEN,
+        encoder_mlp_num_layers=2,
     )
     _reinit_module(new_encoder)
     model.encoder = new_encoder
-    print(f"  [fresh] encoder: Linear({WINDOW * 2}→{emsize}) Xavier")
+    print(f"  [fresh] encoder: MLP({WINDOW * 2}→{ENCODER_HIDDEN}→{emsize}, "
+          f"GELU, no bias) Xavier")
 
-    # ── 3. Reinit feature embedding projection ──
+    # ── 3. Reinit feature embedding projection + change seed ──
+    model.random_embedding_seed = EMBEDDING_SEED
     _reinit_module(model.feature_positional_embedding_embeddings)
-    print(f"  [fresh] feature_positional_embedding_embeddings: Xavier")
+    print(f"  [fresh] feature_positional_embedding_embeddings: Xavier "
+          f"(seed {EMBEDDING_SEED})")
 
-    # y_encoder: KEEP PRETRAINED (reinit breaks in-context learning for 24 pretrained layers)
+    # ── 4. Keep pretrained: y_encoder, decoder, 24 transformer layers ──
+    print(f"  [pretrained] {nlayers} transformer layers, y_encoder, decoder")
 
-    # ── 4. Create 1 new PerFeatureEncoderLayer ──
-    layer_config = ModelConfig(
-        max_num_classes=10,
-        num_buckets=0,
-        emsize=emsize,
-        nhead=nhead,
-        nlayers=1,
-        nhid_factor=nhid_factor,
-        features_per_group=WINDOW,
-        dropout=0.0,
-        recompute_layer=True,
-        recompute_attn=False,
-    )
-
-    new_layer = PerFeatureEncoderLayer(
-        config=layer_config,
-        dim_feedforward=nhid,
-        activation="gelu",
-        zero_init=False,
-    )
-    _reinit_module(new_layer)
-    print(f"  [fresh] 1 new PerFeatureEncoderLayer: Xavier")
-
-    # ── 5. Prepend new layer → 25 total layers ──
-    all_layers = [new_layer] + pretrained_layers
-    model.transformer_encoder = LayerStack(
-        layers=all_layers,
-        min_num_layers_layer_dropout=len(all_layers),
-    )
-    print(f"  LayerStack: {len(all_layers)} layers "
-          f"(1 fresh + {nlayers_pretrained} pretrained)")
-
-    # ── 6. Patch add_embeddings ──
+    # ── 5. Patch add_embeddings for temporal awareness ──
     model.add_embeddings = types.MethodType(temporal_add_embeddings, model)
     print(f"  Patched add_embeddings: feature_emb(j) + sinusoidal_PE(group_idx)")
 
-    # ── 7. Collect parameter groups ──
+    # ── 6. Collect parameter groups ──
     fresh_modules = [
         model.encoder,
         model.feature_positional_embedding_embeddings,
-        new_layer,
     ]
     fresh_ids = set()
     fresh_params = []

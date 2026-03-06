@@ -20,6 +20,12 @@
 # Resume:
 #   sbatch --export=ALL,RUN_NAME=ov1,...,RESUME=07_finetuning/checkpoints_overlap/ov1/last.pt \
 #          train_overlap_v1.sbatch
+#
+# Download best.pt from cluster (replace USER and HOST):
+#   scp USER@HOST:~/TabPFN3D/07_finetuning/checkpoints_overlap/ov1/best.pt ./
+#
+# Final evaluation (local, after download):
+#   python final_evaluation.py best.pt --device cuda
 
 set -e
 
