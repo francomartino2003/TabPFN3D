@@ -30,8 +30,10 @@ wheels/
 # Data files (too large for git)
 *.pkl
 *.pickle
+01_real_data/data/
 01_real_data/AEON/data/
 01_real_data/AEON/benchmarks/
+scratch_batches/
 
 # TabPFN (clone from original repo)
 00_TabPFN/
