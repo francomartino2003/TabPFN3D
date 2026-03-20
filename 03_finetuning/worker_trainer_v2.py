@@ -12,11 +12,13 @@ Three training modes (--mode):
             • model.feature_positional_embedding_embeddings  (Linear 48→192)
             • model.temporal_pe_projection                   (Linear 48→192)
             • model.transformer_encoder.layers[0]            (first PFN layer)
-          Single AdamW group at --lr (default 1e-4), constant schedule.
+          Schedule: constant LR for --warmup-const-steps, then cosine to --lr-min.
+          Default: 1500 constant + 3000 cosine (1e-4 → 1e-5), total 4500 steps.
           → saves to checkpoints/phase1/  (last.pt + best.pt)
 
   phase2  Full fine-tune.  All params unfrozen.
-          Single AdamW group at --lr (default 1e-7), constant schedule.
+          Schedule: constant LR for --warmup-const-steps, then cosine to --lr-min.
+          Default: 1500 constant + 6000 cosine (1e-5 → 1e-7), total 7500 steps.
           Must be started with --resume pointing to phase1/best.pt.
           → saves to checkpoints/phase2/  (last.pt + best.pt)
 
@@ -48,11 +50,29 @@ from inference import forward_single_dataset, deserialize_batch
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _lr_cosine(step: int, warmup: int, total: int, lr: float, lr_min: float) -> float:
+    """Linear warmup then cosine decay (used by 'full' mode)."""
     if step < warmup:
         return step / max(1, warmup)
     progress = (step - warmup) / max(1, total - warmup)
     cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
     return lr_min / lr + (1.0 - lr_min / lr) * cosine
+
+
+def _lr_const_then_cosine(step: int, warmup_const: int, total: int,
+                          lr: float, lr_min: float) -> float:
+    """Constant LR for warmup_const steps, then cosine decay to lr_min."""
+    if step < warmup_const:
+        return 1.0
+    progress = min(1.0, (step - warmup_const) / max(1, total - warmup_const))
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return lr_min / lr + (1.0 - lr_min / lr) * cosine
+
+
+def _make_phase_schedule(warmup_const: int, total: int, lr: float, lr_min: float):
+    """Return a LambdaLR-compatible schedule function (captures args by value)."""
+    def _fn(step):
+        return _lr_const_then_cosine(step, warmup_const, total, lr, lr_min)
+    return _fn
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -149,12 +169,15 @@ def main() -> None:
 
     # LR for phase1 / phase2  (single value)
     parser.add_argument("--lr", type=float, default=None,
-                        help="Learning rate for phase1/phase2 modes.")
+                        help="Base learning rate for phase1/phase2 modes.")
+    parser.add_argument("--lr-min", type=float, default=None,
+                        help="Minimum LR at end of cosine annealing (phase1/phase2/full).")
+    parser.add_argument("--warmup-const-steps", type=int, default=0,
+                        help="Steps of constant LR before cosine begins (phase1/phase2).")
 
     # LR for full mode (two groups)
     parser.add_argument("--lr-fresh",      type=float, default=1e-4)
     parser.add_argument("--lr-pretrained", type=float, default=5e-5)
-    parser.add_argument("--lr-min",        type=float, default=1e-7)
     parser.add_argument("--warmup-steps",  type=int,   default=200)
 
     # Common
@@ -190,7 +213,9 @@ def main() -> None:
     if mode == "phase1":
         # ── Phase 1: encoder warm-up ──
         # Trainable: fresh params (encoder + emb projections) + first transformer layer
-        lr = args.lr if args.lr is not None else 1e-4
+        lr           = args.lr      if args.lr      is not None else 1e-4
+        lr_min       = args.lr_min  if args.lr_min  is not None else 1e-5
+        warmup_const = args.warmup_const_steps  # 0 → purely constant
 
         for p in model.parameters():
             p.requires_grad = False
@@ -217,22 +242,27 @@ def main() -> None:
         n_trainable = sum(p.numel() for p in trainable)
         n_total = sum(p.numel() for p in model.parameters())
         print(f"  [phase1] total trainable: {n_trainable:,} / {n_total:,}", flush=True)
-        print(f"  [phase1] lr={lr}  constant schedule  n_steps={args.n_steps}", flush=True)
+        print(f"  [phase1] lr={lr}  warmup_const={warmup_const}  lr_min={lr_min}"
+              f"  n_steps={args.n_steps}", flush=True)
 
         optimizer = AdamW([{"params": trainable, "lr": lr}], weight_decay=args.weight_decay)
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, [lambda s: 1.0])
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, [_make_phase_schedule(warmup_const, args.n_steps, lr, lr_min)]
+        )
 
     elif mode == "phase2":
         # ── Phase 2: full fine-tune ──
-        # All params trainable, single constant LR
-        lr = args.lr if args.lr is not None else 1e-7
+        lr           = args.lr      if args.lr      is not None else 1e-5
+        lr_min       = args.lr_min  if args.lr_min  is not None else 1e-7
+        warmup_const = args.warmup_const_steps
 
         for p in model.parameters():
             p.requires_grad = True
 
         n_total = sum(p.numel() for p in model.parameters())
         print(f"  [phase2] all params trainable: {n_total:,}", flush=True)
-        print(f"  [phase2] lr={lr}  constant schedule  n_steps={args.n_steps}", flush=True)
+        print(f"  [phase2] lr={lr}  warmup_const={warmup_const}  lr_min={lr_min}"
+              f"  n_steps={args.n_steps}", flush=True)
         print(f"  [phase2] NOTE: must resume from phase1/best.pt via --resume --resume-weights-only",
               flush=True)
 
@@ -240,11 +270,15 @@ def main() -> None:
             [{"params": list(model.parameters()), "lr": lr}],
             weight_decay=args.weight_decay,
         )
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, [lambda s: 1.0])
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, [_make_phase_schedule(warmup_const, args.n_steps, lr, lr_min)]
+        )
 
     else:
         # ── Full mode: two-group cosine ──
-        lr_f, lr_p, lr_min = args.lr_fresh, args.lr_pretrained, args.lr_min
+        lr_f   = args.lr_fresh
+        lr_p   = args.lr_pretrained
+        lr_min = args.lr_min if args.lr_min is not None else 1e-7
         warmup = args.warmup_steps
         total  = args.n_steps
 

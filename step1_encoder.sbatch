@@ -9,7 +9,8 @@
 #    • model.transformer_encoder.layers[0]        (first TabPFN layer)
 #  Everything else is FROZEN.
 #
-#  Schedule: constant LR=1e-4 for 3000 steps.
+#  Schedule: 1500 steps constant LR=1e-4, then 3000 steps cosine → 1e-5.
+#             Total 4500 steps.
 #
 #  Output:
 #    Checkpoints  →  03_finetuning/checkpoints/phase1/
@@ -26,7 +27,7 @@
 #SBATCH --error=logs/step1_%j.err
 #SBATCH --partition=pi_dbertsim
 #SBATCH --gres=gpu:3
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 
@@ -56,9 +57,11 @@ done
 echo ""
 
 # ── Tunable hyperparameters ──
-LR="${LR:-1e-4}"           # constant learning rate (phase 1)
-N_STEPS="${N_STEPS:-3000}" # training steps
-BATCH="${BATCH:-92}"       # datasets per batch
+LR="${LR:-1e-4}"                    # base learning rate (constant segment)
+LR_MIN="${LR_MIN:-1e-5}"            # final LR at end of cosine annealing
+WARMUP_CONST="${WARMUP_CONST:-1500}" # steps at constant LR before cosine starts
+N_STEPS="${N_STEPS:-4500}"          # total steps (1500 const + 3000 cosine)
+BATCH="${BATCH:-92}"                # datasets per batch
 WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
 GRAD_CLIP="${GRAD_CLIP:-1.0}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-60}"  # evaluator poll interval (seconds)
@@ -69,7 +72,7 @@ CKPT_DIR="03_finetuning/checkpoints/phase1"
 LOG_DIR="03_finetuning/logs/phase1"
 
 echo "[Config]"
-echo "  LR=$LR  N_STEPS=$N_STEPS  BATCH=$BATCH"
+echo "  LR=$LR  LR_MIN=$LR_MIN  WARMUP_CONST=$WARMUP_CONST  N_STEPS=$N_STEPS  BATCH=$BATCH"
 echo "  WEIGHT_DECAY=$WEIGHT_DECAY  GRAD_CLIP=$GRAD_CLIP"
 echo "  BATCH_DIR=$BATCH_DIR"
 echo "  CKPT_DIR=$CKPT_DIR    ← last.pt + best.pt saved here"
@@ -96,13 +99,15 @@ sleep 30
 # ── GPU 1: Trainer (phase 1) ──
 echo "[2/3] Trainer (phase1) → GPU 1"
 CUDA_VISIBLE_DEVICES=1 python -u 03_finetuning/worker_trainer_v2.py \
-    --mode          phase1 \
-    --lr            "$LR" \
-    --n-steps       "$N_STEPS" \
-    --batch-dir     "$BATCH_DIR" \
-    --checkpoint-dir "$CKPT_DIR" \
-    --weight-decay  "$WEIGHT_DECAY" \
-    --grad-clip     "$GRAD_CLIP" \
+    --mode                phase1 \
+    --lr                  "$LR" \
+    --lr-min              "$LR_MIN" \
+    --warmup-const-steps  "$WARMUP_CONST" \
+    --n-steps             "$N_STEPS" \
+    --batch-dir           "$BATCH_DIR" \
+    --checkpoint-dir      "$CKPT_DIR" \
+    --weight-decay        "$WEIGHT_DECAY" \
+    --grad-clip           "$GRAD_CLIP" \
     > "$LOG_DIR/trainer.log" 2>&1 &
 PID_TRAIN=$!
 echo "  PID=$PID_TRAIN"
