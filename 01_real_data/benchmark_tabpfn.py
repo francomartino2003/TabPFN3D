@@ -171,6 +171,46 @@ def _run_tabpfn(X_tr, y_tr, X_te, y_te, n_classes, n_estimators, seed, device):
         return float("nan"), float("nan")
 
 
+def _run_tabpfn_no_svd(X_tr, y_tr, X_te, y_te, n_classes, seed, device):
+    """TabPFN 1-ensemble with preprocessor='none' (no SVD, no squashing scaler).
+
+    With n_estimators=1 the standard API always picks the first preset config
+    (squashing_scaler + SVD).  We override PREPROCESS_TRANSFORMS via the
+    inference_config dict so only the 'none' preprocessor is used.
+    Features are still subsampled to 500 if n_features > 500 (TabPFN default).
+    """
+    from tabpfn.preprocessing.configs import PreprocessorConfig as PC
+
+    none_only = [PC(name="none", categorical_name="numeric", max_features_per_estimator=500)]
+
+    def _try(dev):
+        clf = TabPFNClassifier(
+            device=dev,
+            n_estimators=1,
+            random_state=seed,
+            ignore_pretraining_limits=True,
+            inference_config={"PREPROCESS_TRANSFORMS": none_only},
+        )
+        clf.fit(X_tr, y_tr)
+        with torch.no_grad():
+            proba = clf.predict_proba(X_te)
+        del clf
+        return _compute_metrics(y_te, proba, n_classes)
+
+    try:
+        return _try(device)
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower() and device != "cpu":
+            _free_memory()
+            try:
+                return _try("cpu")
+            except Exception:
+                return float("nan"), float("nan")
+        return float("nan"), float("nan")
+    except Exception:
+        return float("nan"), float("nan")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Per-dataset benchmark
 # ─────────────────────────────────────────────────────────────────────────────
@@ -183,6 +223,7 @@ def benchmark_dataset(name, collection, subsample_train, n_runs, device):
 
     acc1, auc1 = [], []
     acc8, auc8 = [], []
+    acc1n, auc1n = [], []   # e1_nosvd
 
     for run in range(n_runs):
         seed = 42 + run
@@ -197,19 +238,28 @@ def benchmark_dataset(name, collection, subsample_train, n_runs, device):
         acc8.append(a)
         auc8.append(u)
 
+        _free_memory()
+        a, u = _run_tabpfn_no_svd(X_tr, y_tr, X_te, y_te, n_classes, seed, device)
+        acc1n.append(a)
+        auc1n.append(u)
+
     _free_memory()
     return {
-        "dataset":       name,
-        "collection":    collection,
-        "e1_acc_mean":   float(np.nanmean(acc1)),
-        "e1_acc_std":    float(np.nanstd(acc1)),
-        "e1_auc_mean":   float(np.nanmean(auc1)),
-        "e1_auc_std":    float(np.nanstd(auc1)),
-        "e8_acc_mean":   float(np.nanmean(acc8)),
-        "e8_acc_std":    float(np.nanstd(acc8)),
-        "e8_auc_mean":   float(np.nanmean(auc8)),
-        "e8_auc_std":    float(np.nanstd(auc8)),
-        "n_runs":        n_runs,
+        "dataset":            name,
+        "collection":         collection,
+        "e1_acc_mean":        float(np.nanmean(acc1)),
+        "e1_acc_std":         float(np.nanstd(acc1)),
+        "e1_auc_mean":        float(np.nanmean(auc1)),
+        "e1_auc_std":         float(np.nanstd(auc1)),
+        "e8_acc_mean":        float(np.nanmean(acc8)),
+        "e8_acc_std":         float(np.nanstd(acc8)),
+        "e8_auc_mean":        float(np.nanmean(auc8)),
+        "e8_auc_std":         float(np.nanstd(auc8)),
+        "e1_nosvd_acc_mean":  float(np.nanmean(acc1n)),
+        "e1_nosvd_acc_std":   float(np.nanstd(acc1n)),
+        "e1_nosvd_auc_mean":  float(np.nanmean(auc1n)),
+        "e1_nosvd_auc_std":   float(np.nanstd(auc1n)),
+        "n_runs":             n_runs,
     }
 
 
@@ -269,7 +319,7 @@ def main():
     n_total = len(ucr_rows) + len(uea_rows)
     n_runs = args.n_runs
     print(f"Datasets: {len(ucr_rows)} UCR + {len(uea_rows)} UEA  ({n_total} total)")
-    print(f"Runs per dataset: {n_runs}  (1-ens + 8-ens each run)")
+    print(f"Runs per dataset: {n_runs}  (e1 + e8 + e1_nosvd each run)")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
