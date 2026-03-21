@@ -1,37 +1,36 @@
 #!/usr/bin/env python3
 """
-Final Evaluation — two tests comparing our finetuned overlap model (D)
-against TabPFN baselines and state-of-the-art classifiers.
+Final Evaluation — comparing our finetuned overlap model against TabPFN baselines and SOTA.
 
-Test 1: Ablation study (B vs C vs D)
---------------------------------------
-  B — TabPFN v2.5 standard (8 ensembles, built-in SVD / fingerprint / squashing).
-  C — TabPFN v2.5 pretrained weights + our ensemble pipeline (no SVD, no fingerprint).
-  D — Our overlap finetuned model + our ensemble pipeline (temporal PE, window=16/8).
+Test 1: Direct comparison  (e1 / e8  vs  D_e1 / D_e8)
+--------------------------------------------------------
+  e1   — TabPFN standard, 1 ensemble  (precomputed by benchmark_tabpfn.py)
+  e8   — TabPFN standard, 8 ensembles (precomputed by benchmark_tabpfn.py)
+  D_e1 — Our overlap finetuned model, 1 ensemble iteration  (run live)
+  D_e8 — Our overlap finetuned model, 8 ensemble iterations (run live)
 
-  B and C are pre-computed by 01_real_data/benchmark_tabpfn.py and loaded from
-  01_real_data/benchmark_results/.  D is run live with the provided checkpoint.
-  If pre-computed results are absent, B is evaluated live as fallback.
+  Fair apples-to-apples comparisons:  D_e1 vs e1  and  D_e8 vs e8.
 
-  Output: test1_ablation.csv, test1_ablation_scatter.png
+  Precomputed baselines loaded from 01_real_data/benchmark_results/:
+    ucr_benchmark_tabpfn.csv  /  uea_benchmark_tabpfn.csv
+  Column names accepted: e1_acc_mean / e8_acc_mean (new) or B_acc_mean / C_acc_mean (legacy).
 
-Test 2: State-of-the-art comparison (D vs HC2 SOTA)
-------------------------------------------------------
-  Compares D against the HC2 accuracy benchmarks from
-  01_real_data/benchmarks_hc2/ on the standard UCR/UEA subsets.
+  Output: test1_comparison.csv, test1_scatter.png
+
+Test 2: SOTA comparison  (D_e8 vs HC2 benchmarks)
+---------------------------------------------------
+  Compares D_e8 against the HC2 accuracy benchmarks from
+  01_real_data/benchmarks_hc2/ on the intersection of PFN-filtered datasets
+  and the HC2 benchmark datasets.
 
   Output: test2_sota_rankings.csv
 
-Optionally, --with-history runs a training-diagnostics plot from the
-history.json written by 03_finetuning/worker_evaluator_v2.py.
-
 Usage:
-  python 04_evaluation/final_evaluation.py 04_evaluation/checkpoints/best.pt
-  python 04_evaluation/final_evaluation.py 04_evaluation/checkpoints/best.pt --device cuda
-  python 04_evaluation/final_evaluation.py 04_evaluation/checkpoints/best.pt --skip-test1
-  python 04_evaluation/final_evaluation.py 04_evaluation/checkpoints/best.pt --collection uea
-
-Note: N_ENSEMBLE_ITERS defaults to 8 to match benchmark_tabpfn.py (fair comparison).
+  python 04_evaluation/final_evaluation.py 03_finetuning/checkpoints/phase2/best.pt
+  python 04_evaluation/final_evaluation.py <ckpt.pt> --device cuda
+  python 04_evaluation/final_evaluation.py <ckpt.pt> --skip-test1
+  python 04_evaluation/final_evaluation.py <ckpt.pt> --collection uea
+  python 04_evaluation/final_evaluation.py <ckpt.pt> --with-history
 """
 
 import argparse
@@ -43,9 +42,7 @@ import time
 import warnings
 from pathlib import Path
 
-# Suppress TabPFN's TruncatedSVD matmul warnings on NaN/extreme data
 warnings.filterwarnings("ignore", message=".*matmul.*", category=RuntimeWarning)
-# Suppress PostHog telemetry failures when offline
 logging.getLogger("posthog").setLevel(logging.CRITICAL)
 
 import matplotlib
@@ -67,7 +64,6 @@ for _p in [
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from tabpfn import TabPFNClassifier
 from model import build_overlap_model, build_temporal_tabpfn_fpg8
 from inference import evaluate_ensemble
 
@@ -79,17 +75,16 @@ REAL_DATA_ROOT      = ROOT / "01_real_data"
 BENCHMARKS_HC2_DIR  = REAL_DATA_ROOT / "benchmarks_hc2"
 BENCHMARK_RESULTS_DIR = REAL_DATA_ROOT / "benchmark_results"
 
-# Must match the n_estimators / n_iters used in 01_real_data/benchmark_tabpfn.py
-# for a fair comparison between B, C, and D.
-N_ENSEMBLE_ITERS = 8
-ENSEMBLE_SEED    = 42
+ENSEMBLE_SEED = 42
+SUBSAMPLE_N    = 1_000
+SUBSAMPLE_SEED = 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Memory management
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _free_memory(device: str | None = None):
+def _free_memory():
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.synchronize()
@@ -103,20 +98,12 @@ def _free_memory(device: str | None = None):
 # Dataset loading
 # ─────────────────────────────────────────────────────────────────────────────
 
-SUBSAMPLE_N    = 1_000
-SUBSAMPLE_SEED = 0   # fixed seed for reproducible subsampling across all evaluations
-
-
 def load_datasets(names: list | None = None) -> list:
-    """Load all PFN-eligible datasets.
+    """Load all PFN-eligible datasets from datasets_summary.csv.
 
-    Reads datasets_summary.csv, includes all datasets with passes_pfn_filters=True.
-    Variable-length and missing-value datasets are included (model handles NaN).
-    No n_total / T / m*T training constraints.
-    If subsample_train=True, train is subsampled to SUBSAMPLE_N with a fixed seed.
-
-    Returns list of dicts: name, X_train, X_test, y_train, y_test,
-    n_classes, m (channels), T (timesteps), n_features (m*T).
+    Applies subsample_train if flagged (fixed seed for reproducibility).
+    Returns list of dicts: name, collection, X_train, X_test, y_train, y_test,
+    n_classes, m (channels), T (timesteps).
     """
     from sklearn.preprocessing import LabelEncoder
 
@@ -142,19 +129,18 @@ def load_datasets(names: list | None = None) -> list:
             y_tr_raw = tr["y"]
             X_te_3d  = te["X"].astype(np.float32)
             y_te_raw = te["y"]
-            n_tr, m, T_tr = X_tr_3d.shape
-            n_classes = int(row["n_classes"])
+            n_tr, m, _ = X_tr_3d.shape
+            n_classes  = int(row["n_classes"])
+            T          = X_te_3d.shape[2]   # use test T for model dimensioning
 
-            # Subsample train with fixed seed for reproducibility
             if bool(row.get("subsample_train", False)) and n_tr >= SUBSAMPLE_N:
                 rng = np.random.RandomState(SUBSAMPLE_SEED)
                 idx = rng.choice(n_tr, SUBSAMPLE_N, replace=False)
                 idx.sort()
                 X_tr_3d  = X_tr_3d[idx]
                 y_tr_raw = y_tr_raw[idx]
-                n_tr = SUBSAMPLE_N
 
-            X_tr = X_tr_3d.reshape(n_tr, -1)
+            X_tr = X_tr_3d.reshape(X_tr_3d.shape[0], -1)
             X_te = X_te_3d.reshape(X_te_3d.shape[0], -1)
             np.putmask(X_tr, ~np.isfinite(X_tr), np.nan)
             np.putmask(X_te, ~np.isfinite(X_te), np.nan)
@@ -164,19 +150,15 @@ def load_datasets(names: list | None = None) -> list:
             y_tr = le.transform(y_tr_raw).astype(np.int64)
             y_te = le.transform(y_te_raw).astype(np.int64)
 
-            # Derive T from test set (may differ for variable-length datasets)
-            T_te = X_te_3d.shape[2]
-            T = T_te  # use test T for model dimensioning; both splits share m
-
             valid.append({
                 "name": name, "collection": row["collection"],
                 "X_train": X_tr, "X_test": X_te,
                 "y_train": y_tr, "y_test": y_te,
-                "n_classes": n_classes,
-                "m": m, "T": T, "n_features": m * T,
+                "n_classes": n_classes, "m": m, "T": T,
             })
         except Exception as e:
             skipped.append((name, str(e)[:60]))
+
     if skipped:
         print(f"  [load] Skipped {len(skipped)}: "
               f"{[s[0] for s in skipped[:5]]}{'...' if len(skipped) > 5 else ''}")
@@ -184,26 +166,65 @@ def load_datasets(names: list | None = None) -> list:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Precomputed B/C loader  (from 01_real_data/benchmark_tabpfn.py)
+# Ensemble inference with CPU fallback on OOM
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_precomputed_bc() -> dict:
-    """Load pre-computed B and C results.
+def _eval_with_fallback(ft_model, X_tr, y_tr, X_te, nc, m, T, device,
+                        n_iters, seed, use_overlap, label=""):
+    """Call evaluate_ensemble; if result is None and not on CPU, retry on CPU.
 
-    Returns {dataset_name: {'B_acc', 'B_auc', 'C_acc', 'C_auc'}} or {}.
+    evaluate_ensemble catches exceptions internally (printing them) and returns
+    None when all iterations fail — OOM never propagates out as an exception.
+    Retrying on CPU handles both OOM and other device-specific failures.
+    """
+    def _try(dev):
+        ft_model.to(dev)
+        with torch.no_grad():
+            return evaluate_ensemble(
+                ft_model, X_tr, y_tr, X_te,
+                nc, m, T, dev, n_iters=n_iters, seed=seed,
+                use_overlap=use_overlap,
+            )
+
+    proba = _try(device)
+    if proba is None and device != "cpu":
+        _free_memory()
+        print(f"    [{label}] retrying on CPU...", flush=True)
+        proba = _try("cpu")
+        ft_model.to(device)
+    return proba
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Precomputed baselines loader
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_precomputed_baselines() -> dict:
+    """Load pre-computed e1 / e8 baseline results from benchmark CSVs.
+
+    Reads columns: e1_acc_mean, e1_auc_mean, e8_acc_mean, e8_auc_mean.
+    Falls back to legacy column names: B_acc_mean → e1, C_acc_mean → e8.
+
+    Returns {dataset_name: {'e1_acc', 'e1_auc', 'e8_acc', 'e8_auc'}}.
     """
     out = {}
     for fname in ["ucr_benchmark_tabpfn.csv", "uea_benchmark_tabpfn.csv"]:
         path = BENCHMARK_RESULTS_DIR / fname
         if not path.exists():
             continue
-        for _, row in pd.read_csv(path).iterrows():
+        df = pd.read_csv(path)
+        cols = set(df.columns)
+        for _, row in df.iterrows():
             entry = {}
-            for m in ["B", "C"]:
-                for metric in ["acc", "auc"]:
-                    col = f"{m}_{metric}_mean"
-                    if col in row.index and pd.notna(row[col]):
-                        entry[f"{m}_{metric}"] = float(row[col])
+            for new_col, legacy_col, key in [
+                ("e1_acc_mean", "B_acc_mean", "e1_acc"),
+                ("e1_auc_mean", "B_auc_mean", "e1_auc"),
+                ("e8_acc_mean", "C_acc_mean", "e8_acc"),
+                ("e8_auc_mean", "C_auc_mean", "e8_auc"),
+            ]:
+                src = new_col if new_col in cols else legacy_col if legacy_col in cols else None
+                if src and pd.notna(row.get(src)):
+                    entry[key] = float(row[src])
             if entry:
                 out[row["dataset"]] = entry
     return out
@@ -232,87 +253,36 @@ def _wilcoxon_summary(a, b, label_a, label_b):
     ties   = ((diffs >= -0.001) & (diffs <= 0.001)).sum()
     losses = (diffs < -0.001).sum()
     sig = "***" if pval < 0.001 else "**" if pval < 0.01 else "*" if pval < 0.05 else "n.s."
-    print(f"    Mean: {diffs.mean():+.4f}   Median: {np.median(diffs):+.4f}")
-    print(f"    Min:  {diffs.min():+.4f}   Max:    {diffs.max():+.4f}")
+    print(f"    Mean Δ: {diffs.mean():+.4f}   Median: {np.median(diffs):+.4f}")
+    print(f"    Range:  {diffs.min():+.4f} … {diffs.max():+.4f}")
     print(f"    Win/Tie/Loss: {wins}/{ties}/{losses}")
     print(f"    Wilcoxon ({label_a} > {label_b}): stat={stat:.1f}, p={pval:.6f}  {sig}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Model B: TabPFN standard (live fallback when precomputed unavailable)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _run_tabpfn_standard(X_train, y_train, X_test, device, n_estimators):
-    clf = TabPFNClassifier(device=device, n_estimators=n_estimators,
-                           ignore_pretraining_limits=True)
-    clf.fit(X_train, y_train)
-    with torch.no_grad():
-        proba = clf.predict_proba(X_test)
-    del clf
-    return proba
-
-
-def evaluate_model_b(X_train, y_train, X_test, device, n_estimators=N_ENSEMBLE_ITERS):
-    """TabPFN standard with automatic CPU fallback on OOM."""
-    try:
-        return _run_tabpfn_standard(X_train, y_train, X_test, device, n_estimators)
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower() and device != "cpu":
-            _free_memory(device)
-            print(f"    [B] OOM on {device}, retrying on CPU...", flush=True)
-            return _run_tabpfn_standard(X_train, y_train, X_test, "cpu", n_estimators)
-        raise
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Model C: TabPFN pretrained weights + our ensemble pipeline (live fallback)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_vanilla_tabpfn(device: str):
-    """TabPFN v2.5 pretrained weights, unmodified fpg=3, no temporal PE.
-
-    Model C: same ensemble/preprocessing pipeline as D but without finetuning.
-    Ablates the contribution of the finetuning step.
-    """
-    clf = TabPFNClassifier(
-        device=device, n_estimators=1, ignore_pretraining_limits=True,
-        fit_mode="batched", differentiable_input=False,
-        inference_config={"FEATURE_SHIFT_METHOD": None},
-    )
-    clf._initialize_model_variables()
-    model = clf.model_
-    model.eval()
-    model.to(device)
-    return model
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TEST 1 — Ablation: B vs C vs D
+# TEST 1 — Direct comparison: e1/e8 vs D_e1/D_e8
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_test1(datasets, ft_model, device, output_dir,
-              n_ensemble=N_ENSEMBLE_ITERS, use_overlap=True,
-              vanilla_model=None, precomputed_bc: dict | None = None):
-    """Ablation study: B (standard) vs C (pretrained + our pipeline) vs D (finetuned).
+              use_overlap: bool = True,
+              precomputed: dict | None = None):
+    """Run our model with 1 and 8 ensemble iters and compare against precomputed baselines.
 
-    B and C are loaded from pre-computed CSVs when available; D always runs live.
+    Columns in output CSV:
+      name, m, T, n_classes,
+      e1_acc, e1_auc,   e8_acc, e8_auc,       ← precomputed TabPFN baselines
+      D_e1_acc, D_e1_auc,  D_e8_acc, D_e8_auc  ← our model (live)
     """
-    precomputed = precomputed_bc or {}
-    has_precomputed_b = any("B_acc" in v for v in precomputed.values())
-    has_precomputed_c = any("C_acc" in v for v in precomputed.values())
-    has_c = vanilla_model is not None or has_precomputed_c
-
-    if has_precomputed_b and has_precomputed_c:
-        mode_str = "precomputed B+C, live D"
-    elif has_precomputed_b:
-        mode_str = "precomputed B, live C+D" if has_c else "precomputed B, live D"
-    elif has_c:
-        mode_str = "live B+C+D"
-    else:
-        mode_str = "live B+D"
+    pre = precomputed or {}
+    has_e1 = any("e1_acc" in v for v in pre.values())
+    has_e8 = any("e8_acc" in v for v in pre.values())
+    baseline_str = ("e1+e8 precomputed" if has_e1 and has_e8
+                    else "e1 precomputed" if has_e1
+                    else "e8 precomputed" if has_e8
+                    else "no precomputed baselines")
 
     print("\n" + "=" * 80)
-    print(f"TEST 1: Ablation  B vs {'C vs ' if has_c else ''}D  [{mode_str}]")
+    print(f"TEST 1: Comparison  e1/e8 vs D_e1/D_e8  [{baseline_str}]")
     print("=" * 80)
 
     results = []
@@ -321,117 +291,105 @@ def run_test1(datasets, ft_model, device, output_dir,
 
     for i, ds in enumerate(datasets):
         name, m, T, nc = ds["name"], ds["m"], ds["T"], ds["n_classes"]
-        print(f"  [{i+1}/{len(datasets)}] {name} (m={m}, T={T}, cls={nc})", flush=True)
+        print(f"  [{i+1}/{len(datasets)}] {name}  (m={m}, T={T}, cls={nc})", flush=True)
         res = {"name": name, "m": m, "T": T, "n_classes": nc}
-        pre = precomputed.get(name, {})
+        entry = pre.get(name, {})
 
-        # ── B ──
-        if "B_acc" in pre:
-            res["B_acc"], res["B_auc"] = pre["B_acc"], pre.get("B_auc")
-        else:
-            _free_memory(device)
-            try:
-                proba = evaluate_model_b(ds["X_train"], ds["y_train"], ds["X_test"],
-                                         device, n_estimators=n_ensemble)
-                res["B_acc"], res["B_auc"] = compute_metrics(ds["y_test"], proba, nc)
-                del proba
-            except Exception as e:
-                print(f"    [B] FAILED: {type(e).__name__}: {str(e)[:80]}")
-                res["B_acc"], res["B_auc"] = None, None
-            _free_memory(device)
+        # ── Precomputed baselines ──
+        res["e1_acc"] = entry.get("e1_acc")
+        res["e1_auc"] = entry.get("e1_auc")
+        res["e8_acc"] = entry.get("e8_acc")
+        res["e8_auc"] = entry.get("e8_auc")
 
-        # ── C ──
-        if has_c:
-            if "C_acc" in pre:
-                res["C_acc"], res["C_auc"] = pre["C_acc"], pre.get("C_auc")
-            elif vanilla_model is not None:
-                try:
-                    with torch.no_grad():
-                        proba = evaluate_ensemble(
-                            vanilla_model, ds["X_train"], ds["y_train"], ds["X_test"],
-                            nc, m, T, device,
-                            n_iters=n_ensemble, seed=ENSEMBLE_SEED, use_overlap=False,
-                        )
-                    res["C_acc"], res["C_auc"] = (
-                        compute_metrics(ds["y_test"], proba, nc) if proba is not None
-                        else (None, None)
-                    )
-                    del proba
-                except Exception as e:
-                    print(f"    [C] FAILED: {type(e).__name__}: {str(e)[:80]}")
-                    res["C_acc"], res["C_auc"] = None, None
-                _free_memory(device)
-            else:
-                res["C_acc"], res["C_auc"] = None, None
-
-        # ── D ──
-        _free_memory(device)
+        # ── D_e1 (1 ensemble iter) ──
+        _free_memory()
         try:
-            with torch.no_grad():
-                proba = evaluate_ensemble(
-                    ft_model, ds["X_train"], ds["y_train"], ds["X_test"],
-                    nc, m, T, device,
-                    n_iters=n_ensemble, seed=ENSEMBLE_SEED, use_overlap=use_overlap,
-                )
-            res["D_acc"], res["D_auc"] = (
+            proba = _eval_with_fallback(
+                ft_model, ds["X_train"], ds["y_train"], ds["X_test"],
+                nc, m, T, device, n_iters=1, seed=ENSEMBLE_SEED,
+                use_overlap=use_overlap, label="D_e1",
+            )
+            res["D_e1_acc"], res["D_e1_auc"] = (
                 compute_metrics(ds["y_test"], proba, nc) if proba is not None
                 else (None, None)
             )
             del proba
         except Exception as e:
-            print(f"    [D] FAILED: {type(e).__name__}: {str(e)[:80]}")
-            res["D_acc"], res["D_auc"] = None, None
+            print(f"    [D_e1] FAILED: {type(e).__name__}: {str(e)[:80]}")
+            res["D_e1_acc"], res["D_e1_auc"] = None, None
+        _free_memory()
 
-        if has_c:
-            print(f"    B_acc={_f(res['B_acc'])} C_acc={_f(res.get('C_acc'))} "
-                  f"D_acc={_f(res['D_acc'])}  "
-                  f"B_auc={_f(res.get('B_auc'))} C_auc={_f(res.get('C_auc'))} "
-                  f"D_auc={_f(res['D_auc'])}")
-        else:
-            print(f"    B_acc={_f(res['B_acc'])} D_acc={_f(res['D_acc'])}  "
-                  f"B_auc={_f(res.get('B_auc'))} D_auc={_f(res['D_auc'])}")
+        # ── D_e8 (8 ensemble iters) ──
+        try:
+            proba = _eval_with_fallback(
+                ft_model, ds["X_train"], ds["y_train"], ds["X_test"],
+                nc, m, T, device, n_iters=8, seed=ENSEMBLE_SEED,
+                use_overlap=use_overlap, label="D_e8",
+            )
+            res["D_e8_acc"], res["D_e8_auc"] = (
+                compute_metrics(ds["y_test"], proba, nc) if proba is not None
+                else (None, None)
+            )
+            del proba
+        except Exception as e:
+            print(f"    [D_e8] FAILED: {type(e).__name__}: {str(e)[:80]}")
+            res["D_e8_acc"], res["D_e8_auc"] = None, None
+        _free_memory()
+
+        print(f"    e1:   acc={_f(res['e1_acc'])}  auc={_f(res['e1_auc'])}")
+        print(f"    e8:   acc={_f(res['e8_acc'])}  auc={_f(res['e8_auc'])}")
+        print(f"    D_e1: acc={_f(res['D_e1_acc'])}  auc={_f(res['D_e1_auc'])}")
+        print(f"    D_e8: acc={_f(res['D_e8_acc'])}  auc={_f(res['D_e8_auc'])}")
         results.append(res)
 
     elapsed = time.time() - t0
     df = pd.DataFrame(results)
-    df.to_csv(output_dir / "test1_ablation.csv", index=False)
-
-    if df.empty or not {"B_acc", "D_acc", "B_auc", "D_auc"}.issubset(df.columns):
-        print(f"\n  No results to summarise (0 datasets evaluated).")
-        return df
+    df.to_csv(output_dir / "test1_comparison.csv", index=False)
 
     print(f"\n  Datasets evaluated: {len(df)}  ({elapsed:.0f}s)")
 
-    comparisons = [("D", "B", "D > B")]
-    if has_c:
-        comparisons = [("C", "B", "C > B"), ("D", "C", "D > C"), ("D", "B", "D > B")]
-
+    # ── Statistical summaries ──
+    comparisons = [
+        ("D_e1", "e1",  "D_e1 vs e1  (1-ens)"),
+        ("D_e8", "e8",  "D_e8 vs e8  (8-ens)"),
+        ("D_e8", "e1",  "D_e8 vs e1  (8-ens vs 1-ens baseline)"),
+    ]
     for x, y, label in comparisons:
         for metric in ["acc", "auc"]:
-            v = df.dropna(subset=[f"{x}_{metric}", f"{y}_{metric}"])
+            cx, cy = f"{x}_{metric}", f"{y}_{metric}"
+            if cx not in df.columns or cy not in df.columns:
+                continue
+            v = df.dropna(subset=[cx, cy])
             if len(v) < 2:
                 continue
-            print(f"\n  {metric.upper()} ({label}), n={len(v)}:")
-            _wilcoxon_summary(v[f"{x}_{metric}"].values, v[f"{y}_{metric}"].values, x, y)
+            print(f"\n  {metric.upper()} — {label}  (n={len(v)}):")
+            _wilcoxon_summary(v[cx].values, v[cy].values, x, y)
 
-    # Scatter plots
-    pairs  = [("C", "B"), ("D", "B"), ("D", "C")] if has_c else [("D", "B")]
-    labels = {"B": "TabPFN standard", "C": "Pretrained + our pipeline",
-               "D": "Overlap finetuned"}
-    ncols  = len(pairs)
-    fig, axes = plt.subplots(2, ncols, figsize=(7 * ncols, 12))
-    if ncols == 1:
+    # ── Scatter plots ──
+    pairs = [("D_e1", "e1"), ("D_e8", "e8")]
+    labels = {
+        "e1":   "TabPFN 1-ens",
+        "e8":   "TabPFN 8-ens",
+        "D_e1": "Our model 1-ens",
+        "D_e8": "Our model 8-ens",
+    }
+    fig, axes = plt.subplots(2, len(pairs), figsize=(7 * len(pairs), 12))
+    if len(pairs) == 1:
         axes = axes.reshape(2, 1)
 
     for col, (x, y) in enumerate(pairs):
         for row, (metric, mtitle) in enumerate([("auc", "AUC"), ("acc", "Accuracy")]):
             ax = axes[row][col]
-            v = df.dropna(subset=[f"{x}_{metric}", f"{y}_{metric}"])
+            cx, cy = f"{x}_{metric}", f"{y}_{metric}"
+            if cx not in df.columns or cy not in df.columns:
+                ax.set_visible(False)
+                continue
+            v = df.dropna(subset=[cx, cy])
             if len(v) < 2:
                 ax.set_visible(False)
                 continue
-            x_vals = v[f"{y}_{metric}"].values
-            y_vals = v[f"{x}_{metric}"].values
+            x_vals = v[cy].values   # baseline on x-axis
+            y_vals = v[cx].values   # our model on y-axis
             diffs  = y_vals - x_vals
             _, pval = sp_stats.wilcoxon(y_vals, x_vals, alternative="greater")
             lo = min(x_vals.min(), y_vals.min()) - 0.02
@@ -441,26 +399,27 @@ def run_test1(datasets, ft_model, device, output_dir,
                          else "#95a5a6" for d in diffs]
             ax.scatter(x_vals, y_vals, c=pt_colors, s=40, alpha=0.7,
                        edgecolors="white", linewidth=0.5)
-            ax.set_xlabel(f"{labels[y]} ({y}) — {mtitle}", fontsize=10)
-            ax.set_ylabel(f"{labels[x]} ({x}) — {mtitle}", fontsize=10)
+            ax.set_xlabel(f"{labels[y]} — {mtitle}", fontsize=10)
+            ax.set_ylabel(f"{labels[x]} — {mtitle}", fontsize=10)
             ax.set_title(f"{mtitle}: {x} vs {y}  (Δ={diffs.mean():+.4f}, p={pval:.3f})",
                          fontsize=11, fontweight="bold")
             ax.set_xlim(lo, hi); ax.set_ylim(lo, hi)
             ax.set_aspect("equal"); ax.grid(True, alpha=0.3)
             wins = (diffs > 0.001).sum(); losses = (diffs < -0.001).sum()
-            ax.text(0.05, 0.95, f"{x} wins: {wins}\n{y} wins: {losses}",
+            ax.text(0.05, 0.95,
+                    f"{x} wins: {wins}\n{y} wins: {losses}",
                     transform=ax.transAxes, fontsize=9, va="top",
                     bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
 
     plt.tight_layout()
-    fig.savefig(output_dir / "test1_ablation_scatter.png", dpi=200, bbox_inches="tight")
+    fig.savefig(output_dir / "test1_scatter.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
-    print(f"\n  Saved: test1_ablation.csv, test1_ablation_scatter.png")
+    print(f"\n  Saved: test1_comparison.csv, test1_scatter.png")
     return df
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TEST 2 — SOTA comparison: D vs HC2 benchmarks
+# TEST 2 — SOTA comparison: D_e8 vs HC2 benchmarks
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_hc2(collection: str) -> dict:
@@ -478,28 +437,31 @@ def _load_hc2(collection: str) -> dict:
         return {}
 
 
-def run_test2(test1_df, output_dir, collection="ucr"):
+def run_test2(test1_df: pd.DataFrame, output_dir: Path, collection: str = "ucr"):
+    """Compare D_e8 against HC2 SOTA on the intersection of PFN-filtered + HC2 datasets."""
     print("\n\n" + "=" * 80)
-    print(f"TEST 2: D vs HC2 SOTA benchmarks  (collection={collection})")
+    print(f"TEST 2: D_e8 vs HC2 SOTA  (collection={collection})")
     print("=" * 80)
 
     our_name = "TabPFN_Overlap"
     benchmarks = _load_hc2(collection)
     if not benchmarks:
-        print(f"  No HC2 benchmarks found. Run 01_real_data/download_hc2_benchmarks.py first.")
+        print("  No HC2 benchmarks found. Run 01_real_data/download_hc2_benchmarks.py first.")
         return
 
-    aeon_df = pd.DataFrame(benchmarks)
+    aeon_df  = pd.DataFrame(benchmarks)
     our_indexed = test1_df.set_index("name")
 
+    # Intersection: PFN-filtered AND present in HC2 AND D_e8 evaluated successfully
     common = [d for d in sorted(set(aeon_df.index) & set(our_indexed.index))
-              if pd.notna(our_indexed.loc[d, "D_acc"])]
+              if "D_e8_acc" in our_indexed.columns
+              and pd.notna(our_indexed.loc[d, "D_e8_acc"])]
     if not common:
-        print("  No common datasets found. Skipping.")
+        print("  No common datasets. Skipping.")
         return
 
     aeon_common = aeon_df.loc[common].copy()
-    aeon_common[our_name] = our_indexed.loc[common, "D_acc"].values
+    aeon_common[our_name] = our_indexed.loc[common, "D_e8_acc"].values
     aeon_common = aeon_common.dropna(axis=1, how="all")
 
     n_models = len(aeon_common.columns)
@@ -516,10 +478,10 @@ def run_test2(test1_df, output_dir, collection="ucr"):
         )
         all_stats.append({
             "model":         model_name,
-            "mean_rank":     model_ranks.mean() if len(model_ranks) > 0 else float("inf"),
+            "mean_rank":     model_ranks.mean() if len(model_ranks) else float("inf"),
             "rank1":         int((model_ranks == 1).sum()),
             "rank1_strict":  rank1_strict,
-            "mean_accuracy": float(model_vals.mean()) if len(model_vals) > 0 else None,
+            "mean_accuracy": float(model_vals.mean()) if len(model_vals) else None,
             "n_datasets":    int(model_vals.notna().sum()),
         })
 
@@ -531,35 +493,35 @@ def run_test2(test1_df, output_dir, collection="ucr"):
     print(f"  {'-'*72}")
     for _, row in stats_df.iterrows():
         marker = ">>>" if row["model"] == our_name else "   "
-        v_str  = f"{row['mean_accuracy']:.4f}" if row["mean_accuracy"] else "N/A"
+        v_str  = f"{row['mean_accuracy']:.4f}" if row["mean_accuracy"] is not None else "N/A"
         print(f"  {marker} {row['model']:<25} {row['mean_rank']:>10.2f} "
-              f"{row['rank1']:>7} {row['rank1_strict']:>7} {v_str:>10} "
-              f"{row['n_datasets']:>4}")
+              f"{int(row['rank1']):>7} {int(row['rank1_strict']):>7} "
+              f"{v_str:>10} {int(row['n_datasets']):>4}")
 
     our_row = stats_df[stats_df["model"] == our_name]
     if len(our_row):
         r = our_row.iloc[0]
         pos = int((stats_df["mean_rank"] < r["mean_rank"]).sum()) + 1
         print(f"\n  >>> {our_name}:")
-        print(f"      Rank: {pos}/{n_models}  (mean rank {r['mean_rank']:.2f})")
-        print(f"      Rank 1: {r['rank1']}/{n_ds}  (strict: {r['rank1_strict']}/{n_ds})")
-        if r["mean_accuracy"]:
+        print(f"      Position: {pos}/{n_models}  (mean rank {r['mean_rank']:.2f})")
+        print(f"      Rank 1:   {r['rank1']}/{n_ds}  (strict: {r['rank1_strict']}/{n_ds})")
+        if r["mean_accuracy"] is not None:
             print(f"      Mean Accuracy: {r['mean_accuracy']:.4f}")
 
     our_ranks = rankings.get(our_name)
     if our_ranks is not None:
-        print(f"\n  {'Dataset':<30} {'D Acc':>8} {'Rank':>6} {'Best HC2':>9} "
-              f"{'Best Model':<20}")
-        print(f"  {'-'*80}")
+        print(f"\n  {'Dataset':<30} {'D_e8 Acc':>8} {'Rank':>8} "
+              f"{'Best HC2':>9} {'Best Model':<20}")
+        print(f"  {'-'*82}")
         for ds_name in common:
-            our_val   = aeon_common.loc[ds_name, our_name]
-            our_rank  = int(our_ranks[ds_name])
-            aeon_only = aeon_common.loc[ds_name].drop(our_name).dropna()
-            best_val  = aeon_only.max() if len(aeon_only) > 0 else None
-            best_mod  = aeon_only.idxmax() if len(aeon_only) > 0 else "?"
+            our_val  = aeon_common.loc[ds_name, our_name]
+            our_rank = int(our_ranks[ds_name])
+            others   = aeon_common.loc[ds_name].drop(our_name).dropna()
+            best_val = others.max() if len(others) else None
+            best_mod = others.idxmax() if len(others) else "?"
             ov = f"{our_val:.4f}" if pd.notna(our_val) else "N/A"
             bv = f"{best_val:.4f}" if best_val is not None else "N/A"
-            print(f"  {ds_name:<30} {ov:>8} {our_rank:>6}/{n_models}  "
+            print(f"  {ds_name:<30} {ov:>8} {our_rank:>5}/{n_models}  "
                   f"{bv:>9} {best_mod:<20}")
 
     print(f"\n  Saved: test2_sota_rankings.csv")
@@ -569,10 +531,8 @@ def run_test2(test1_df, output_dir, collection="ucr"):
 # OPTIONAL: Training history diagnostics (--with-history)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_training_history(log_dir: Path, output_dir: Path, max_steps: int = 0):
+def run_training_history(log_dir: Path, output_dir: Path):
     """Plot synth-eval vs real-eval curves from worker_evaluator_v2 history.json."""
-    from scipy import stats as sp_stats
-
     history_path = log_dir / "history.json"
     if not history_path.exists():
         print(f"  No history.json found in {log_dir}. Skipping.")
@@ -580,26 +540,22 @@ def run_training_history(log_dir: Path, output_dir: Path, max_steps: int = 0):
 
     with open(history_path) as f:
         history = json.load(f)
-    df = pd.DataFrame(history)
-    if max_steps > 0:
-        df = df[df["step"] <= max_steps]
-    df = df.sort_values("step").reset_index(drop=True)
+    df = pd.DataFrame(history).sort_values("step").reset_index(drop=True)
     print(f"  Loaded {len(df)} evaluation checkpoints")
     df.to_csv(output_dir / "training_history.csv", index=False)
 
     pairs = [
-        ("synth_loss", "real_acc",  "SynthLoss vs Real Acc (expect negative)"),
-        ("synth_loss", "real_auc",  "SynthLoss vs Real AUC (expect negative)"),
-        ("synth_acc",  "real_acc",  "SynthAcc  vs Real Acc (expect positive)"),
-        ("synth_acc",  "real_auc",  "SynthAcc  vs Real AUC (expect positive)"),
+        ("synth_loss", "real_acc",  "SynthLoss vs Real Acc"),
+        ("synth_loss", "real_auc",  "SynthLoss vs Real AUC"),
+        ("synth_acc",  "real_acc",  "SynthAcc  vs Real Acc"),
+        ("synth_acc",  "real_auc",  "SynthAcc  vs Real AUC"),
     ]
     for col_x, col_y, label in pairs:
         if col_x not in df or col_y not in df:
             continue
-        rho, pval = sp_stats.spearmanr(df[col_x], df[col_y])
+        rho, pval = sp_stats.spearmanr(df[col_x].dropna(), df[col_y].dropna())
         sig = "***" if pval < 0.001 else "**" if pval < 0.01 else "*" if pval < 0.05 else "n.s."
-        print(f"    {label}")
-        print(f"      ρ={rho:+.4f}  p={pval:.6f}  {sig}")
+        print(f"    {label}: ρ={rho:+.4f}  p={pval:.6f}  {sig}")
 
     steps = df["step"].values
     fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
@@ -619,8 +575,8 @@ def run_training_history(log_dir: Path, output_dir: Path, max_steps: int = 0):
     ax1b.set_ylabel("Real AUC", color=c_rau, fontsize=12)
     ax1b.tick_params(axis="y", labelcolor=c_rau)
     lines  = ax1.get_legend_handles_labels()[0] + ax1b.get_legend_handles_labels()[0]
-    labels = ax1.get_legend_handles_labels()[1] + ax1b.get_legend_handles_labels()[1]
-    ax1.legend(lines, labels, loc="lower left", fontsize=10)
+    labels_h = ax1.get_legend_handles_labels()[1] + ax1b.get_legend_handles_labels()[1]
+    ax1.legend(lines, labels_h, loc="lower left", fontsize=10)
     ax1.set_title("SynthEval Loss ↓  ↔  Real AUC ↑", fontsize=13, fontweight="bold")
     ax1.grid(True, alpha=0.2)
 
@@ -639,8 +595,8 @@ def run_training_history(log_dir: Path, output_dir: Path, max_steps: int = 0):
               color=c_rau, lw=2.5, linestyle="--", label="Real AUC")
     ax2b.set_ylabel("Real Eval", fontsize=12)
     lines  = ax2.get_legend_handles_labels()[0] + ax2b.get_legend_handles_labels()[0]
-    labels = ax2.get_legend_handles_labels()[1] + ax2b.get_legend_handles_labels()[1]
-    ax2.legend(lines, labels, loc="lower left", fontsize=10)
+    labels_h = ax2.get_legend_handles_labels()[1] + ax2b.get_legend_handles_labels()[1]
+    ax2.legend(lines, labels_h, loc="lower left", fontsize=10)
     ax2.set_title("SynthEval Acc  ↔  Real Acc & AUC", fontsize=13, fontweight="bold")
     ax2.set_xlabel("Training Step", fontsize=12)
     ax2.grid(True, alpha=0.2)
@@ -656,30 +612,26 @@ def run_training_history(log_dir: Path, output_dir: Path, max_steps: int = 0):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Final evaluation: ablation + SOTA comparison")
-    parser.add_argument("checkpoint", type=str, help="Path to checkpoint .pt file")
+    parser = argparse.ArgumentParser(
+        description="Final evaluation: D_e1/D_e8 vs e1/e8 baselines + SOTA"
+    )
+    parser.add_argument("checkpoint", type=str,
+                        help="Path to checkpoint .pt file")
     parser.add_argument("--device", type=str, default="auto",
                         help="Device: auto (cuda→mps→cpu), cpu, cuda, mps")
-    parser.add_argument("--n-ensemble", type=int, default=N_ENSEMBLE_ITERS,
-                        help=f"Ensemble iterations for model D (default {N_ENSEMBLE_ITERS})")
-    parser.add_argument("--all-pfn", action="store_true",
-                        help="Load all PFN-eligible datasets (default mode)")
     parser.add_argument("--dataset-names", type=str, default=None,
                         help="Comma-separated dataset names or path to .txt file")
     parser.add_argument("--collection", type=str, default="ucr",
                         choices=["ucr", "uea"],
                         help="HC2 collection for Test 2 (default: ucr)")
     parser.add_argument("--skip-test1", action="store_true",
-                        help="Skip Test 1 and load from existing test1_ablation.csv")
-    parser.add_argument("--model-c", action="store_true",
-                        help="Build and evaluate Model C live (used when pre-computed C "
-                             "is unavailable in 01_real_data/benchmark_results/)")
+                        help="Skip Test 1 and load from existing test1_comparison.csv")
     parser.add_argument("--out-dir", type=str, default=None,
-                        help="Output directory (default: 04_evaluation/results/<ckpt_name>/)")
+                        help="Output dir (default: 04_evaluation/results/<ckpt_stem>/)")
     parser.add_argument("--with-history", action="store_true",
-                        help="Also plot training history (requires history.json next to checkpoint)")
+                        help="Also plot training history (needs history.json near checkpoint)")
     parser.add_argument("--log-dir", type=str, default=None,
-                        help="Directory containing history.json (default: checkpoint parent/logs/)")
+                        help="Directory with history.json (default: checkpoint parent)")
     args = parser.parse_args()
 
     # ── Checkpoint ──
@@ -687,7 +639,7 @@ def main():
     if not checkpoint_path.exists():
         checkpoint_path = HERE / args.checkpoint
     if not checkpoint_path.exists():
-        print(f"ERROR: Checkpoint not found at {checkpoint_path}")
+        print(f"ERROR: Checkpoint not found: {checkpoint_path}")
         return
 
     # ── Device ──
@@ -702,14 +654,11 @@ def main():
         device = args.device
 
     # ── Output dir ──
-    if args.out_dir:
-        output_dir = Path(args.out_dir)
-    else:
-        output_dir = HERE / "results" / checkpoint_path.stem
+    output_dir = Path(args.out_dir) if args.out_dir else HERE / "results" / checkpoint_path.stem
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 80)
-    print("FINAL EVALUATION — 2 TESTS")
+    print("FINAL EVALUATION — Test 1 (D_e1/D_e8 vs e1/e8) + Test 2 (SOTA)")
     print("=" * 80)
     print(f"  Checkpoint : {checkpoint_path}")
     print(f"  Device     : {device}")
@@ -719,21 +668,21 @@ def main():
     print("\nLoading datasets...")
     if args.dataset_names:
         p = Path(args.dataset_names)
-        raw = p.read_text().strip() if p.exists() and p.suffix in (".txt", ".csv") \
-              else args.dataset_names
+        raw = (p.read_text().strip() if p.exists() and p.suffix in (".txt", ".csv")
+               else args.dataset_names)
         names = [n.strip() for n in raw.replace("\n", ",").split(",") if n.strip()]
         datasets = load_datasets(names=names)
         print(f"  {len(datasets)}/{len(names)} datasets loaded (custom list)")
     else:
         datasets = load_datasets()
-        print(f"  {len(datasets)} datasets loaded")
+        print(f"  {len(datasets)} datasets loaded (all PFN-filtered)")
 
     # ── Load checkpoint ──
     print("\nLoading checkpoint...")
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     version = ckpt.get("version", "unknown")
 
-    if version == "overlap_v1":
+    if version in ("overlap_v1", "overlap_v2"):
         ft_model, _, _, _ = build_overlap_model(device=device)
         use_overlap = True
     else:
@@ -744,38 +693,26 @@ def main():
     ft_model.eval()
     print(f"  Version: {version}  Step: {ckpt.get('step', '?')}")
 
-    # ── Pre-computed B/C ──
-    print("\nLooking for pre-computed B/C benchmarks...")
-    precomputed_bc = load_precomputed_bc()
-    if precomputed_bc:
-        n_b = sum(1 for v in precomputed_bc.values() if "B_acc" in v)
-        n_c = sum(1 for v in precomputed_bc.values() if "C_acc" in v)
-        print(f"  Found: {n_b} datasets with B, {n_c} with C → B/C loaded from CSV, only D runs live")
+    # ── Precomputed baselines ──
+    print("\nLooking for pre-computed baselines (e1/e8)...")
+    precomputed = load_precomputed_baselines()
+    if precomputed:
+        n_e1 = sum(1 for v in precomputed.values() if "e1_acc" in v)
+        n_e8 = sum(1 for v in precomputed.values() if "e8_acc" in v)
+        print(f"  Found: {n_e1} datasets with e1, {n_e8} with e8  (from CSV)")
     else:
         print(f"  Not found in {BENCHMARK_RESULTS_DIR}")
-        print(f"  → B will be computed live (run `sbatch benchmark_tabpfn.sbatch` to pre-compute)")
-
-    # ── Model C (live) ──
-    vanilla_model = None
-    if args.model_c:
-        has_c_precomputed = any("C_acc" in v for v in precomputed_bc.values())
-        if not has_c_precomputed:
-            print("\nBuilding Model C (no pre-computed C found)...")
-            vanilla_model = build_vanilla_tabpfn(device)
-            print("  Model C ready")
-        else:
-            print("\n  --model-c ignored: pre-computed C already available")
+        print(f"  Run benchmark_tabpfn.sbatch to pre-compute baselines.")
 
     # ── TEST 1 ──
-    test1_csv = output_dir / "test1_ablation.csv"
+    test1_csv = output_dir / "test1_comparison.csv"
     if args.skip_test1 and test1_csv.exists():
         print(f"\n  Skipping Test 1 — loading from {test1_csv}")
         test1_df = pd.read_csv(test1_csv)
     else:
         test1_df = run_test1(
             datasets, ft_model, device, output_dir,
-            n_ensemble=args.n_ensemble, use_overlap=use_overlap,
-            vanilla_model=vanilla_model, precomputed_bc=precomputed_bc,
+            use_overlap=use_overlap, precomputed=precomputed,
         )
 
     # ── TEST 2 ──
@@ -786,7 +723,7 @@ def main():
         print("\n\n" + "=" * 80)
         print("TRAINING HISTORY")
         print("=" * 80)
-        log_dir = Path(args.log_dir) if args.log_dir else checkpoint_path.parent / "logs"
+        log_dir = Path(args.log_dir) if args.log_dir else checkpoint_path.parent
         run_training_history(log_dir, output_dir)
 
     print("\n\n" + "=" * 80)
