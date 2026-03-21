@@ -5,17 +5,15 @@ Architecture summary
 --------------------
 - Pretrained TabPFN v2.5 backbone (24 layers, emsize=192, nhead=3, nhid=384).
 - features_per_group = 16  (each token = 1 channel × 16 timesteps).
-- Fresh-initialized components (Xavier):
+- Fresh-initialized (Xavier):
     * Encoder: MLP(32→96→GELU→96→GELU→192) via TabPFN's get_encoder pipeline
       (includes NanHandlingEncoderStep, InputNormalizationEncoderStep,
        VariableNumFeaturesEncoderStep).
-- Pretrained (original weights):
-    * feature_positional_embedding_embeddings: Linear(48→192) kept from TabPFN.
-      Seed=42 aligns raw vectors with COL_EMBEDDING; pretrained projection
-      means the transformer already knows how to interpret them.
-    * 24 transformer layers (attention + MLP)
-    * y_encoder (label projection)
-    * decoder (prediction head)
+- Everything else is unchanged from the pretrained checkpoint:
+    * add_embeddings: TabPFN's built-in "subspace" mode, seed=42.
+      Each token gets a unique COL_EMBEDDING-aligned 48-d vector projected
+      through the pretrained Linear(48→192).  No monkey-patching needed.
+    * 24 transformer layers, y_encoder, decoder — all pretrained.
 
 Tokenization (overlap expansion, done externally before every forward pass)
 ---------------------------------------------------------------------------
@@ -24,26 +22,17 @@ Tokenization (overlap expansion, done externally before every forward pass)
      n_groups = (T_padded - 16) // 12 + 1
   3. Flat layout (feature-major): groups from same channel are contiguous.
      [ch0_g0(16), ch0_g1(16), ..., ch1_g0(16), ch1_g1(16), ...]
-  4. set_temporal_info(model, m, n_groups * 16, group_size=16)
-     TabPFN's einops split by features_per_group=16 picks up each window.
-
-Embeddings per token (monkey-patched add_embeddings)
-------------------------------------------------------
-  Each token i (i = ch * n_groups + g) gets a unique pseudo-random 48-d
-  vector generated with seed=42 (COL_EMBEDDING when i < 2000), projected
-  to 192 via the pretrained Linear(48→192).
+  TabPFN's einops split by features_per_group=16 picks up each window.
 
 Usage
 -----
   model, clf, fresh_params, pretrained_params = build_overlap_model(device="cuda")
   X_exp, T_pad, n_groups = pad_and_expand_overlap(X_flat, m, T)
-  set_temporal_info(model, m, n_groups * WINDOW, group_size=WINDOW)
-  # … forward pass …
+  # … forward pass (no set_temporal_info needed) …
 """
 
 from __future__ import annotations
 
-import types
 from pathlib import Path
 import sys
 
@@ -60,11 +49,10 @@ from tabpfn.architectures.base import get_encoder
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-WINDOW: int = 16           # temporal window size per token
+WINDOW: int = 16           # temporal window size per token (features_per_group)
 STRIDE: int = 12           # temporal stride between windows
 ENCODER_HIDDEN: int = 96   # MLP hidden dim (first two layers)
 ENCODER_LAYERS: int = 3    # MLP depth: 32→96,GELU→96,GELU→192 (no GELU after last)
-FEATURE_EMB_DIM: int = 48  # emsize // 4 = 48; raw dim for per-token pseudo-random vectors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,70 +152,16 @@ def pad_to_group(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Temporal runtime state
+# Backward-compat stubs (called by inference.py / worker_evaluator_v2.py;
+# no longer affect embeddings since we use TabPFN's built-in add_embeddings)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def set_temporal_info(model, n_features: int, T: int, group_size: int = WINDOW) -> None:
-    """Store temporal metadata on the model before a forward pass.
-
-    Args:
-        n_features: m (number of original channels)
-        T:          T_padded (or n_groups * WINDOW after overlap expansion)
-        group_size: features_per_group (default WINDOW=16)
-    """
-    gs = group_size
-    T_padded = T if T % gs == 0 else T + (gs - T % gs)
-    model._temporal_info = (n_features, T_padded, group_size)
+    """No-op kept for backward compatibility with inference.py / worker_evaluator_v2.py."""
 
 
 def clear_temporal_info(model) -> None:
-    """Revert to default (non-temporal) subspace embeddings."""
-    model._temporal_info = (None, None, None)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Monkey-patch: per-token pseudo-random embeddings (TabPFN-compatible)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def temporal_add_embeddings(
-    self, x, y, *, data_dags, num_features, seq_len,
-    cache_embeddings=False, use_cached_embeddings=False
-):
-    """Replacement for PerFeatureTransformer.add_embeddings.
-
-    Each token i (i = ch * n_groups + g, layout: feature-major) gets a unique
-    pseudo-random 48-d vector generated with seed=42 (TabPFN's original).
-    For i < 2000 the pretrained COL_EMBEDDING vectors are used directly,
-    keeping the pretrained feature_positional_embedding_embeddings meaningful.
-
-    x shape: (batch, seq_len, n_tokens, emsize)
-    n_tokens = m * n_groups_per_feat  (after TabPFN's einops split)
-    """
-    if use_cached_embeddings and self.cached_feature_positional_embeddings is not None:
-        x += self.cached_feature_positional_embeddings[None, None]
-        return x, y
-
-    n_tokens = x.shape[2]
-    emsize   = x.shape[3]
-
-    rng = torch.Generator(device=x.device).manual_seed(self.random_embedding_seed)
-    embs = torch.randn(
-        (n_tokens, FEATURE_EMB_DIM), device=x.device, dtype=x.dtype, generator=rng
-    )
-
-    from tabpfn.architectures.base.transformer import COL_EMBEDDING
-    if self.random_embedding_seed == 42:
-        embs[: min(n_tokens, 2000)] = COL_EMBEDDING[: min(n_tokens, 2000)].to(
-            device=embs.device, dtype=embs.dtype
-        )
-
-    embs = self.feature_positional_embedding_embeddings(embs)  # (n_tokens, emsize)
-    x += embs[None, None]
-
-    self.cached_embeddings = None
-    if cache_embeddings:
-        self.cached_embeddings = embs
-    return x, y
+    """No-op kept for backward compatibility."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -235,24 +169,20 @@ def temporal_add_embeddings(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_overlap_model(device: str = "auto") -> tuple:
-    """Build TabPFN with overlapping groups: MLP encoder + 24 pretrained layers.
+    """Build TabPFN with overlapping groups: custom MLP encoder, everything else unchanged.
 
-    Fresh-initialized (Xavier):
-      - Encoder: MLP(32→96→GELU→96→GELU→192, no bias) via TabPFN's get_encoder
-        pipeline (includes NanHandling, InputNormalization, VariableNumFeatures).
+    The only architectural change vs vanilla TabPFN is:
+      - features_per_group: 3 → WINDOW (16)
+      - encoder: replaced with MLP(32→96→GELU→96→GELU→192, no bias)
+        via TabPFN's get_encoder pipeline (NanHandling, InputNorm, VariableNumFeatures).
 
-    Pretrained (original TabPFN v2.5 weights):
-      - feature_positional_embedding_embeddings: Linear(48→192), seed=42.
-        COL_EMBEDDING vectors are used for i<2000 → projection is already
-        meaningful for the pretrained transformer layers.
-      - 24 transformer layers (attention + MLP)
-      - y_encoder (label projection)
-      - decoder (prediction head)
+    Everything else (embeddings, all 24 transformer layers, y_encoder, decoder)
+    is kept from the pretrained checkpoint without modification.
 
     Returns:
-        model            — modified PerFeatureTransformer
-        clf              — TabPFNClassifier (for fit_from_preprocessed API)
-        fresh_params     — list of freshly initialised nn.Parameter objects
+        model             — modified PerFeatureTransformer
+        clf               — TabPFNClassifier (for fit_from_preprocessed API)
+        fresh_params      — list of fresh nn.Parameter objects (encoder only)
         pretrained_params — list of pretrained nn.Parameter objects
     """
     if device == "auto":
@@ -302,18 +232,13 @@ def build_overlap_model(device: str = "auto") -> tuple:
     print(f"  [fresh] encoder: MLP({WINDOW * 2}→{ENCODER_HIDDEN},GELU"
           f"{'→' + str(ENCODER_HIDDEN) + ',GELU' * (ENCODER_LAYERS - 2)}→{emsize}, no bias) Xavier")
 
-    # ── 3. Seed=42: keep pretrained feature_positional_embedding_embeddings ──
-    #   COL_EMBEDDING vectors + pretrained Linear(48→192) means the transformer
-    #   already knows how to interpret these embeddings from its pretraining.
-    model.random_embedding_seed = 42
-    print(f"  [pretrained] feature_positional_embedding_embeddings: Linear({FEATURE_EMB_DIM}→{emsize})"
-          f" kept from TabPFN (seed=42, COL_EMBEDDING aligned)")
+    # Embeddings, add_embeddings, seed, and all transformer layers are left
+    # exactly as loaded from the pretrained checkpoint.
+    emb_seed = model.random_embedding_seed
+    emb_type = model.feature_positional_embedding
+    print(f"  [pretrained] embeddings: type={emb_type!r}  seed={emb_seed}  (unchanged)")
 
-    # ── 4. Patch add_embeddings: per-token pseudo-random (no temporal PE) ──
-    model.add_embeddings = types.MethodType(temporal_add_embeddings, model)
-    print(f"  Patched add_embeddings: per-token pseudo-random 48→192 (seed=42, COL_EMBEDDING)")
-
-    # ── 5. Collect parameter groups ──
+    # ── 3. Collect parameter groups ──
     #   Only the encoder is fresh; everything else is pretrained.
     fresh_ids: set = set()
     fresh_params: list = []
@@ -397,8 +322,6 @@ def build_temporal_tabpfn_fpg8(
     _reinit_module(model.feature_positional_embedding_embeddings)
     for layer in layers[:n_fresh]:
         _reinit_module(layer)
-
-    model.add_embeddings = types.MethodType(temporal_add_embeddings, model)
 
     seen_ids: set = set()
     fresh_params: list = []
