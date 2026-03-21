@@ -7,7 +7,8 @@ Architecture summary
 - features_per_group = 16  (each token = 1 channel × 16 timesteps).
 - Fresh-initialized (Xavier):
     * Patch encoder: MLP(32→96→GELU→192) via TabPFN's get_encoder
-      pipeline (NanHandling, InputNormalization, VariableNumFeatures).
+      pipeline (NanHandling, VariableNumFeatures).
+      normalize_x=False — per-position normalization is disabled.
     * Global Conv1D encoders: 4 kernels (3, 7, 9, 11), each Conv1d(2→192)+GELU.
       Mean/max pool over T, then (if m>1) mean/max pool over m.
       → 8 tokens (univariate) or 16 tokens (multivariate).
@@ -15,6 +16,14 @@ Architecture summary
     * add_embeddings: TabPFN's "subspace" mode, seed=42, COL_EMBEDDING.
       Patched to inject global tokens alongside patch tokens.
     * 24 transformer layers, y_encoder, decoder.
+
+Normalisation strategy
+----------------------
+  per_channel_normalize() is called BEFORE overlap expansion.  Each channel
+  is centred to mean=0, std=1 using train-only statistics (ignoring NaN).
+  This single normalisation step feeds BOTH the patch encoder and the global
+  Conv1D encoder, replacing TabPFN's default per-position InputNormalization
+  which would destroy temporal continuity within patches.
 
 Token layout for the transformer
 ---------------------------------
@@ -24,8 +33,9 @@ Token layout for the transformer
 Usage
 -----
   model, clf, fresh_params, pretrained_params = build_overlap_model(device="cuda")
-  X_exp, T_pad, n_groups = pad_and_expand_overlap(X_flat, m, T)
-  set_global_input(model, X_tr_3d, X_te_3d)   # store raw 3D for conv encoders
+  X_tr_3d_n, X_te_3d_n = per_channel_normalize(X_tr_3d, X_te_3d)
+  X_exp, T_pad, n_groups = pad_and_expand_overlap(X_flat_norm, m, T)
+  set_global_input(model, X_tr_3d_n, X_te_3d_n)
   # … forward pass …
 """
 
@@ -220,25 +230,68 @@ class GlobalConvEncoder(nn.Module):
 # Global-token injection: store raw data + patch add_embeddings
 # ─────────────────────────────────────────────────────────────────────────────
 
-def set_global_input(model, X_tr_3d: np.ndarray, X_te_3d: np.ndarray) -> None:
-    """Prepare and store global tokens from raw 3D data before a forward pass.
+def per_channel_normalize(
+    X_tr: np.ndarray, X_te: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Normalize each channel to mean=0, std=1 using train-only statistics.
 
-    Computes global conv features for train and test, stores them on the model
-    so the patched add_embeddings can inject them alongside patch tokens.
+    Statistics are computed over all (n_train × T) values per channel,
+    ignoring NaN.  This preserves the temporal shape of each channel while
+    removing amplitude differences between channels and datasets.
+
+    Must be called BEFORE overlap expansion so that both the patch encoder
+    and the global Conv1D encoder see the same normalised data.  The patch
+    encoder's ``InputNormalizationEncoderStep`` is disabled (``normalize_x=False``)
+    precisely because this function handles normalisation.
+
+    Args:
+        X_tr: (n_train, m, T)
+        X_te: (n_test,  m, T)
+
+    Returns:
+        X_tr_norm, X_te_norm — float32, NaN positions unchanged.
+    """
+    m = X_tr.shape[1]
+    X_tr_n = X_tr.copy().astype(np.float64)
+    X_te_n = X_te.copy().astype(np.float64)
+
+    for j in range(m):
+        train_vals = X_tr_n[:, j, :].ravel()
+        finite = train_vals[np.isfinite(train_vals)]
+        if len(finite) == 0:
+            continue
+        mu  = finite.mean()
+        std = finite.std()
+        if std < 1e-8:
+            std = 1.0
+        X_tr_n[:, j, :] = (X_tr_n[:, j, :] - mu) / std
+        X_te_n[:, j, :] = (X_te_n[:, j, :] - mu) / std
+
+    return X_tr_n.astype(np.float32), X_te_n.astype(np.float32)
+
+
+def set_global_input(model, X_tr_3d: np.ndarray, X_te_3d: np.ndarray) -> None:
+    """Prepare and store global tokens from pre-normalized 3D data.
+
+    Expects data already per-channel normalised by the caller via
+    ``per_channel_normalize``.  Pipeline here:
+      1. NaN → 0  (NaN positions get a neutral value).
+      2. Build NaN indicator mask (1.0 where original was NaN).
+      3. Pass [value, nan_indicator] to GlobalConvEncoder.
 
     Args:
         model:    PerFeatureTransformer with model.global_conv_encoder attached.
-        X_tr_3d:  (n_train, m, T) numpy — may contain NaN.
-        X_te_3d:  (n_test, m, T) numpy — may contain NaN.
+        X_tr_3d:  (n_train, m, T) numpy — pre-normalised, may contain NaN.
+        X_te_3d:  (n_test, m, T) numpy — pre-normalised, may contain NaN.
     """
     device = next(model.parameters()).device
+
     X_all = np.concatenate([X_tr_3d, X_te_3d], axis=0)
     nan_mask = np.isnan(X_all).astype(np.float32)
     X_clean = np.nan_to_num(X_all, nan=0.0).astype(np.float32)
 
     x_t = torch.as_tensor(X_clean, dtype=torch.float32, device=device)
     m_t = torch.as_tensor(nan_mask, dtype=torch.float32, device=device)
-    # (n_all, n_global, emsize)
     model._global_tokens = model.global_conv_encoder(x_t, m_t)
 
 
@@ -292,7 +345,8 @@ def build_overlap_model(device: str = "auto") -> tuple:
     Architectural changes vs vanilla TabPFN:
       - features_per_group: 3 → WINDOW (16)
       - encoder: replaced with MLP(32→96→GELU→192, no bias)
-        via TabPFN's get_encoder pipeline (NanHandling, InputNorm, VariableNumFeatures).
+        via TabPFN's get_encoder pipeline (NanHandling, VariableNumFeatures).
+        normalize_x=False — caller pre-normalises per-channel via per_channel_normalize().
       - global_conv_encoder: 4 Conv1D kernels (3,7,9,11), each Conv1d(2→192)+GELU,
         producing 8 (univariate) or 16 (multivariate) extra global tokens.
       - add_embeddings: monkey-patched to inject global tokens alongside patch tokens,
@@ -329,7 +383,9 @@ def build_overlap_model(device: str = "auto") -> tuple:
     model.features_per_group = WINDOW
     print(f"  features_per_group: 3 → {WINDOW}")
 
-    # ── 2. Replace encoder with MLP(32→96,GELU→96,GELU→192, no bias) ──
+    # ── 2. Replace encoder with MLP(32→96,GELU→192, no bias) ──
+    # normalize_x=False: we pre-normalize per-channel before overlap expansion
+    # so that temporal dynamics within patches are preserved.
     new_encoder = get_encoder(
         num_features=WINDOW,
         embedding_size=emsize,
@@ -338,7 +394,7 @@ def build_overlap_model(device: str = "auto") -> tuple:
         nan_handling_enabled=True,
         normalize_on_train_only=True,
         normalize_to_ranking=False,
-        normalize_x=True,
+        normalize_x=False,
         remove_outliers=False,
         normalize_by_used_features=True,
         encoder_use_bias=False,
@@ -480,12 +536,28 @@ if __name__ == "__main__":
     m, T = 2, 64
     n_samples = 5
     X = np.random.randn(n_samples, m * T).astype(np.float32)
-    X_exp, T_pad, n_groups = pad_and_expand_overlap(X, m, T)
+
+    X_3d = X.reshape(n_samples, m, T)
+    X_tr_3d, X_te_3d = X_3d[:3], X_3d[3:]
+    X_tr_n, X_te_n = per_channel_normalize(X_tr_3d, X_te_3d)
+    print(f"\nper_channel_normalize: train {X_tr_n.shape}, test {X_te_n.shape}")
+    ch_means = [f"{X_tr_n[:, j, :].mean():.4f}" for j in range(m)]
+    print(f"  train channel means: {ch_means}")
+
+    X_flat_n = np.concatenate([X_tr_n, X_te_n], axis=0).reshape(n_samples, m * T)
+    X_exp, T_pad, n_groups = pad_and_expand_overlap(X_flat_n, m, T)
     print(f"\nDummy: m={m}, T={T} → T_pad={T_pad}, n_groups/feat={n_groups}")
     print(f"  Input:    ({n_samples}, {m * T})")
     print(f"  Expanded: {X_exp.shape}")
 
-    X_3d = X.reshape(n_samples, m, T)
-    set_global_input(model, X_3d[:3], X_3d[3:])
+    set_global_input(model, X_tr_n, X_te_n)
     gt = model._global_tokens
     print(f"  Global tokens: {gt.shape}  (expect ({n_samples}, 16, 192) for m>1)")
+
+    m1, T1 = 1, 48
+    X1 = np.random.randn(4, m1 * T1).astype(np.float32)
+    X1_3d = X1.reshape(4, m1, T1)
+    X1_tr_n, X1_te_n = per_channel_normalize(X1_3d[:2], X1_3d[2:])
+    set_global_input(model, X1_tr_n, X1_te_n)
+    gt1 = model._global_tokens
+    print(f"  Univariate tokens: {gt1.shape}  (expect (4, 8, 192) for m=1)")

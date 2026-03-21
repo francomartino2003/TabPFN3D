@@ -37,6 +37,7 @@ from model import (
     pad_and_expand_overlap,
     set_temporal_info,
     set_global_input,
+    per_channel_normalize,
 )
 
 SOFTMAX_TEMPERATURE: float = 0.9
@@ -104,14 +105,19 @@ def forward_single_dataset(model, clf, device: str, data: Dict) -> Optional[Dict
         m = data["n_features_orig"]
         T = data["T"]
 
-        X_tr_p, T_pad, n_groups = pad_and_expand_overlap(data["X_train"], m, T)
-        X_te_p, _, _ = pad_and_expand_overlap(data["X_test"], m, T)
+        X_tr_3d = data["X_train"].reshape(-1, m, T)
+        X_te_3d = data["X_test"].reshape(-1, m, T)
+        X_tr_3d_n, X_te_3d_n = per_channel_normalize(X_tr_3d, X_te_3d)
+
+        X_tr_flat = X_tr_3d_n.reshape(-1, m * T)
+        X_te_flat = X_te_3d_n.reshape(-1, m * T)
+
+        X_tr_p, T_pad, n_groups = pad_and_expand_overlap(X_tr_flat, m, T)
+        X_te_p, _, _ = pad_and_expand_overlap(X_te_flat, m, T)
         T_eff = n_groups * WINDOW
         set_temporal_info(model, m, T_eff, group_size=WINDOW)
 
-        X_tr_3d = data["X_train"].reshape(-1, m, T)
-        X_te_3d = data["X_test"].reshape(-1, m, T)
-        set_global_input(model, X_tr_3d, X_te_3d)
+        set_global_input(model, X_tr_3d_n, X_te_3d_n)
 
         y_test_t = torch.tensor(data["y_test"], dtype=torch.long, device=device)
 
@@ -272,6 +278,12 @@ def evaluate_ensemble(
                             X_te_p = pooled_te[0]
                             m_eff, T_eff = m_new, T_new
 
+            X_tr_3d = X_tr_p.reshape(-1, m_eff, T_eff)
+            X_te_3d = X_te_p.reshape(-1, m_eff, T_eff)
+            X_tr_3d_n, X_te_3d_n = per_channel_normalize(X_tr_3d, X_te_3d)
+            X_tr_p = X_tr_3d_n.reshape(-1, m_eff * T_eff)
+            X_te_p = X_te_3d_n.reshape(-1, m_eff * T_eff)
+
             if use_overlap:
                 X_tr_pad, _, n_groups = pad_and_expand_overlap(X_tr_p, m_eff, T_eff)
                 X_te_pad, _, _ = pad_and_expand_overlap(X_te_p, m_eff, T_eff)
@@ -282,11 +294,8 @@ def evaluate_ensemble(
                 X_te_pad, _ = pad_to_group(X_te_p, m_eff, T_eff, group_size=GROUP_SIZE)
                 set_temporal_info(model, m_eff, T_padded, group_size=GROUP_SIZE)
 
-            # Global conv tokens from permuted (but not overlap-expanded) data
             if hasattr(model, "global_conv_encoder"):
-                X_tr_3d = X_tr_p.reshape(-1, m_eff, T_eff)
-                X_te_3d = X_te_p.reshape(-1, m_eff, T_eff)
-                set_global_input(model, X_tr_3d, X_te_3d)
+                set_global_input(model, X_tr_3d_n, X_te_3d_n)
 
             X_tr_t = torch.as_tensor(X_tr_pad, dtype=torch.float32, device=device)
             y_tr_t = torch.as_tensor(y_tr_p, dtype=torch.float32, device=device)

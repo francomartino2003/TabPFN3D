@@ -3,17 +3,15 @@
 ## Motivation
 
 We evaluate our adapted PFN model on real-world time series classification (TSC)
-benchmarks and compare it against two baselines:
+benchmarks and compare it against TabPFN used as a flat-feature classifier on
+flattened time series
+([Hollmann et al., 2025](https://www.nature.com/articles/s41586-024-08328-6);
+[PriorLabs/TabPFN](https://github.com/PriorLabs/tabpfn)).
 
-1. **TabPFN v2.5** — the original tabular Prior-Fitted Network used as a
-   flat-feature classifier on flattened time series
-   ([Hollmann et al., 2025](https://arxiv.org/abs/2501.02593);
-   [PriorLabs/TabPFN](https://github.com/PriorLabs/tabpfn)).
-2. **State-of-the-art TSC models** — accuracy results published in the
-   HIVE-COTE 2.0 (HC2) paper
-   ([Middlehurst et al., 2021](https://doi.org/10.1007/s10994-021-06057-9)),
-   downloaded from
-   [timeseriesclassification.com/HC2.php](https://www.timeseriesclassification.com/HC2.php).
+As SOTA reference we use results from the HIVE-COTE 2.0 (HC2) paper
+([Middlehurst et al., 2021](https://doi.org/10.1007/s10994-021-06057-9)),
+downloaded from
+[timeseriesclassification.com/HC2.php](https://www.timeseriesclassification.com/HC2.php).
 
 ---
 
@@ -69,43 +67,30 @@ operate on the same subset, ensuring fair comparisons.
 
 ## Experiments
 
-### Experiment 1 — Full PFN-eligible evaluation (101 UCR + 11 UEA)
+### Experiment 1 — TabPFN baseline (101 UCR + 11 UEA)
 
-All 101 UCR and 11 UEA datasets that pass the PFN filter are benchmarked against
-our adapted PFN model using three configurations:
+All 101 UCR and 11 UEA datasets that pass the PFN filter are benchmarked with
+standard TabPFN v2.5 in two configurations:
 
-| Model | Weights | Ensemble pipeline | Purpose |
-|-------|---------|-------------------|---------|
-| **B — TabPFN standard** | TabPFN v2.5 pretrained | 8 ensembles, built-in: SVD + squashing scaler + fingerprint + feature subsampling + feature/class shifts | Standard TabPFN baseline |
-| **C — Pretrained + our pipeline** | TabPFN v2.5 pretrained | 8 ensembles, our pipeline: channel-aware feature permutation + squashing scaler (odd iters) + global pooling 16/8 (every 4 iters). No SVD, no fingerprint, no feature subsampling | Ablation: ensemble strategy contribution |
-| **D — Overlap finetuned** | Finetuned (overlap model) | Same as C + overlap expansion + temporal positional embedding | Our full model |
+| Label | Ensemble | Description |
+|-------|----------|-------------|
+| **e1** | 1 estimator | TabPFN default: SVD + squashing scaler on the first ensemble member |
+| **e8** | 8 estimators | TabPFN default: distributes SVD and other preprocessors across 8 members |
 
-Each dataset × model is run **30 times** with different random seeds and results
-are averaged. Metrics: **accuracy** and **AUROC**.
-Datasets with ≥ 1 000 training samples are subsampled to 1 000 (fixed seed 0)
-for all models, ensuring fair comparisons.
+Each dataset is run **30 times** with different random seeds and results are
+averaged. Metrics: **accuracy** and **AUROC**.
+Datasets with `subsample_train=True` are subsampled to 1 000 training examples
+(fixed seed 0) for all runs.
 
-The B vs C comparison isolates the contribution of our ensemble/preprocessing
-strategy over TabPFN's default pipeline, using identical pretrained weights.
-The C vs D comparison isolates the contribution of finetuning.
-
-Models B and C are pre-computed by `benchmark_tabpfn.py` (typically run on a
-cluster) and saved to `benchmark_results/`. Model D is evaluated live by
-`04_evaluation/final_evaluation.py`, which loads B and C from the saved CSVs to
-avoid re-computation.
+Results are saved to `benchmark_results/` and automatically loaded by
+`04_evaluation/final_evaluation.py` as baselines for the final comparison.
 
 ### Experiment 2 — Standard benchmark comparison with SOTA (90 UCR + 9 UEA)
 
 The HC2 state-of-the-art results are only available for the **standard** subsets
 (112 UCR, 26 UEA): problems with equal-length series and no missing values. Of
 those, **90 UCR** and **9 UEA** also pass the PFN filter. We use this
-intersection to compare our adapted PFN model against both TabPFN v2.5 and the
-published SOTA (HC2, InceptionTime, ROCKET, etc.).
-
-This two-level design avoids cherry-picking:
-- Experiment 1 uses **every dataset** the model can handle.
-- Experiment 2 restricts to the **standard benchmark subset** where external
-  baselines exist, intersected with PFN limits.
+intersection to compare our adapted PFN model against both TabPFN and HC2.
 
 ---
 
@@ -146,20 +131,19 @@ python 01_real_data/download_hc2_benchmarks.py
 
 ### `benchmark_tabpfn.py`
 
-Pre-computes Models B and C (Experiment 1) on all PFN-eligible datasets.
+Pre-computes the **e1** and **e8** TabPFN baselines on all PFN-eligible datasets.
 Datasets with `subsample_train=True` are subsampled to 1 000 training examples
-using a fixed seed (0) for reproducibility. Each model × dataset is run 30 times
-with different seeds and averaged. Imports `evaluate_ensemble` from
-`03_finetuning/inference.py` for Model C. Outputs:
+using a fixed seed (0). Each configuration × dataset is run 30 times and
+averaged. Outputs:
 
 - `benchmark_results/ucr_benchmark_tabpfn.csv`
 - `benchmark_results/uea_benchmark_tabpfn.csv`
 
-Columns: `dataset`, `collection`, `B_acc_mean`, `B_acc_std`, `B_auc_mean`,
-`B_auc_std`, `C_acc_mean`, `C_acc_std`, `C_auc_mean`, `C_auc_std`, `n_runs`.
+Columns: `dataset`, `collection`, `e1_acc_mean`, `e1_acc_std`, `e1_auc_mean`,
+`e1_auc_std`, `e8_acc_mean`, `e8_acc_std`, `e8_auc_mean`, `e8_auc_std`, `n_runs`.
 
 These CSVs are automatically loaded by `04_evaluation/final_evaluation.py` so
-that only Model D (the finetuned model) needs to run live during evaluation.
+that only the finetuned model needs to run live during evaluation.
 
 **Locally** (slower, uses `auto` device — MPS on Apple Silicon):
 ```bash
@@ -169,8 +153,6 @@ python 01_real_data/benchmark_tabpfn.py [--ucr-only] [--uea-only] [--n-runs 30] 
 **On the cluster** (recommended — single GPU, UCR and UEA as separate steps):
 ```bash
 sbatch benchmark_tabpfn.sbatch
-# or with custom run count:
-sbatch --export=ALL,N_RUNS=30 benchmark_tabpfn.sbatch
 ```
 
 ---

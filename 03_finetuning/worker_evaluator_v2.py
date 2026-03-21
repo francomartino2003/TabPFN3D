@@ -22,7 +22,7 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 sys.path.insert(0, str(Path(__file__).parent.parent / "02_synthetic_data"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "00_TabPFN" / "src"))
 
-from model import build_overlap_model, pad_and_expand_overlap, set_temporal_info, set_global_input, WINDOW, STRIDE
+from model import build_overlap_model, pad_and_expand_overlap, set_temporal_info, set_global_input, per_channel_normalize, WINDOW, STRIDE
 from data_utils import FinetuneConfig, SyntheticDataGenerator, load_all_pfn_datasets
 from augmentation import augment_dataset
 from inference import forward_single_dataset, deserialize_batch
@@ -68,14 +68,19 @@ def evaluate_real(model, clf, device, real_datasets):
 
             m, T = data["n_features_orig"], data["T"]
 
-            X_tr_p, T_pad, n_groups = pad_and_expand_overlap(data["X_train"], m, T)
-            X_te_p, _, _ = pad_and_expand_overlap(data["X_test"], m, T)
+            X_tr_3d = data["X_train"].reshape(-1, m, T)
+            X_te_3d = data["X_test"].reshape(-1, m, T)
+            X_tr_3d_n, X_te_3d_n = per_channel_normalize(X_tr_3d, X_te_3d)
+
+            X_tr_flat = X_tr_3d_n.reshape(-1, m * T)
+            X_te_flat = X_te_3d_n.reshape(-1, m * T)
+
+            X_tr_p, T_pad, n_groups = pad_and_expand_overlap(X_tr_flat, m, T)
+            X_te_p, _, _ = pad_and_expand_overlap(X_te_flat, m, T)
             T_eff = n_groups * WINDOW
             set_temporal_info(model, m, T_eff, group_size=WINDOW)
 
-            X_tr_3d = data["X_train"].reshape(-1, m, T)
-            X_te_3d = data["X_test"].reshape(-1, m, T)
-            set_global_input(model, X_tr_3d, X_te_3d)
+            set_global_input(model, X_tr_3d_n, X_te_3d_n)
 
             with torch.no_grad():
                 X_tr_t = torch.as_tensor(X_tr_p, dtype=torch.float32, device=device)
