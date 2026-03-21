@@ -1,38 +1,37 @@
 """
-Overlap TabPFN model: MLP encoder with overlapping temporal groups.
+Overlap TabPFN model: patch encoder + global Conv1D encoders.
 
 Architecture summary
 --------------------
 - Pretrained TabPFN v2.5 backbone (24 layers, emsize=192, nhead=3, nhid=384).
 - features_per_group = 16  (each token = 1 channel × 16 timesteps).
 - Fresh-initialized (Xavier):
-    * Encoder: MLP(32→96→GELU→96→GELU→192) via TabPFN's get_encoder pipeline
-      (includes NanHandlingEncoderStep, InputNormalizationEncoderStep,
-       VariableNumFeaturesEncoderStep).
-- Everything else is unchanged from the pretrained checkpoint:
-    * add_embeddings: TabPFN's built-in "subspace" mode, seed=42.
-      Each token gets a unique COL_EMBEDDING-aligned 48-d vector projected
-      through the pretrained Linear(48→192).  No monkey-patching needed.
-    * 24 transformer layers, y_encoder, decoder — all pretrained.
+    * Patch encoder: MLP(32→96→GELU→192) via TabPFN's get_encoder
+      pipeline (NanHandling, InputNormalization, VariableNumFeatures).
+    * Global Conv1D encoders: 4 kernels (3, 7, 9, 11), each Conv1d(2→192)+GELU.
+      Mean/max pool over T, then (if m>1) mean/max pool over m.
+      → 8 tokens (univariate) or 16 tokens (multivariate).
+- Pretrained (unchanged):
+    * add_embeddings: TabPFN's "subspace" mode, seed=42, COL_EMBEDDING.
+      Patched to inject global tokens alongside patch tokens.
+    * 24 transformer layers, y_encoder, decoder.
 
-Tokenization (overlap expansion, done externally before every forward pass)
----------------------------------------------------------------------------
-  1. Pad T so (T_pad - WINDOW) % STRIDE == 0 and T_pad >= WINDOW.
-  2. Extract overlapping windows: window=16, stride=12.
-     n_groups = (T_padded - 16) // 12 + 1
-  3. Flat layout (feature-major): groups from same channel are contiguous.
-     [ch0_g0(16), ch0_g1(16), ..., ch1_g0(16), ch1_g1(16), ...]
-  TabPFN's einops split by features_per_group=16 picks up each window.
+Token layout for the transformer
+---------------------------------
+  [patch_0, patch_1, ..., patch_{m*G-1}, global_0, ..., global_{7or15}]
+  All get unique COL_EMBEDDING vectors via TabPFN's subspace embeddings.
 
 Usage
 -----
   model, clf, fresh_params, pretrained_params = build_overlap_model(device="cuda")
   X_exp, T_pad, n_groups = pad_and_expand_overlap(X_flat, m, T)
-  # … forward pass (no set_temporal_info needed) …
+  set_global_input(model, X_tr_3d, X_te_3d)   # store raw 3D for conv encoders
+  # … forward pass …
 """
 
 from __future__ import annotations
 
+import types
 from pathlib import Path
 import sys
 
@@ -51,8 +50,9 @@ from tabpfn.architectures.base import get_encoder
 
 WINDOW: int = 16           # temporal window size per token (features_per_group)
 STRIDE: int = 12           # temporal stride between windows
-ENCODER_HIDDEN: int = 96   # MLP hidden dim (first two layers)
-ENCODER_LAYERS: int = 3    # MLP depth: 32→96,GELU→96,GELU→192 (no GELU after last)
+ENCODER_HIDDEN: int = 96   # MLP hidden dim (192/2)
+ENCODER_LAYERS: int = 2    # MLP depth: 32→96,GELU→192 (no GELU after last)
+GLOBAL_KERNEL_SIZES: tuple[int, ...] = (3, 7, 9, 11)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -152,8 +152,126 @@ def pad_to_group(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Backward-compat stubs (called by inference.py / worker_evaluator_v2.py;
-# no longer affect embeddings since we use TabPFN's built-in add_embeddings)
+# Global Conv1D encoder
+# ─────────────────────────────────────────────────────────────────────────────
+
+class GlobalConvEncoder(nn.Module):
+    """Extract global summary tokens via multi-scale Conv1D + pooling.
+
+    For each kernel size k in GLOBAL_KERNEL_SIZES:
+      Conv1d(2, emsize, k, padding=k//2) + GELU  over each channel independently.
+      Input channels: [value, nan_indicator].
+      Then:
+        - mean pool over T → (n, m, emsize)
+        - max  pool over T → (n, m, emsize)
+      If m > 1, additionally:
+        - mean/max pool over m for each T-pooled result.
+
+    Univariate  (m=1): 4 kernels × 2 T-pools             = 8 tokens of dim emsize
+    Multivariate(m>1): 4 kernels × 2 T-pools × 2 m-pools = 16 tokens of dim emsize
+    """
+
+    def __init__(self, emsize: int = 192, kernel_sizes: tuple[int, ...] = GLOBAL_KERNEL_SIZES):
+        super().__init__()
+        self.convs = nn.ModuleList([
+            nn.Conv1d(in_channels=2, out_channels=emsize, kernel_size=k, padding=k // 2)
+            for k in kernel_sizes
+        ])
+        self.act = nn.GELU()
+
+    def forward(self, x_3d: torch.Tensor, nan_mask: torch.Tensor) -> torch.Tensor:
+        """Compute global tokens from raw time series data.
+
+        Args:
+            x_3d:     (n, m, T) — values with NaN replaced by 0.
+            nan_mask: (n, m, T) — 1.0 where original was NaN, 0.0 otherwise.
+
+        Returns:
+            (n, n_global, emsize) where n_global = 8 if m==1, 16 if m>1.
+        """
+        n, m, T = x_3d.shape
+        emsize = self.convs[0].out_channels
+
+        x_in = torch.stack([x_3d, nan_mask], dim=2)   # (n, m, 2, T)
+        x_in = x_in.reshape(n * m, 2, T)               # (n*m, 2, T)
+
+        tokens: list[torch.Tensor] = []
+        for conv in self.convs:
+            h = self.act(conv(x_in))             # (n*m, emsize, T')
+            mean_t = h.mean(dim=2)               # (n*m, emsize)
+            max_t  = h.max(dim=2).values         # (n*m, emsize)
+
+            mean_t = mean_t.reshape(n, m, emsize)
+            max_t  = max_t.reshape(n, m, emsize)
+
+            if m == 1:
+                tokens.append(mean_t[:, 0])      # (n, emsize)
+                tokens.append(max_t[:, 0])
+            else:
+                tokens.append(mean_t.mean(dim=1))       # mean_m(mean_t)
+                tokens.append(mean_t.max(dim=1).values)  # max_m(mean_t)
+                tokens.append(max_t.mean(dim=1))         # mean_m(max_t)
+                tokens.append(max_t.max(dim=1).values)   # max_m(max_t)
+
+        return torch.stack(tokens, dim=1)        # (n, n_global, emsize)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global-token injection: store raw data + patch add_embeddings
+# ─────────────────────────────────────────────────────────────────────────────
+
+def set_global_input(model, X_tr_3d: np.ndarray, X_te_3d: np.ndarray) -> None:
+    """Prepare and store global tokens from raw 3D data before a forward pass.
+
+    Computes global conv features for train and test, stores them on the model
+    so the patched add_embeddings can inject them alongside patch tokens.
+
+    Args:
+        model:    PerFeatureTransformer with model.global_conv_encoder attached.
+        X_tr_3d:  (n_train, m, T) numpy — may contain NaN.
+        X_te_3d:  (n_test, m, T) numpy — may contain NaN.
+    """
+    device = next(model.parameters()).device
+    X_all = np.concatenate([X_tr_3d, X_te_3d], axis=0)
+    nan_mask = np.isnan(X_all).astype(np.float32)
+    X_clean = np.nan_to_num(X_all, nan=0.0).astype(np.float32)
+
+    x_t = torch.as_tensor(X_clean, dtype=torch.float32, device=device)
+    m_t = torch.as_tensor(nan_mask, dtype=torch.float32, device=device)
+    # (n_all, n_global, emsize)
+    model._global_tokens = model.global_conv_encoder(x_t, m_t)
+
+
+def clear_global_input(model) -> None:
+    """Remove stored global tokens."""
+    model._global_tokens = None
+
+
+def _make_injecting_add_embeddings(orig_cls_method):
+    """Wrap TabPFN's add_embeddings to concat global tokens before embedding."""
+
+    def _injecting_add_embeddings(
+        self, x, y, *, data_dags, num_features, seq_len,
+        cache_embeddings=False, use_cached_embeddings=False,
+    ):
+        gt = getattr(self, "_global_tokens", None)
+        if gt is not None:
+            # gt: (n_all, n_global, emsize), needs (batch=1, seq_len, n_global, emsize)
+            x = torch.cat([x, gt.unsqueeze(0)], dim=2)
+            self._global_tokens = None   # consumed
+
+        return orig_cls_method(
+            self, x, y,
+            data_dags=data_dags, num_features=num_features, seq_len=seq_len,
+            cache_embeddings=cache_embeddings,
+            use_cached_embeddings=use_cached_embeddings,
+        )
+
+    return _injecting_add_embeddings
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Backward-compat stubs
 # ─────────────────────────────────────────────────────────────────────────────
 
 def set_temporal_info(model, n_features: int, T: int, group_size: int = WINDOW) -> None:
@@ -169,20 +287,21 @@ def clear_temporal_info(model) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_overlap_model(device: str = "auto") -> tuple:
-    """Build TabPFN with overlapping groups: custom MLP encoder, everything else unchanged.
+    """Build TabPFN with patch encoder + global Conv1D encoders.
 
-    The only architectural change vs vanilla TabPFN is:
+    Architectural changes vs vanilla TabPFN:
       - features_per_group: 3 → WINDOW (16)
-      - encoder: replaced with MLP(32→96→GELU→96→GELU→192, no bias)
+      - encoder: replaced with MLP(32→96→GELU→192, no bias)
         via TabPFN's get_encoder pipeline (NanHandling, InputNorm, VariableNumFeatures).
-
-    Everything else (embeddings, all 24 transformer layers, y_encoder, decoder)
-    is kept from the pretrained checkpoint without modification.
+      - global_conv_encoder: 4 Conv1D kernels (3,7,9,11), each Conv1d(2→192)+GELU,
+        producing 8 (univariate) or 16 (multivariate) extra global tokens.
+      - add_embeddings: monkey-patched to inject global tokens alongside patch tokens,
+        so all tokens receive COL_EMBEDDING vectors from the pretrained projection.
 
     Returns:
         model             — modified PerFeatureTransformer
         clf               — TabPFNClassifier (for fit_from_preprocessed API)
-        fresh_params      — list of fresh nn.Parameter objects (encoder only)
+        fresh_params      — list of fresh nn.Parameter objects (encoder + global_conv_encoder)
         pretrained_params — list of pretrained nn.Parameter objects
     """
     if device == "auto":
@@ -229,23 +348,37 @@ def build_overlap_model(device: str = "auto") -> tuple:
     )
     _reinit_module(new_encoder)
     model.encoder = new_encoder
-    print(f"  [fresh] encoder: MLP({WINDOW * 2}→{ENCODER_HIDDEN},GELU"
-          f"{'→' + str(ENCODER_HIDDEN) + ',GELU' * (ENCODER_LAYERS - 2)}→{emsize}, no bias) Xavier")
+    print(f"  [fresh] encoder: MLP({WINDOW * 2}→{ENCODER_HIDDEN}→GELU→{emsize}, no bias) Xavier")
 
-    # Embeddings, add_embeddings, seed, and all transformer layers are left
-    # exactly as loaded from the pretrained checkpoint.
+    # ── 3. Global Conv1D encoder ──
+    global_enc = GlobalConvEncoder(emsize=emsize, kernel_sizes=GLOBAL_KERNEL_SIZES)
+    _reinit_module(global_enc)
+    model.global_conv_encoder = global_enc
+    n_global_params = sum(p.numel() for p in global_enc.parameters())
+    print(f"  [fresh] global_conv_encoder: kernels={GLOBAL_KERNEL_SIZES}  "
+          f"Conv1d(2→{emsize})+GELU  ({n_global_params:,} params)")
+
+    # ── 4. Patch add_embeddings to inject global tokens ──
+    orig_add_emb = type(model).add_embeddings
+    model.add_embeddings = types.MethodType(
+        _make_injecting_add_embeddings(orig_add_emb), model,
+    )
+    model._global_tokens = None
+    print(f"  [patched] add_embeddings: injects global tokens alongside patch tokens")
+
+    # Embeddings, seed, and all transformer layers are left unchanged.
     emb_seed = model.random_embedding_seed
     emb_type = model.feature_positional_embedding
     print(f"  [pretrained] embeddings: type={emb_type!r}  seed={emb_seed}  (unchanged)")
 
-    # ── 3. Collect parameter groups ──
-    #   Only the encoder is fresh; everything else is pretrained.
+    # ── 5. Collect parameter groups ──
     fresh_ids: set = set()
     fresh_params: list = []
-    for p in model.encoder.parameters():
-        if id(p) not in fresh_ids:
-            fresh_ids.add(id(p))
-            fresh_params.append(p)
+    for mod in [model.encoder, model.global_conv_encoder]:
+        for p in mod.parameters():
+            if id(p) not in fresh_ids:
+                fresh_ids.add(id(p))
+                fresh_params.append(p)
 
     pretrained_params = [p for p in model.parameters() if id(p) not in fresh_ids]
 
@@ -345,8 +478,14 @@ if __name__ == "__main__":
     print(f"Pretrained params: {sum(p.numel() for p in pretrained):,}")
 
     m, T = 2, 64
-    X = np.random.randn(5, m * T).astype(np.float32)
+    n_samples = 5
+    X = np.random.randn(n_samples, m * T).astype(np.float32)
     X_exp, T_pad, n_groups = pad_and_expand_overlap(X, m, T)
     print(f"\nDummy: m={m}, T={T} → T_pad={T_pad}, n_groups/feat={n_groups}")
-    print(f"  Input:    (5, {m * T})")
+    print(f"  Input:    ({n_samples}, {m * T})")
     print(f"  Expanded: {X_exp.shape}")
+
+    X_3d = X.reshape(n_samples, m, T)
+    set_global_input(model, X_3d[:3], X_3d[3:])
+    gt = model._global_tokens
+    print(f"  Global tokens: {gt.shape}  (expect ({n_samples}, 16, 192) for m>1)")

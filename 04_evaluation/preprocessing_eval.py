@@ -485,7 +485,7 @@ def main():
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     version = ckpt.get("version", "unknown")
 
-    if version in ("overlap_v1", "overlap_v2"):
+    if version in ("overlap_v1", "overlap_v2", "overlap_v3"):
         ft_model, _, _, _ = build_overlap_model(device=device)
         use_overlap = True
     else:

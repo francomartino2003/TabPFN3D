@@ -3,7 +3,8 @@
 #  STEP 1 — Encoder warm-up
 #
 #  What gets trained:
-#    • model.encoder  (MLP 32→96→96→192)  ← only this
+#    • model.encoder          (MLP 32→96→GELU→192)
+#    • model.global_conv_encoder  (Conv1D kernels 3/7/9/11, 2→192+GELU)
 #  Everything else FROZEN (embedding projection + all 24 TabPFN layers).
 #
 #  Schedule: 1500 steps constant LR=1e-4, then 3000 steps cosine → 1e-5.

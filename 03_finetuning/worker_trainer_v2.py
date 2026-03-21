@@ -8,7 +8,8 @@ promotes last.pt → best.pt whenever eval improves.
 Three training modes (--mode):
 ---------------------------------
   phase1  Encoder warm-up.  Freeze everything except:
-            • model.encoder  (MLP 32→96→96→192)  ← only this is trained
+            • model.encoder              (MLP 32→96→GELU→192)
+            • model.global_conv_encoder  (Conv1D kernels 3/7/9/11, 2→192+GELU)
           Everything else (embedding projection, all 24 TabPFN layers) is FROZEN.
           Schedule: constant LR for --warmup-const-steps, then cosine to --lr-min.
           Default: 1500 constant + 3000 cosine (1e-4 → 1e-5), total 4500 steps.
@@ -137,7 +138,7 @@ def save_checkpoint_atomic(path, model, optimizer, scheduler, step,
         "train_accs": train_accs,
         "finished": finished,
         "mode": mode,
-        "version": "overlap_v2",
+        "version": "overlap_v3",
     }
     tmp = path.with_suffix(".pt.tmp")
     torch.save(ckpt, tmp)
@@ -210,7 +211,7 @@ def main() -> None:
 
     if mode == "phase1":
         # ── Phase 1: encoder warm-up ──
-        # Trainable: fresh params (encoder + emb projections) + first transformer layer
+        # Trainable: patch encoder + global conv encoder
         lr           = args.lr      if args.lr      is not None else 1e-4
         lr_min       = args.lr_min  if args.lr_min  is not None else 1e-5
         warmup_const = args.warmup_const_steps  # 0 → purely constant
@@ -220,15 +221,16 @@ def main() -> None:
 
         seen_ids: set = set()
         trainable: list = []
-        for p in model.encoder.parameters():
-            if id(p) not in seen_ids:
-                seen_ids.add(id(p))
-                p.requires_grad = True
-                trainable.append(p)
+        for mod in [model.encoder, model.global_conv_encoder]:
+            for p in mod.parameters():
+                if id(p) not in seen_ids:
+                    seen_ids.add(id(p))
+                    p.requires_grad = True
+                    trainable.append(p)
 
         n_trainable = sum(p.numel() for p in trainable)
         n_total = sum(p.numel() for p in model.parameters())
-        print(f"  [phase1] trainable: encoder  ({n_trainable:,} params)", flush=True)
+        print(f"  [phase1] trainable: encoder + global_conv_encoder  ({n_trainable:,} params)", flush=True)
         print(f"  [phase1] frozen: everything else  ({n_total - n_trainable:,} params)", flush=True)
         print(f"  [phase1] lr={lr}  warmup_const={warmup_const}  lr_min={lr_min}"
               f"  n_steps={args.n_steps}", flush=True)

@@ -36,6 +36,7 @@ from model import (
     pad_to_group,
     pad_and_expand_overlap,
     set_temporal_info,
+    set_global_input,
 )
 
 SOFTMAX_TEMPERATURE: float = 0.9
@@ -107,6 +108,10 @@ def forward_single_dataset(model, clf, device: str, data: Dict) -> Optional[Dict
         X_te_p, _, _ = pad_and_expand_overlap(data["X_test"], m, T)
         T_eff = n_groups * WINDOW
         set_temporal_info(model, m, T_eff, group_size=WINDOW)
+
+        X_tr_3d = data["X_train"].reshape(-1, m, T)
+        X_te_3d = data["X_test"].reshape(-1, m, T)
+        set_global_input(model, X_tr_3d, X_te_3d)
 
         y_test_t = torch.tensor(data["y_test"], dtype=torch.long, device=device)
 
@@ -276,6 +281,12 @@ def evaluate_ensemble(
                 X_tr_pad, T_padded = pad_to_group(X_tr_p, m_eff, T_eff, group_size=GROUP_SIZE)
                 X_te_pad, _ = pad_to_group(X_te_p, m_eff, T_eff, group_size=GROUP_SIZE)
                 set_temporal_info(model, m_eff, T_padded, group_size=GROUP_SIZE)
+
+            # Global conv tokens from permuted (but not overlap-expanded) data
+            if hasattr(model, "global_conv_encoder"):
+                X_tr_3d = X_tr_p.reshape(-1, m_eff, T_eff)
+                X_te_3d = X_te_p.reshape(-1, m_eff, T_eff)
+                set_global_input(model, X_tr_3d, X_te_3d)
 
             X_tr_t = torch.as_tensor(X_tr_pad, dtype=torch.float32, device=device)
             y_tr_t = torch.as_tensor(y_tr_p, dtype=torch.float32, device=device)
