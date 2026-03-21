@@ -3,11 +3,8 @@
 #  STEP 1 — Encoder warm-up
 #
 #  What gets trained:
-#    • model.encoder                              (MLP 32→96→96→192)
-#    • model.feature_positional_embedding_embeddings  (Linear 48→192)
-#    • model.temporal_pe_projection               (Linear 48→192)
-#    • model.transformer_encoder.layers[0]        (first TabPFN layer)
-#  Everything else is FROZEN.
+#    • model.encoder  (MLP 32→96→96→192)  ← only this
+#  Everything else FROZEN (embedding projection + all 24 TabPFN layers).
 #
 #  Schedule: 1500 steps constant LR=1e-4, then 3000 steps cosine → 1e-5.
 #             Total 4500 steps.

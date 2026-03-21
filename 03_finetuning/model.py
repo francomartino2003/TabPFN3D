@@ -9,11 +9,13 @@ Architecture summary
     * Encoder: MLP(32→96→GELU→96→GELU→192) via TabPFN's get_encoder pipeline
       (includes NanHandlingEncoderStep, InputNormalizationEncoderStep,
        VariableNumFeaturesEncoderStep).
-    * Feature embedding projection: Linear(48→192, seed=137).
-      Each channel gets a pseudo-random 48-d seed vector, projected to 192.
-    * Temporal PE projection: Linear(48→192).
-      Each temporal position gets a sinusoidal 48-d vector, projected to 192.
-- Pretrained (original weights): 24 transformer layers + y_encoder + decoder.
+- Pretrained (original weights):
+    * feature_positional_embedding_embeddings: Linear(48→192) kept from TabPFN.
+      Seed=42 aligns raw vectors with COL_EMBEDDING; pretrained projection
+      means the transformer already knows how to interpret them.
+    * 24 transformer layers (attention + MLP)
+    * y_encoder (label projection)
+    * decoder (prediction head)
 
 Tokenization (overlap expansion, done externally before every forward pass)
 ---------------------------------------------------------------------------
@@ -27,10 +29,9 @@ Tokenization (overlap expansion, done externally before every forward pass)
 
 Embeddings per token (monkey-patched add_embeddings)
 ------------------------------------------------------
-  token (channel=ch, group=g) gets:
-    feat_emb[ch]    — projection of pseudo-random 48-d seed for channel ch
-    temporal_pe[g]  — projection of sinusoidal 48-d PE for group index g
-  combined = feat_emb_expanded + temporal_pe_tiled  (broadcast over m × G grid)
+  Each token i (i = ch * n_groups + g) gets a unique pseudo-random 48-d
+  vector generated with seed=42 (COL_EMBEDDING when i < 2000), projected
+  to 192 via the pretrained Linear(48→192).
 
 Usage
 -----
@@ -42,7 +43,6 @@ Usage
 
 from __future__ import annotations
 
-import math
 import types
 from pathlib import Path
 import sys
@@ -64,26 +64,7 @@ WINDOW: int = 16           # temporal window size per token
 STRIDE: int = 12           # temporal stride between windows
 ENCODER_HIDDEN: int = 96   # MLP hidden dim (first two layers)
 ENCODER_LAYERS: int = 3    # MLP depth: 32→96,GELU→96,GELU→192 (no GELU after last)
-FEATURE_EMB_DIM: int = 48  # dim of random seed vectors for feature embedding
-PE_DIM: int = 48           # dim of sinusoidal vectors before projection
-EMBEDDING_SEED: int = 137  # different from pretrained seed=42 → distinct vectors
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Sinusoidal positional encoding (Vaswani et al.)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def sinusoidal_pe(length: int, d_model: int, device=None, dtype=None) -> torch.Tensor:
-    """Standard sinusoidal PE, shape (length, d_model)."""
-    pe = torch.zeros(length, d_model, device=device, dtype=dtype)
-    pos = torch.arange(0, length, device=device, dtype=torch.float32).unsqueeze(1)
-    div = torch.exp(
-        torch.arange(0, d_model, 2, device=device, dtype=torch.float32)
-        * -(math.log(10000.0) / d_model)
-    )
-    pe[:, 0::2] = torch.sin(pos * div)
-    pe[:, 1::2] = torch.cos(pos * div[: d_model // 2])
-    return pe.to(dtype=dtype) if dtype is not None else pe
+FEATURE_EMB_DIM: int = 48  # emsize // 4 = 48; raw dim for per-token pseudo-random vectors
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -205,32 +186,8 @@ def clear_temporal_info(model) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Monkey-patch: temporal-aware add_embeddings
+# Monkey-patch: per-token pseudo-random embeddings (TabPFN-compatible)
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _default_subspace_embeddings(self, x, y, cache_embeddings=False):
-    """Fallback: original random subspace embeddings when no temporal info."""
-    n_groups = x.shape[2]
-    emsize = x.shape[3]
-
-    rng = torch.Generator(device=x.device).manual_seed(self.random_embedding_seed)
-    embs = torch.randn(
-        (n_groups, emsize // 4), device=x.device, dtype=x.dtype, generator=rng
-    )
-    from tabpfn.architectures.base.transformer import COL_EMBEDDING
-
-    if embs.shape[1] == 48 and self.random_embedding_seed == 42:
-        embs[: min(n_groups, 2000)] = COL_EMBEDDING[: min(n_groups, 2000)].to(
-            device=embs.device, dtype=embs.dtype
-        )
-    embs = self.feature_positional_embedding_embeddings(embs)
-    x += embs[None, None]
-
-    self.cached_embeddings = None
-    if cache_embeddings:
-        self.cached_embeddings = embs
-    return x, y
-
 
 def temporal_add_embeddings(
     self, x, y, *, data_dags, num_features, seq_len,
@@ -238,79 +195,38 @@ def temporal_add_embeddings(
 ):
     """Replacement for PerFeatureTransformer.add_embeddings.
 
-    Tokens are laid out feature-major:
-      [ch0_g0, ch0_g1, ..., ch0_gN, ch1_g0, ..., ch1_gN, ...]
-
-    Token at (channel=ch, group=g) receives:
-      feat_emb[ch]   — pseudo-random 48-d seed for channel ch, projected to 192
-      temporal_pe[g] — sinusoidal 48-d PE for group g, projected to 192
-
-    combined[ch * G + g] = feat_emb[ch] + temporal_pe[g]
-    x += combined  (broadcast over batch and seq_len dimensions)
+    Each token i (i = ch * n_groups + g, layout: feature-major) gets a unique
+    pseudo-random 48-d vector generated with seed=42 (TabPFN's original).
+    For i < 2000 the pretrained COL_EMBEDDING vectors are used directly,
+    keeping the pretrained feature_positional_embedding_embeddings meaningful.
 
     x shape: (batch, seq_len, n_tokens, emsize)
-    n_tokens = m * groups_per_feature
+    n_tokens = m * n_groups_per_feat  (after TabPFN's einops split)
     """
     if use_cached_embeddings and self.cached_feature_positional_embeddings is not None:
         x += self.cached_feature_positional_embeddings[None, None]
         return x, y
 
     n_tokens = x.shape[2]
-    emsize = x.shape[3]
+    emsize   = x.shape[3]
 
-    info = getattr(self, "_temporal_info", (None, None, None))
-    if len(info) == 2:
-        m_groups, n_temporal = info
-        groups_per_feature = n_temporal
-        m = m_groups
-    else:
-        m, T_padded, group_size = info
-        if m is None or T_padded is None:
-            return _default_subspace_embeddings(self, x, y, cache_embeddings=cache_embeddings)
-        groups_per_feature = T_padded // group_size
+    rng = torch.Generator(device=x.device).manual_seed(self.random_embedding_seed)
+    embs = torch.randn(
+        (n_tokens, FEATURE_EMB_DIM), device=x.device, dtype=x.dtype, generator=rng
+    )
 
-    # ── Feature embedding: (m, FEATURE_EMB_DIM) → project → (m, emsize) ──
-    # Pseudo-random seed vectors are generated deterministically from EMBEDDING_SEED.
-    # Same seed → same vectors across all forward passes (CPU RNG, not GPU).
-    rng = torch.Generator(device="cpu").manual_seed(self.random_embedding_seed)
-    feat_raw = torch.randn(
-        (m, FEATURE_EMB_DIM), generator=rng
-    ).to(device=x.device, dtype=x.dtype)    # (m, 48)
+    from tabpfn.architectures.base.transformer import COL_EMBEDDING
+    if self.random_embedding_seed == 42:
+        embs[: min(n_tokens, 2000)] = COL_EMBEDDING[: min(n_tokens, 2000)].to(
+            device=embs.device, dtype=embs.dtype
+        )
 
-    feat_emb = self.feature_positional_embedding_embeddings(feat_raw)  # (m, emsize)
-    # Expand: each channel broadcasts across all G groups
-    feat_emb_expanded = (
-        feat_emb.unsqueeze(1)
-        .expand(m, groups_per_feature, emsize)
-        .reshape(m * groups_per_feature, emsize)
-    )   # (m*G, emsize)
-
-    # ── Temporal PE: sinusoidal (G, PE_DIM) → project → (G, emsize) ──
-    temporal_pe_raw = sinusoidal_pe(
-        groups_per_feature, PE_DIM, device=x.device, dtype=x.dtype
-    )   # (G, 48)
-    temporal_pe = self.temporal_pe_projection(temporal_pe_raw)  # (G, emsize)
-    # Tile: each temporal position broadcasts across all m channels
-    temporal_pe_tiled = (
-        temporal_pe.unsqueeze(0)
-        .expand(m, groups_per_feature, emsize)
-        .reshape(m * groups_per_feature, emsize)
-    )   # (m*G, emsize)
-
-    # combined[ch*G + g] = feat_emb[ch] + temporal_pe[g]
-    combined = feat_emb_expanded + temporal_pe_tiled  # (m*G, emsize)
-
-    if combined.shape[0] < n_tokens:
-        pad = torch.zeros(n_tokens - combined.shape[0], emsize, device=x.device, dtype=x.dtype)
-        combined = torch.cat([combined, pad], dim=0)
-    elif combined.shape[0] > n_tokens:
-        combined = combined[:n_tokens]
-
-    x += combined[None, None]
+    embs = self.feature_positional_embedding_embeddings(embs)  # (n_tokens, emsize)
+    x += embs[None, None]
 
     self.cached_embeddings = None
     if cache_embeddings:
-        self.cached_embeddings = combined
+        self.cached_embeddings = embs
     return x, y
 
 
@@ -324,10 +240,11 @@ def build_overlap_model(device: str = "auto") -> tuple:
     Fresh-initialized (Xavier):
       - Encoder: MLP(32→96→GELU→96→GELU→192, no bias) via TabPFN's get_encoder
         pipeline (includes NanHandling, InputNormalization, VariableNumFeatures).
-      - Feature embedding projection: Linear(48→192, seed=EMBEDDING_SEED).
-      - Temporal PE projection: Linear(48→192).
 
     Pretrained (original TabPFN v2.5 weights):
+      - feature_positional_embedding_embeddings: Linear(48→192), seed=42.
+        COL_EMBEDDING vectors are used for i<2000 → projection is already
+        meaningful for the pretrained transformer layers.
       - 24 transformer layers (attention + MLP)
       - y_encoder (label projection)
       - decoder (prediction head)
@@ -385,38 +302,25 @@ def build_overlap_model(device: str = "auto") -> tuple:
     print(f"  [fresh] encoder: MLP({WINDOW * 2}→{ENCODER_HIDDEN},GELU"
           f"{'→' + str(ENCODER_HIDDEN) + ',GELU' * (ENCODER_LAYERS - 2)}→{emsize}, no bias) Xavier")
 
-    # ── 3. Replace feature_positional_embedding_embeddings with Linear(48→192) ──
-    #   Re-initialized with Xavier for consistent fresh training.
-    model.random_embedding_seed = EMBEDDING_SEED
-    model.feature_positional_embedding_embeddings = nn.Linear(FEATURE_EMB_DIM, emsize)
-    nn.init.xavier_uniform_(model.feature_positional_embedding_embeddings.weight)
-    nn.init.zeros_(model.feature_positional_embedding_embeddings.bias)
-    print(f"  [fresh] feature_positional_embedding_embeddings: Linear({FEATURE_EMB_DIM}→{emsize})"
-          f" Xavier (seed {EMBEDDING_SEED})")
+    # ── 3. Seed=42: keep pretrained feature_positional_embedding_embeddings ──
+    #   COL_EMBEDDING vectors + pretrained Linear(48→192) means the transformer
+    #   already knows how to interpret these embeddings from its pretraining.
+    model.random_embedding_seed = 42
+    print(f"  [pretrained] feature_positional_embedding_embeddings: Linear({FEATURE_EMB_DIM}→{emsize})"
+          f" kept from TabPFN (seed=42, COL_EMBEDDING aligned)")
 
-    # ── 4. Add temporal_pe_projection: sinusoidal 48-d → Linear(48→192) ──
-    model.temporal_pe_projection = nn.Linear(PE_DIM, emsize)
-    nn.init.xavier_uniform_(model.temporal_pe_projection.weight)
-    nn.init.zeros_(model.temporal_pe_projection.bias)
-    print(f"  [fresh] temporal_pe_projection: Linear({PE_DIM}→{emsize}) Xavier")
-
-    # ── 5. Patch add_embeddings for temporal awareness ──
+    # ── 4. Patch add_embeddings: per-token pseudo-random (no temporal PE) ──
     model.add_embeddings = types.MethodType(temporal_add_embeddings, model)
-    print(f"  Patched add_embeddings: feat_emb(ch,48→192) + sinusoidal_PE(g,48→192)")
+    print(f"  Patched add_embeddings: per-token pseudo-random 48→192 (seed=42, COL_EMBEDDING)")
 
-    # ── 6. Collect parameter groups ──
-    fresh_modules = [
-        model.encoder,
-        model.feature_positional_embedding_embeddings,
-        model.temporal_pe_projection,
-    ]
+    # ── 5. Collect parameter groups ──
+    #   Only the encoder is fresh; everything else is pretrained.
     fresh_ids: set = set()
     fresh_params: list = []
-    for mod in fresh_modules:
-        for p in mod.parameters():
-            if id(p) not in fresh_ids:
-                fresh_ids.add(id(p))
-                fresh_params.append(p)
+    for p in model.encoder.parameters():
+        if id(p) not in fresh_ids:
+            fresh_ids.add(id(p))
+            fresh_params.append(p)
 
     pretrained_params = [p for p in model.parameters() if id(p) not in fresh_ids]
 

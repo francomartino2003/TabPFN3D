@@ -8,10 +8,8 @@ promotes last.pt → best.pt whenever eval improves.
 Three training modes (--mode):
 ---------------------------------
   phase1  Encoder warm-up.  Freeze everything except:
-            • model.encoder  (MLP 32→96→96→192)
-            • model.feature_positional_embedding_embeddings  (Linear 48→192)
-            • model.temporal_pe_projection                   (Linear 48→192)
-            • model.transformer_encoder.layers[0]            (first PFN layer)
+            • model.encoder  (MLP 32→96→96→192)  ← only this is trained
+          Everything else (embedding projection, all 24 TabPFN layers) is FROZEN.
           Schedule: constant LR for --warmup-const-steps, then cosine to --lr-min.
           Default: 1500 constant + 3000 cosine (1e-4 → 1e-5), total 4500 steps.
           → saves to checkpoints/phase1/  (last.pt + best.pt)
@@ -220,28 +218,18 @@ def main() -> None:
         for p in model.parameters():
             p.requires_grad = False
 
-        first_layer = list(model.transformer_encoder.layers)[0]
-        trainable_modules = [
-            ("encoder",                          model.encoder),
-            ("feature_positional_emb_projection", model.feature_positional_embedding_embeddings),
-            ("temporal_pe_projection",            model.temporal_pe_projection),
-            ("transformer_encoder.layers[0]",     first_layer),
-        ]
         seen_ids: set = set()
         trainable: list = []
-        for name, mod in trainable_modules:
-            n_before = len(trainable)
-            for p in mod.parameters():
-                if id(p) not in seen_ids:
-                    seen_ids.add(id(p))
-                    p.requires_grad = True
-                    trainable.append(p)
-            n_added = len(trainable) - n_before
-            print(f"  [phase1] trainable: {name}  ({n_added:,} params)", flush=True)
+        for p in model.encoder.parameters():
+            if id(p) not in seen_ids:
+                seen_ids.add(id(p))
+                p.requires_grad = True
+                trainable.append(p)
 
         n_trainable = sum(p.numel() for p in trainable)
         n_total = sum(p.numel() for p in model.parameters())
-        print(f"  [phase1] total trainable: {n_trainable:,} / {n_total:,}", flush=True)
+        print(f"  [phase1] trainable: encoder  ({n_trainable:,} params)", flush=True)
+        print(f"  [phase1] frozen: everything else  ({n_total - n_trainable:,} params)", flush=True)
         print(f"  [phase1] lr={lr}  warmup_const={warmup_const}  lr_min={lr_min}"
               f"  n_steps={args.n_steps}", flush=True)
 
