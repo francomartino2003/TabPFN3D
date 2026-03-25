@@ -132,9 +132,9 @@ echo "  Evaluator  PID=$PID_EVAL"
 echo "Logs: $LOG_DIR/{generator,trainer,evaluator}.log"
 echo ""
 
-# ── Wait ──
-wait $PID_GEN;   echo "Generator  finished (exit $?)"
+# ── Wait: trainer drives the timeline; kill generator when done ──
 wait $PID_TRAIN; echo "Trainer    finished (exit $?)"
+kill $PID_GEN 2>/dev/null; wait $PID_GEN 2>/dev/null; echo "Generator  stopped"
 wait $PID_EVAL;  echo "Evaluator  finished (exit $?)"
 
 echo ""

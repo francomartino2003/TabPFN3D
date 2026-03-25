@@ -4,8 +4,7 @@
 #
 #  Starts from:  03_finetuning/checkpoints/phase1/best.pt  (step 1 output)
 #  What gets trained:  ALL parameters (nothing frozen).
-#  Schedule: 1500 steps constant LR=1e-5, then 6000 steps cosine → 1e-7.
-#             Total 7500 steps.
+#  Schedule: 1000 steps at constant LR=1e-5 (no cosine annealing).
 #
 #  Output:
 #    Checkpoints  →  03_finetuning/checkpoints/phase2/
@@ -53,10 +52,10 @@ done
 echo ""
 
 # ── Tunable hyperparameters ──
-LR="${LR:-1e-5}"                    # base learning rate (constant segment)
-LR_MIN="${LR_MIN:-1e-7}"            # final LR at end of cosine annealing
-WARMUP_CONST="${WARMUP_CONST:-1500}" # steps at constant LR before cosine starts
-N_STEPS="${N_STEPS:-7500}"          # total steps (1500 const + 6000 cosine)
+LR="${LR:-1e-5}"                    # base learning rate (constant)
+LR_MIN="${LR_MIN:-1e-7}"            # min LR (unused when WARMUP_CONST == N_STEPS)
+WARMUP_CONST="${WARMUP_CONST:-1000}" # = N_STEPS → purely constant LR, no cosine
+N_STEPS="${N_STEPS:-1000}"          # total steps (all constant LR)
 BATCH="${BATCH:-92}"                # datasets per batch
 WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
 GRAD_CLIP="${GRAD_CLIP:-1.0}"
@@ -141,9 +140,9 @@ echo "  Evaluator  PID=$PID_EVAL"
 echo "Logs: $LOG_DIR/{generator,trainer,evaluator}.log"
 echo ""
 
-# ── Wait ──
-wait $PID_GEN;   echo "Generator  finished (exit $?)"
+# ── Wait: trainer drives the timeline; kill generator when done ──
 wait $PID_TRAIN; echo "Trainer    finished (exit $?)"
+kill $PID_GEN 2>/dev/null; wait $PID_GEN 2>/dev/null; echo "Generator  stopped"
 wait $PID_EVAL;  echo "Evaluator  finished (exit $?)"
 
 echo ""
