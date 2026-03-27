@@ -1,29 +1,22 @@
 #!/usr/bin/env python3
 """
-Benchmark our finetuned model across five configurations.
+Benchmark our finetuned model across four configurations.
 
 Configurations evaluated on every PFN-eligible dataset (30 random seeds each):
 
-  B_e8        — Vanilla TabPFN pretrained (NOT finetuned, fpg=3),
-                8 iterations with OUR inference style:
-                per-channel normalisation, no SVD / no subsampling / no
-                squashing scaler, channel + class permutations, temp=0.9.
-                Ablation: how much does finetuning help vs. inference style?
-
-  D1_e8       — Phase-1 best.pt,  8 ensemble iterations, our inference
-  D2_e1       — Phase-2 best.pt,  1 ensemble iteration,  our inference
-  D2_e8       — Phase-2 best.pt,  8 ensemble iterations, our inference
-  D2_e8_prep  — Phase-2 best.pt,  8 ensemble iterations, our inference
+  D1_e8       — Phase-1 best.pt,  8 ensemble iterations
+  D2_e1       — Phase-2 best.pt,  1 ensemble iteration
+  D2_e8       — Phase-2 best.pt,  8 ensemble iterations
+  D2_e8_prep  — Phase-2 best.pt,  8 ensemble iterations
                 + step-repeat preprocessing
                 (applied when m*T < 1000 AND T < 96, up to 3 doublings)
 
 Each configuration is evaluated N_RUNS times (default 30) with different
 random seeds and results are averaged.  The 30 seeds control the random
-channel/class permutations.
+channel/class permutations inside evaluate_ensemble.
 
 Output CSV (one row per dataset):
   dataset, collection, m, T, n_classes,
-  B_e8_acc_mean,   B_e8_acc_std,   B_e8_auc_mean,   B_e8_auc_std,
   D1_e8_acc_mean,  D1_e8_acc_std,  D1_e8_auc_mean,  D1_e8_auc_std,
   D2_e1_acc_mean,  D2_e1_acc_std,  D2_e1_auc_mean,  D2_e1_auc_std,
   D2_e8_acc_mean,  D2_e8_acc_std,  D2_e8_auc_mean,  D2_e8_auc_std,
@@ -67,15 +60,8 @@ for _p in [
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from tabpfn import TabPFNClassifier
-from tabpfn.preprocessing.configs import ClassifierEnsembleConfig, PreprocessorConfig
-
-from model import build_overlap_model, per_channel_normalize
-from inference import (
-    evaluate_ensemble,
-    _temporal_squashing_scaler,
-    SOFTMAX_TEMPERATURE,
-)
+from model import build_overlap_model
+from inference import evaluate_ensemble
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -267,123 +253,6 @@ def eval_config(model, X_tr, y_tr, X_te, y_te, n_classes, m, T,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# B_e8: vanilla TabPFN (pretrained, fpg=3) with our inference style
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _make_dummy_ensemble_cfg():
-    return ClassifierEnsembleConfig(
-        preprocess_config=PreprocessorConfig("none", categorical_name="numeric"),
-        feature_shift_count=0,
-        class_permutation=None,
-        add_fingerprint_feature=False,
-        polynomial_features="no",
-        feature_shift_decoder=None,
-        subsample_ix=None,
-        _model_index=0,
-    )
-
-
-def eval_config_vanilla(clf, X_tr, y_tr, X_te, y_te,
-                        n_classes, m, T, device, n_iters, n_runs):
-    """Vanilla TabPFN pretrained (fpg=3) with our inference style.
-
-    Each of the n_runs outer seeds runs n_iters inner iterations:
-      - channel permutation
-      - class permutation (undone after logits)
-      - odd iterations: temporal squashing scaler
-      - per-channel normalisation
-      - fit_from_preprocessed → forward  (no SVD / no subsampling)
-      - softmax(temp=0.9)
-    Returns mean/std acc+auc across n_runs.
-    """
-    accs, aucs = [], []
-    dummy_cfg  = _make_dummy_ensemble_cfg()
-
-    for seed in range(n_runs):
-        rng = np.random.RandomState(seed)
-        proba_sum = np.zeros((X_te.shape[0], n_classes), dtype=np.float64)
-        n_valid   = 0
-
-        for it in range(n_iters):
-            try:
-                # ── channel + class permutation ──────────────────────────────
-                feat_perm  = rng.permutation(m)
-                class_perm = rng.permutation(n_classes)
-
-                X_tr_p = X_tr.reshape(-1, m, T)[:, feat_perm, :].reshape(-1, m * T)
-                X_te_p = X_te.reshape(-1, m, T)[:, feat_perm, :].reshape(-1, m * T)
-                y_tr_p = class_perm[y_tr]
-
-                # ── squashing on odd iterations ──────────────────────────────
-                if it % 2 == 1:
-                    X_tr_p, X_te_p = _temporal_squashing_scaler(X_tr_p, X_te_p, m, T)
-
-                # ── per-channel normalisation ────────────────────────────────
-                X_tr_3d = X_tr_p.reshape(-1, m, T)
-                X_te_3d = X_te_p.reshape(-1, m, T)
-                X_tr_3d_n, X_te_3d_n = per_channel_normalize(X_tr_3d, X_te_3d)
-                X_tr_n = X_tr_3d_n.reshape(-1, m * T)
-                X_te_n = X_te_3d_n.reshape(-1, m * T)
-
-                # ── forward via fit_from_preprocessed ────────────────────────
-                clf.n_classes_ = n_classes
-                X_tr_t = torch.as_tensor(X_tr_n, dtype=torch.float32,
-                                         device=device).unsqueeze(0)
-                y_tr_t = torch.as_tensor(y_tr_p, dtype=torch.float32,
-                                         device=device).unsqueeze(0)
-                X_te_t = torch.as_tensor(X_te_n, dtype=torch.float32,
-                                         device=device).unsqueeze(0)
-
-                clf.fit_from_preprocessed(
-                    [X_tr_t], [y_tr_t],
-                    cat_ix=[[[]]],
-                    configs=[[dummy_cfg]],
-                )
-                with torch.no_grad():
-                    logits = clf.forward([X_te_t], return_raw_logits=True)
-
-                if logits.ndim == 2:
-                    logits_out = logits
-                elif logits.ndim == 3:
-                    logits_out = logits.squeeze(1)
-                else:
-                    logits_out = logits.mean(dim=tuple(range(1, logits.ndim - 1)))
-
-                logits_out = logits_out[:, :n_classes]
-                logits_out = logits_out[:, class_perm]   # undo class permutation
-                proba = torch.softmax(
-                    logits_out / SOFTMAX_TEMPERATURE, dim=-1
-                ).cpu().numpy()
-                proba_sum += proba
-                n_valid   += 1
-
-                del X_tr_t, y_tr_t, X_te_t, logits, logits_out, proba
-
-            except Exception as e:
-                print(f"      [B_e8 seed={seed} it={it}] FAILED: "
-                      f"{type(e).__name__}: {str(e)[:80]}", flush=True)
-                continue
-
-        if n_valid == 0:
-            continue
-        proba_mean = proba_sum / n_valid
-        acc, auc = compute_metrics(y_te, proba_mean, n_classes)
-        accs.append(acc)
-        if auc is not None:
-            aucs.append(auc)
-        _free()
-
-    if not accs:
-        return None, None, None, None, 0
-    acc_arr = np.array(accs)
-    auc_arr = np.array(aucs) if aucs else None
-    return (float(acc_arr.mean()), float(acc_arr.std()),
-            float(auc_arr.mean()) if auc_arr is not None else None,
-            float(auc_arr.std())  if auc_arr is not None else None,
-            len(accs))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Load checkpoint helper
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -403,40 +272,6 @@ def load_model(ckpt_path, device):
 
 def run_benchmark(datasets, phase1_path, phase2_path, device, n_runs, output_dir):
     results = []
-
-    # ── B_e8: vanilla TabPFN (pretrained, fpg=3) with our inference ──────────
-    print("\n" + "=" * 70)
-    print(f"Baseline — B_e8  (vanilla TabPFN pretrained, our inference, "
-          f"{n_runs} runs × 8 iters each)")
-    print("=" * 70)
-    # Build the vanilla classifier once; reuse its model across all datasets
-    clf_vanilla = TabPFNClassifier(
-        device=device,
-        n_estimators=1,
-        ignore_pretraining_limits=True,
-        fit_mode="batched",
-        differentiable_input=False,
-        inference_config={"FEATURE_SHIFT_METHOD": None},
-    )
-    clf_vanilla._initialize_model_variables()
-
-    b_e8 = {}
-    for i, ds in enumerate(datasets):
-        name, m, T, nc = ds["name"], ds["m"], ds["T"], ds["n_classes"]
-        t0 = time.time()
-        print(f"  [{i+1:3d}/{len(datasets)}] {name:<35} m={m:3d} T={T:5d} cls={nc}",
-              end="", flush=True)
-        mu_a, sd_a, mu_u, sd_u, n_ok = eval_config_vanilla(
-            clf_vanilla,
-            ds["X_train"], ds["y_train"], ds["X_test"], ds["y_test"],
-            nc, m, T, device, n_iters=8, n_runs=n_runs,
-        )
-        b_e8[name] = (mu_a, sd_a, mu_u, sd_u, n_ok)
-        tag = f"acc={mu_a:.4f}" if mu_a is not None else "FAIL"
-        print(f"  {tag}  ({time.time()-t0:.0f}s  {n_ok}/{n_runs} runs)", flush=True)
-
-    del clf_vanilla
-    _free()
 
     # ── Phase 1: D1_e8 ──────────────────────────────────────────────────────
     print("\n" + "=" * 70)
@@ -521,11 +356,10 @@ def run_benchmark(datasets, phase1_path, phase2_path, device, n_runs, output_dir
     rows = []
     for ds in datasets:
         name = ds["name"]
-        rb = b_e8.get(name,        (None,)*5)
-        r1 = d1_e8.get(name,       (None,)*5)
-        r2 = d2_e1.get(name,       (None,)*5)
-        r3 = d2_e8.get(name,       (None,)*5)
-        r4 = d2_e8_prep.get(name,  (None,)*7)
+        r1 = d1_e8.get(name,      (None,)*5)
+        r2 = d2_e1.get(name,      (None,)*5)
+        r3 = d2_e8.get(name,      (None,)*5)
+        r4 = d2_e8_prep.get(name, (None,)*7)
 
         rows.append({
             "dataset":    name,
@@ -533,10 +367,6 @@ def run_benchmark(datasets, phase1_path, phase2_path, device, n_runs, output_dir
             "m":          ds["m"],
             "T":          ds["T"],
             "n_classes":  ds["n_classes"],
-            # B_e8 (vanilla pretrained, our inference)
-            "B_e8_acc_mean": rb[0], "B_e8_acc_std": rb[1],
-            "B_e8_auc_mean": rb[2], "B_e8_auc_std": rb[3],
-            "B_e8_n_runs":   rb[4],
             # D1_e8
             "D1_e8_acc_mean": r1[0], "D1_e8_acc_std": r1[1],
             "D1_e8_auc_mean": r1[2], "D1_e8_auc_std": r1[3],
@@ -564,7 +394,6 @@ def run_benchmark(datasets, phase1_path, phase2_path, device, n_runs, output_dir
     print("SUMMARY")
     print("=" * 70)
     for col, label in [
-        ("B_e8_acc_mean",        "B_e8       acc (vanilla, our inf)"),
         ("D1_e8_acc_mean",       "D1_e8      acc"),
         ("D2_e1_acc_mean",       "D2_e1      acc"),
         ("D2_e8_acc_mean",       "D2_e8      acc"),
