@@ -2,11 +2,12 @@
 # ══════════════════════════════════════════════════════════════════════════════
 #  Benchmark TabPFN on all PFN-eligible UCR and UEA datasets.
 #
-#  Two variants, each run N_RUNS times with different seeds and averaged:
-#    tabpfn_1  — TabPFN with n_estimators=1  (single forward pass)
-#    tabpfn_8  — TabPFN with n_estimators=8  (8 built-in ensemble members)
-#  Both use TabPFN's default preprocessing (SVD, fingerprint, squashing scaler,
-#  feature/class shifts).  No modifications.
+#  Three variants, each run N_RUNS times with different seeds and averaged:
+#    e1           — TabPFN with n_estimators=1  (standard sklearn pipeline)
+#    e8           — TabPFN with n_estimators=8  (standard sklearn pipeline)
+#    e8_ours_inf  — pretrained TabPFN + our inference pipeline
+#                   (per-channel normalisation, channel/class permutation,
+#                    odd-iter squashing, no SVD, no feature subsampling)
 #
 #  Prereq:  01_real_data/datasets_summary.csv and 01_real_data/data/ must exist.
 #           Run 'python 01_real_data/download.py' locally first, then rsync data.
@@ -29,14 +30,14 @@
 #SBATCH --error=logs/benchmark_tabpfn_%j.err
 #SBATCH --partition=pi_dbertsim
 #SBATCH --gres=gpu:1
-#SBATCH --time=20:00:00
+#SBATCH --time=36:00:00
 #SBATCH --mem=40G
 #SBATCH --cpus-per-task=4
 
 set -e
 
 echo "════════════════════════════════════════"
-echo "  BENCHMARK TabPFN (1-ens & 8-ens) — $(date)"
+echo "  BENCHMARK TabPFN (e1 / e8 / e8_ours_inf) — $(date)"
 echo "  Job: $SLURM_JOB_ID   Node: $SLURM_NODELIST"
 echo "════════════════════════════════════════"
 
