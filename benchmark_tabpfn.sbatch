@@ -7,7 +7,7 @@
 #    e8           — TabPFN with n_estimators=8  (standard sklearn pipeline)
 #    e8_ours_inf  — pretrained TabPFN + our inference pipeline
 #                   (per-channel normalisation, channel/class permutation,
-#                    odd-iter squashing, no SVD, no feature subsampling)
+#                    no SVD, no feature subsampling)
 #
 #  Prereq:  01_real_data/datasets_summary.csv and 01_real_data/data/ must exist.
 #           Run 'python 01_real_data/download.py' locally first, then rsync data.

@@ -9,7 +9,6 @@ Three variants, each run N_RUNS times (different random seeds) and averaged:
   e8_ours_inf  — TabPFN pretrained model (no finetuning) + OUR inference pipeline:
                    • per-channel normalisation (not per-position)
                    • 8 iterations: channel permutation + class permutation
-                   • odd iterations: temporal squashing scaler (no SVD)
                    • fit_from_preprocessed — no feature subsampling, no fingerprint
                    • temperature = 0.9
                  Isolates the effect of our inference strategy from finetuning.
@@ -205,35 +204,6 @@ def _pcn(X_tr: np.ndarray, X_te: np.ndarray, m: int, T: int):
             X_te3.reshape(n_te, m * T).astype(np.float32))
 
 
-def _squash(X_tr: np.ndarray, X_te: np.ndarray, m: int, T: int):
-    """Per-channel robust scaling (median/IQR) + soft clip at ±3."""
-    X_tr, X_te = X_tr.copy(), X_te.copy()
-    for j in range(m):
-        c0, c1 = j * T, j * T + T
-        vals = X_tr[:, c0:c1].ravel()
-        finite = vals[np.isfinite(vals)]
-        if len(finite) == 0:
-            X_tr[:, c0:c1] = 0.0
-            X_te[:, c0:c1] = 0.0
-            continue
-        median = np.median(finite)
-        q_lo   = np.percentile(finite, 25)
-        q_hi   = np.percentile(finite, 75)
-        if q_hi != q_lo:
-            scale = 1.0 / (q_hi - q_lo)
-        else:
-            vmin, vmax = np.min(finite), np.max(finite)
-            scale = (2.0 / (vmax - vmin)) if vmax != vmin else 0.0
-            if scale == 0.0:
-                X_tr[:, c0:c1] = 0.0
-                X_te[:, c0:c1] = 0.0
-                continue
-        for arr in (X_tr, X_te):
-            z = (arr[:, c0:c1] - median) * scale
-            arr[:, c0:c1] = z / np.sqrt(1.0 + (z / 3.0) ** 2)
-    return X_tr.astype(np.float32), X_te.astype(np.float32)
-
-
 def _run_tabpfn_our_inference(X_tr, y_tr, X_te, y_te,
                               n_classes, m, T, seed, device, n_iters=8):
     """Standard pretrained TabPFN + our inference pipeline.
@@ -242,7 +212,6 @@ def _run_tabpfn_our_inference(X_tr, y_tr, X_te, y_te,
     original encoder) but applies our diversity strategy:
       - Per-channel normalisation (not TabPFN's per-position z-score)
       - Channel permutation + class permutation per iteration
-      - Odd iterations: temporal squashing scaler (no SVD)
       - fit_from_preprocessed: bypasses SVD, subsampling, fingerprint
       - temperature = 0.9
 
@@ -286,9 +255,6 @@ def _run_tabpfn_our_inference(X_tr, y_tr, X_te, y_te,
 
             class_perm = rng.permutation(n_classes)
             y_tr_it    = class_perm[y_tr]
-
-            if it % 2 == 1:
-                X_tr_it, X_te_it = _squash(X_tr_it, X_te_it, m, T)
 
             X_tr_it, X_te_it = _pcn(X_tr_it, X_te_it, m, T)
 

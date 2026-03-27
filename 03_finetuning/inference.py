@@ -13,7 +13,7 @@ deserialize_batch()
 
 evaluate_ensemble()
     Multi-iteration ensemble inference for final evaluation:
-    applies feature shuffle and temporal squashing before calling the model.
+    applies channel/class permutations per iteration then calls the model.
     Returns averaged probability matrix.
 """
 
@@ -160,42 +160,6 @@ def forward_single_dataset(model, clf, device: str, data: Dict) -> Optional[Dict
 # Ensemble inference (final evaluation)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _soft_clip(x: np.ndarray, B: float = 3.0) -> np.ndarray:
-    return x / np.sqrt(1.0 + (x / B) ** 2)
-
-
-def _temporal_squashing_scaler(
-    X_tr: np.ndarray, X_te: np.ndarray, m: int, T: int,
-    max_abs: float = 3.0, q_low: float = 25.0, q_high: float = 75.0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per-feature robust scaling + soft clip applied to train and test."""
-    X_tr, X_te = X_tr.copy(), X_te.copy()
-    for j in range(m):
-        c0, c1 = j * T, j * T + T
-        vals = X_tr[:, c0:c1].ravel()
-        finite = vals[np.isfinite(vals)]
-        if len(finite) == 0:
-            X_tr[:, c0:c1] = 0.0
-            X_te[:, c0:c1] = 0.0
-            continue
-        median = np.median(finite)
-        q_lo = np.percentile(finite, q_low)
-        q_hi = np.percentile(finite, q_high)
-        if q_hi != q_lo:
-            scale = 1.0 / (q_hi - q_lo)
-        else:
-            vmin, vmax = np.min(finite), np.max(finite)
-            if vmax != vmin:
-                scale = 2.0 / (vmax - vmin)
-            else:
-                X_tr[:, c0:c1] = 0.0
-                X_te[:, c0:c1] = 0.0
-                continue
-        X_tr[:, c0:c1] = _soft_clip((X_tr[:, c0:c1] - median) * scale, max_abs)
-        X_te[:, c0:c1] = _soft_clip((X_te[:, c0:c1] - median) * scale, max_abs)
-    return X_tr.astype(np.float32), X_te.astype(np.float32)
-
-
 def _shuffle_features(X_flat: np.ndarray, m: int, T: int, perm: np.ndarray) -> np.ndarray:
     n = X_flat.shape[0]
     return X_flat.reshape(n, m, T)[:, perm, :].reshape(n, m * T)
@@ -220,9 +184,9 @@ def evaluate_ensemble(
     """Multi-iteration ensemble: returns averaged probability matrix or None.
 
     Each iteration applies:
-      - Feature permutation
+      - Channel permutation
       - Class permutation (undone after logits)
-      - Even iterations: squashing scaler
+      - Per-channel normalisation
       - Overlap expansion (if use_overlap) or group-pad (if fpg8 model)
     """
     rng = np.random.RandomState(seed)
@@ -237,9 +201,6 @@ def evaluate_ensemble(
 
             class_perm = rng.permutation(n_classes)
             y_tr_p = class_perm[y_train]
-
-            if it % 2 == 1:
-                X_tr_p, X_te_p = _temporal_squashing_scaler(X_tr_p, X_te_p, m, T)
 
             X_tr_3d = X_tr_p.reshape(-1, m, T)
             X_te_3d = X_te_p.reshape(-1, m, T)
