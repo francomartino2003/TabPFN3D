@@ -13,8 +13,8 @@ deserialize_batch()
 
 evaluate_ensemble()
     Multi-iteration ensemble inference for final evaluation:
-    applies feature shuffle, temporal squashing, and optional global pooling
-    before calling the model.  Returns averaged probability matrix.
+    applies feature shuffle and temporal squashing before calling the model.
+    Returns averaged probability matrix.
 """
 
 from __future__ import annotations
@@ -196,34 +196,11 @@ def _temporal_squashing_scaler(
     return X_tr.astype(np.float32), X_te.astype(np.float32)
 
 
-def _global_pool(
-    X_flat: np.ndarray, m: int, T: int, K: int = 16, S: int = 8,
-) -> Optional[tuple[np.ndarray, int, int]]:
-    """Sliding-window global pooling (mean+max+min): (n,m*T) → (n,3m*T_new).
-
-    Returns (X_out, m_new, T_new) or None if T < K.
-    """
-    if T < K:
-        return None
-    from numpy.lib.stride_tricks import sliding_window_view
-
-    n = X_flat.shape[0]
-    X_3d = X_flat.reshape(n, m, T)
-    windows = sliding_window_view(X_3d, K, axis=2)[:, :, ::S, :]  # (n, m, T_new, K)
-    T_new = windows.shape[2]
-    mean_ch = windows.mean(axis=3).astype(np.float32)
-    max_ch = windows.max(axis=3).astype(np.float32)
-    min_ch = windows.min(axis=3).astype(np.float32)
-    X_out = np.concatenate([mean_ch, max_ch, min_ch], axis=1).reshape(n, 3 * m * T_new)
-    return X_out, 3 * m, T_new
-
-
 def _shuffle_features(X_flat: np.ndarray, m: int, T: int, perm: np.ndarray) -> np.ndarray:
     n = X_flat.shape[0]
     return X_flat.reshape(n, m, T)[:, perm, :].reshape(n, m * T)
 
 
-MAX_M_TIMES_T = 2000   # same as PFN filter
 GROUP_SIZE = 8         # non-overlap group size for fpg8 checkpoints
 
 
@@ -239,7 +216,6 @@ def evaluate_ensemble(
     n_iters: int = 1,
     seed: int = 42,
     use_overlap: bool = True,
-    use_global_pool: bool = True,
 ) -> Optional[np.ndarray]:
     """Multi-iteration ensemble: returns averaged probability matrix or None.
 
@@ -247,7 +223,6 @@ def evaluate_ensemble(
       - Feature permutation
       - Class permutation (undone after logits)
       - Even iterations: squashing scaler
-      - Every other pair of iterations: global pooling (16/8) if use_global_pool
       - Overlap expansion (if use_overlap) or group-pad (if fpg8 model)
     """
     rng = np.random.RandomState(seed)
@@ -266,33 +241,21 @@ def evaluate_ensemble(
             if it % 2 == 1:
                 X_tr_p, X_te_p = _temporal_squashing_scaler(X_tr_p, X_te_p, m, T)
 
-            m_eff, T_eff = m, T
-            if use_global_pool and ((it // 2) % 2 == 1) and T >= 16:
-                pooled = _global_pool(X_tr_p, m, T)
-                if pooled is not None:
-                    X_tr_pooled, m_new, T_new = pooled
-                    if m_new * T_new <= MAX_M_TIMES_T:
-                        pooled_te = _global_pool(X_te_p, m, T)
-                        if pooled_te is not None:
-                            X_tr_p = X_tr_pooled
-                            X_te_p = pooled_te[0]
-                            m_eff, T_eff = m_new, T_new
-
-            X_tr_3d = X_tr_p.reshape(-1, m_eff, T_eff)
-            X_te_3d = X_te_p.reshape(-1, m_eff, T_eff)
+            X_tr_3d = X_tr_p.reshape(-1, m, T)
+            X_te_3d = X_te_p.reshape(-1, m, T)
             X_tr_3d_n, X_te_3d_n = per_channel_normalize(X_tr_3d, X_te_3d)
-            X_tr_p = X_tr_3d_n.reshape(-1, m_eff * T_eff)
-            X_te_p = X_te_3d_n.reshape(-1, m_eff * T_eff)
+            X_tr_p = X_tr_3d_n.reshape(-1, m * T)
+            X_te_p = X_te_3d_n.reshape(-1, m * T)
 
             if use_overlap:
-                X_tr_pad, _, n_groups = pad_and_expand_overlap(X_tr_p, m_eff, T_eff)
-                X_te_pad, _, _ = pad_and_expand_overlap(X_te_p, m_eff, T_eff)
+                X_tr_pad, _, n_groups = pad_and_expand_overlap(X_tr_p, m, T)
+                X_te_pad, _, _ = pad_and_expand_overlap(X_te_p, m, T)
                 T_exp = n_groups * WINDOW
-                set_temporal_info(model, m_eff, T_exp, group_size=WINDOW)
+                set_temporal_info(model, m, T_exp, group_size=WINDOW)
             else:
-                X_tr_pad, T_padded = pad_to_group(X_tr_p, m_eff, T_eff, group_size=GROUP_SIZE)
-                X_te_pad, _ = pad_to_group(X_te_p, m_eff, T_eff, group_size=GROUP_SIZE)
-                set_temporal_info(model, m_eff, T_padded, group_size=GROUP_SIZE)
+                X_tr_pad, T_padded = pad_to_group(X_tr_p, m, T, group_size=GROUP_SIZE)
+                X_te_pad, _ = pad_to_group(X_te_p, m, T, group_size=GROUP_SIZE)
+                set_temporal_info(model, m, T_padded, group_size=GROUP_SIZE)
 
             if hasattr(model, "global_conv_encoder"):
                 set_global_input(model, X_tr_3d_n, X_te_3d_n)

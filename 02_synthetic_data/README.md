@@ -36,6 +36,90 @@ is broad enough to cover the real UCR/UEA benchmark datasets.
 
 ---
 
+## End-to-end pipeline overview
+
+The generation of one synthetic dataset proceeds in **four stages**:
+
+### Stage 1 — Dataset-level hyperparameters
+
+Before anything is built, the generator samples global parameters that define
+the shape and behaviour of the entire dataset:
+
+| Parameter | Distribution | Constraint |
+|-----------|-------------|------------|
+| `m` (channels / features) | DAG-determined; 80% univariate, otherwise log-uniform ∈ [1, 125] | — |
+| `T` (series length) | Log-uniform ∈ [6, 2100] | `m × T ≤ 2000` (PFN filter) |
+| `n` (observations) | Log-uniform ∈ [30, 1400] | Biased toward small, matching real data |
+| Conv padding | Bernoulli(0.5) per dataset | Causal (left) or centered — shared by all series nodes |
+| Variable length | Bernoulli(0.05) | If active, per-observation `T_i < T` drawn from half-normal |
+
+### Stage 2 — DAG construction and operation assignment
+
+A random directed acyclic graph is built (see `dag_structure.py`), defining
+the causal structure of the dataset.  Each node is assigned a **type** and a
+**role**:
+
+- **Series nodes** carry a temporal signal `(n, T)` — these become the
+  observable feature channels.
+- **Tabular nodes** carry a scalar per observation — these act as latent
+  mediators between series and discrete nodes.
+- **Discrete nodes** carry a class index — one is designated as the **target**
+  (class label).
+
+Each node also receives its random operation parameters: GP kernel composition
+for series roots, Conv1D weights/dilation/bias for internal series nodes,
+linear weights for tabular nodes, nearest-prototype assignment for discrete
+nodes.  All of these are fixed per dataset (i.e. shared across observations).
+
+### Stage 3 — Observation propagation
+
+For each of the `n` observations, the DAG is propagated from roots to leaves:
+
+1. **Root nodes** generate independent random values:
+   - *Series roots*: sample one function from `GP(0, K)` via Cholesky.
+   - *Tabular roots*: sample a scalar from `N(0, σ²)` or `U(−a, a)`.
+   - *Discrete roots*: sample a class index uniformly → map to scalar prototype.
+2. **Internal nodes** transform their parents' outputs:
+   - *Series nodes*: gather parent channels → `Conv1D(c_in, 1, K, D)` + bias + activation + noise → `(n, T)`.
+   - *Tabular nodes*: flatten parents → weighted sum + activation + noise → scalar.
+   - *Discrete nodes*: flatten parents → nearest-prototype classification → class index.
+3. The **target node** (a discrete node) produces the class label `y`.
+4. The **feature nodes** (series nodes) are stacked into `X` of shape `(n, m, T)`.
+
+### Stage 4 — Dataset extraction and post-processing
+
+The raw `(n, m, T)` array and labels undergo:
+
+1. **Predictive truncation** (p=0.10): clip `X` to `T_obs < T` so that labels
+   may depend on unobserved future timesteps — harder, predictive tasks.
+2. **Kumaraswamy warping** (p=0.10): non-linear monotone warp on one channel.
+3. **Class filtering**: drop classes with < 8 observations; discard if < 2 remain.
+4. **Subsample** to `n_samples` if excess observations were propagated.
+5. **Train / test split**: 80% / 20%, stratified per class.
+
+Output: `{X_train, X_test, y_train, y_test, n_classes, n_features, T}`.
+
+---
+
+## Covering real-world data characteristics
+
+The synthetic prior is designed so that the model encounters — during
+training — the same edge cases it will face on real UCR/UEA benchmarks:
+
+| Real-world characteristic | How the prior covers it |
+|--------------------------|------------------------|
+| **Variable-length series** | 5% of datasets sample per-observation `T_i < T`; shorter series are zero-padded or edge-replicated to length `T`, producing trailing zeros or repeated values |
+| **Missing values (NaN)** | The augmentation pipeline (§ below) injects per-channel NaN at random positions with low probability; the model learns to rely on the `NanHandlingEncoderStep` indicators |
+| **Diverse temporal patterns** | GP roots (KernelSynth) produce trends (Linear kernel), smooth oscillations (Periodic), local bumps (RBF), and arbitrary compositions via `+` / `×` |
+| **Multi-scale structure** | Conv1D propagation with exponentially-distributed dilation creates receptive fields from local (dilation=1) to near-global |
+| **Diverse amplitude distributions** | Kumaraswamy warping + augmentation value transforms (log, exp, squash, KDI, Kumaraswamy CDF) |
+| **Few classes, small samples** | Log-uniform sampling of `n` and `k` biases toward small datasets matching the UCR/UEA distribution |
+| **Predictive / partial observation** | Predictive truncation (10%) hides the end of the series after labels are assigned |
+| **Channel ordering invariance** | Augmentation randomly permutes channels (see below), training the model to be invariant to feature order |
+| **Class label invariance** | Augmentation randomly permutes class labels, preventing class-index bias |
+
+---
+
 ## Module overview
 
 | File | Role |
@@ -83,25 +167,12 @@ The three node types:
 
 ---
 
-## Generation pipeline (`generator.py`)
+## Detailed node operations (`generator.py`)
 
 A `DatasetGenerator` is seeded once and produces one dataset of shape
 `(n, m, T)`.  All structural choices (DAG, kernel parameters, conv weights,
 activations, …) are fixed at construction time; only the random root values
 vary per observation.
-
-### Dataset-level parameters
-
-Sampled once per dataset, before any observations are propagated:
-
-| Parameter | Distribution | Range | Notes |
-|-----------|-------------|-------|-------|
-| `m` (channels) | DAG-determined; log-uniform if multivariate | [1, 125] | 80 % univariate |
-| `T` (length) | Log-uniform | [6, 2100] | Capped so `m × T ≤ 2000` (PFN filter) |
-| `n` (observations) | Log-uniform | [30, 1400] | Biased toward small — matches real data |
-
-The PFN filter constraint `m × T ≤ 2000` is enforced at sampling time by
-deriving `T_max(m) = min(2100, ⌊2000 / m⌋)` before drawing `T`.
 
 ### Root nodes
 
@@ -161,24 +232,10 @@ nearest-prototype assignment, mapping the result to a scalar.
 
 ### Dataset extraction
 
-After propagation, the raw array `(n, m, T)` undergoes:
-
-- **Predictive truncation** (p = 0.10): the observed window is shortened by a
-  random fraction `[0.05, 0.50]` of `T`, so that some label information depends
-  on unobserved future timesteps — creating harder, predictive tasks.
-- **Kumaraswamy warping** (p = 0.10): a non-linear monotone warp is applied to
-  one random channel to create asymmetric amplitude distributions.
-- **Class filtering**: classes with fewer than 8 observations are dropped;
-  datasets with fewer than 2 remaining classes are discarded.
-- **Train / test split**: 80 % / 20 %, stratified per class.
-
-### Variable-length series (p = 0.05)
-
-With probability 0.05, per-observation lengths `T_i < T` are drawn from a
-half-normal distribution.  Series are zero-padded (or edge-replicated) to
-length `T` after the root GP sample, so all downstream Conv1D operations
-see consistent arrays.  This produces NaN-free variable-length data at the
-dataset level.
+After propagation, the raw `(n, m, T)` array undergoes predictive truncation
+(10%), Kumaraswamy warping (10%), class filtering (min 8 per class), and an
+80/20 stratified train/test split — see **Stage 4** in the pipeline overview
+above for full details.
 
 ---
 
