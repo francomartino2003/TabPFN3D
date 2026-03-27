@@ -2,14 +2,17 @@
 """
 Benchmark TabPFN on UCR and UEA datasets that pass the PFN filter.
 
-Two variants evaluated, each run N_RUNS times (different random_state seeds)
-and averaged:
+Three variants, each run N_RUNS times (different random seeds) and averaged:
 
-  tabpfn_1   — TabPFN with n_estimators=1  (single forward pass)
-  tabpfn_8   — TabPFN with n_estimators=8  (8 built-in ensemble members)
-
-Both use TabPFN's default preprocessing (SVD, fingerprint, feature subsampling,
-squashing scaler, feature/class shifts) with no modifications.
+  e1           — TabPFN, n_estimators=1  (standard sklearn pipeline)
+  e8           — TabPFN, n_estimators=8  (standard sklearn pipeline)
+  e8_ours_inf  — TabPFN pretrained model (no finetuning) + OUR inference pipeline:
+                   • per-channel normalisation (not per-position)
+                   • 8 iterations: channel permutation + class permutation
+                   • odd iterations: temporal squashing scaler (no SVD)
+                   • fit_from_preprocessed — no feature subsampling, no fingerprint
+                   • temperature = 0.9
+                 Isolates the effect of our inference strategy from finetuning.
 
 Results are saved to 01_real_data/benchmark_results/{ucr,uea}_benchmark_tabpfn.csv
 and loaded by 04_evaluation/final_evaluation.py.
@@ -53,6 +56,7 @@ OUT_DIR = HERE / "benchmark_results"
 N_RUNS_DEFAULT = 30
 SUBSAMPLE_N = 1_000
 SUBSAMPLE_SEED = 0
+SOFTMAX_TEMP = 0.9   # matches TabPFN default and our inference.py
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -89,7 +93,8 @@ def _compute_metrics(y_test, proba, n_classes):
 def load_and_prepare(name: str, collection: str, subsample_train: bool):
     """Load train/test from npz, optionally subsample train, flatten to 2D.
 
-    Returns (X_train, y_train, X_test, y_test, n_classes) or None.
+    Returns (X_train, y_train, X_test, y_test, n_classes, m, T) or None.
+    m = number of channels, T = series length (kept for e8_ours_inf).
     """
     data_dir = DATA_UCR if collection == "UCR" else DATA_UEA
     tr_path = data_dir / f"{name}_train.npz"
@@ -112,7 +117,12 @@ def load_and_prepare(name: str, collection: str, subsample_train: bool):
         idx.sort()
         X_tr, y_tr = X_tr[idx], y_tr[idx]
 
-    n_tr, n_te = X_tr.shape[0], X_te.shape[0]
+    # Record m and T before flattening (needed for per-channel normalisation)
+    n_tr = X_tr.shape[0]
+    m    = X_tr.shape[1] if X_tr.ndim == 3 else 1
+    T    = X_tr.shape[2] if X_tr.ndim == 3 else X_tr.shape[1]
+    n_te = X_te.shape[0]
+
     X_tr = X_tr.reshape(n_tr, -1)
     X_te = X_te.reshape(n_te, -1)
 
@@ -135,7 +145,7 @@ def load_and_prepare(name: str, collection: str, subsample_train: bool):
         y_te = np.array([label_to_idx[v] for v in y_te], dtype=np.int64)
 
     n_classes = int(len(np.unique(np.concatenate([y_tr, y_te]))))
-    return X_tr, y_tr, X_te, y_te, n_classes
+    return X_tr, y_tr, X_te, y_te, n_classes, m, T
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -171,44 +181,157 @@ def _run_tabpfn(X_tr, y_tr, X_te, y_te, n_classes, n_estimators, seed, device):
         return float("nan"), float("nan")
 
 
-def _run_tabpfn_no_svd(X_tr, y_tr, X_te, y_te, n_classes, seed, device):
-    """TabPFN 1-ensemble with preprocessor='none' (no SVD, no squashing scaler).
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers for e8_ours_inf (our inference pipeline on pretrained TabPFN)
+# ─────────────────────────────────────────────────────────────────────────────
 
-    With n_estimators=1 the standard API always picks the first preset config
-    (squashing_scaler + SVD).  We override PREPROCESS_TRANSFORMS via the
-    inference_config dict so only the 'none' preprocessor is used.
-    Features are still subsampled to 500 if n_features > 500 (TabPFN default).
+def _pcn(X_tr: np.ndarray, X_te: np.ndarray, m: int, T: int):
+    """Per-channel normalisation: mean=0, std=1 using train-only statistics."""
+    n_tr, n_te = X_tr.shape[0], X_te.shape[0]
+    X_tr3 = X_tr.reshape(n_tr, m, T).copy().astype(np.float64)
+    X_te3 = X_te.reshape(n_te, m, T).copy().astype(np.float64)
+    for j in range(m):
+        vals = X_tr3[:, j, :].ravel()
+        finite = vals[np.isfinite(vals)]
+        if len(finite) == 0:
+            continue
+        mu  = finite.mean()
+        std = finite.std()
+        if std < 1e-8:
+            std = 1.0
+        X_tr3[:, j, :] = (X_tr3[:, j, :] - mu) / std
+        X_te3[:, j, :] = (X_te3[:, j, :] - mu) / std
+    return (X_tr3.reshape(n_tr, m * T).astype(np.float32),
+            X_te3.reshape(n_te, m * T).astype(np.float32))
+
+
+def _squash(X_tr: np.ndarray, X_te: np.ndarray, m: int, T: int):
+    """Per-channel robust scaling (median/IQR) + soft clip at ±3."""
+    X_tr, X_te = X_tr.copy(), X_te.copy()
+    for j in range(m):
+        c0, c1 = j * T, j * T + T
+        vals = X_tr[:, c0:c1].ravel()
+        finite = vals[np.isfinite(vals)]
+        if len(finite) == 0:
+            X_tr[:, c0:c1] = 0.0
+            X_te[:, c0:c1] = 0.0
+            continue
+        median = np.median(finite)
+        q_lo   = np.percentile(finite, 25)
+        q_hi   = np.percentile(finite, 75)
+        if q_hi != q_lo:
+            scale = 1.0 / (q_hi - q_lo)
+        else:
+            vmin, vmax = np.min(finite), np.max(finite)
+            scale = (2.0 / (vmax - vmin)) if vmax != vmin else 0.0
+            if scale == 0.0:
+                X_tr[:, c0:c1] = 0.0
+                X_te[:, c0:c1] = 0.0
+                continue
+        for arr in (X_tr, X_te):
+            z = (arr[:, c0:c1] - median) * scale
+            arr[:, c0:c1] = z / np.sqrt(1.0 + (z / 3.0) ** 2)
+    return X_tr.astype(np.float32), X_te.astype(np.float32)
+
+
+def _run_tabpfn_our_inference(X_tr, y_tr, X_te, y_te,
+                              n_classes, m, T, seed, device, n_iters=8):
+    """Standard pretrained TabPFN + our inference pipeline.
+
+    Uses the pretrained model weights unchanged (features_per_group=3,
+    original encoder) but applies our diversity strategy:
+      - Per-channel normalisation (not TabPFN's per-position z-score)
+      - Channel permutation + class permutation per iteration
+      - Odd iterations: temporal squashing scaler (no SVD)
+      - fit_from_preprocessed: bypasses SVD, subsampling, fingerprint
+      - temperature = 0.9
+
+    This ablation isolates how much of our improvement comes from the
+    inference pipeline vs. the finetuned weights.
     """
-    from tabpfn.preprocessing.configs import PreprocessorConfig as PC
+    from tabpfn.preprocessing.configs import ClassifierEnsembleConfig, PreprocessorConfig
 
-    none_only = [PC(name="none", categorical_name="numeric", max_features_per_estimator=500)]
+    # Build the standard pretrained model once (not our overlap model)
+    clf = TabPFNClassifier(
+        device=device,
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        fit_mode="batched",
+        differentiable_input=False,
+        inference_config={"FEATURE_SHIFT_METHOD": None},
+    )
+    clf._initialize_model_variables()
 
-    def _try(dev):
-        clf = TabPFNClassifier(
-            device=dev,
-            n_estimators=1,
-            random_state=seed,
-            ignore_pretraining_limits=True,
-            inference_config={"PREPROCESS_TRANSFORMS": none_only},
-        )
-        clf.fit(X_tr, y_tr)
-        with torch.no_grad():
-            proba = clf.predict_proba(X_te)
-        del clf
-        return _compute_metrics(y_te, proba, n_classes)
+    dummy_cfg = ClassifierEnsembleConfig(
+        preprocess_config=PreprocessorConfig("none", categorical_name="numeric"),
+        feature_shift_count=0,
+        class_permutation=None,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        subsample_ix=None,
+        _model_index=0,
+    )
 
-    try:
-        return _try(device)
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower() and device != "cpu":
-            _free_memory()
-            try:
-                return _try("cpu")
-            except Exception:
-                return float("nan"), float("nan")
+    rng = np.random.RandomState(seed)
+    proba_sum = np.zeros((X_te.shape[0], n_classes), dtype=np.float64)
+    n_valid   = 0
+
+    for it in range(n_iters):
+        try:
+            feat_perm = rng.permutation(m)
+            n_tr_s    = X_tr.shape[0]
+            X_tr_it   = X_tr.reshape(n_tr_s, m, T)[:, feat_perm, :].reshape(n_tr_s, m * T)
+            X_te_it   = X_te.reshape(X_te.shape[0], m, T)[:, feat_perm, :].reshape(X_te.shape[0], m * T)
+
+            class_perm = rng.permutation(n_classes)
+            y_tr_it    = class_perm[y_tr]
+
+            if it % 2 == 1:
+                X_tr_it, X_te_it = _squash(X_tr_it, X_te_it, m, T)
+
+            X_tr_it, X_te_it = _pcn(X_tr_it, X_te_it, m, T)
+
+            X_tr_t = torch.as_tensor(X_tr_it, dtype=torch.float32, device=device).unsqueeze(0)
+            y_tr_t = torch.as_tensor(y_tr_it.astype(np.float32), device=device).unsqueeze(0)
+            X_te_t = torch.as_tensor(X_te_it, dtype=torch.float32, device=device).unsqueeze(0)
+
+            clf.n_classes_ = n_classes
+            clf.fit_from_preprocessed(
+                [X_tr_t], [y_tr_t],
+                cat_ix=[[[]]],
+                configs=[[dummy_cfg]],
+            )
+            with torch.no_grad():
+                logits = clf.forward([X_te_t], return_raw_logits=True)
+
+            if logits.ndim == 2:
+                logits_out = logits
+            elif logits.ndim == 3:
+                logits_out = logits.squeeze(1)
+            elif logits.ndim == 4:
+                logits_out = logits.mean(dim=(1, 2))
+            else:
+                continue
+
+            logits_out = logits_out[:, :n_classes]
+            logits_out = logits_out[:, class_perm]     # undo class permutation
+            proba = torch.softmax(logits_out / SOFTMAX_TEMP, dim=-1).cpu().numpy()
+            proba_sum += proba
+            n_valid   += 1
+
+            del X_tr_t, y_tr_t, X_te_t, logits, logits_out, proba
+
+        except Exception:
+            continue
+
+    del clf
+    _free_memory()
+
+    if n_valid == 0:
         return float("nan"), float("nan")
-    except Exception:
-        return float("nan"), float("nan")
+
+    return _compute_metrics(y_te, proba_sum / n_valid, n_classes)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -219,47 +342,46 @@ def benchmark_dataset(name, collection, subsample_train, n_runs, device):
     data = load_and_prepare(name, collection, subsample_train)
     if data is None:
         return None
-    X_tr, y_tr, X_te, y_te, n_classes = data
+    X_tr, y_tr, X_te, y_te, n_classes, m, T = data
 
     acc1, auc1 = [], []
     acc8, auc8 = [], []
-    acc1n, auc1n = [], []   # e1_nosvd
+    acc8oi, auc8oi = [], []  # e8_ours_inf
 
     for run in range(n_runs):
         seed = 42 + run
 
         _free_memory()
         a, u = _run_tabpfn(X_tr, y_tr, X_te, y_te, n_classes, 1, seed, device)
-        acc1.append(a)
-        auc1.append(u)
+        acc1.append(a); auc1.append(u)
 
         _free_memory()
         a, u = _run_tabpfn(X_tr, y_tr, X_te, y_te, n_classes, 8, seed, device)
-        acc8.append(a)
-        auc8.append(u)
+        acc8.append(a); auc8.append(u)
 
         _free_memory()
-        a, u = _run_tabpfn_no_svd(X_tr, y_tr, X_te, y_te, n_classes, seed, device)
-        acc1n.append(a)
-        auc1n.append(u)
+        a, u = _run_tabpfn_our_inference(
+            X_tr, y_tr, X_te, y_te, n_classes, m, T, seed, device
+        )
+        acc8oi.append(a); auc8oi.append(u)
 
     _free_memory()
     return {
-        "dataset":            name,
-        "collection":         collection,
-        "e1_acc_mean":        float(np.nanmean(acc1)),
-        "e1_acc_std":         float(np.nanstd(acc1)),
-        "e1_auc_mean":        float(np.nanmean(auc1)),
-        "e1_auc_std":         float(np.nanstd(auc1)),
-        "e8_acc_mean":        float(np.nanmean(acc8)),
-        "e8_acc_std":         float(np.nanstd(acc8)),
-        "e8_auc_mean":        float(np.nanmean(auc8)),
-        "e8_auc_std":         float(np.nanstd(auc8)),
-        "e1_nosvd_acc_mean":  float(np.nanmean(acc1n)),
-        "e1_nosvd_acc_std":   float(np.nanstd(acc1n)),
-        "e1_nosvd_auc_mean":  float(np.nanmean(auc1n)),
-        "e1_nosvd_auc_std":   float(np.nanstd(auc1n)),
-        "n_runs":             n_runs,
+        "dataset":                name,
+        "collection":             collection,
+        "e1_acc_mean":            float(np.nanmean(acc1)),
+        "e1_acc_std":             float(np.nanstd(acc1)),
+        "e1_auc_mean":            float(np.nanmean(auc1)),
+        "e1_auc_std":             float(np.nanstd(auc1)),
+        "e8_acc_mean":            float(np.nanmean(acc8)),
+        "e8_acc_std":             float(np.nanstd(acc8)),
+        "e8_auc_mean":            float(np.nanmean(auc8)),
+        "e8_auc_std":             float(np.nanstd(auc8)),
+        "e8_ours_inf_acc_mean":   float(np.nanmean(acc8oi)),
+        "e8_ours_inf_acc_std":    float(np.nanstd(acc8oi)),
+        "e8_ours_inf_auc_mean":   float(np.nanmean(auc8oi)),
+        "e8_ours_inf_auc_std":    float(np.nanstd(auc8oi)),
+        "n_runs":                 n_runs,
     }
 
 
@@ -319,7 +441,7 @@ def main():
     n_total = len(ucr_rows) + len(uea_rows)
     n_runs = args.n_runs
     print(f"Datasets: {len(ucr_rows)} UCR + {len(uea_rows)} UEA  ({n_total} total)")
-    print(f"Runs per dataset: {n_runs}  (e1 + e8 + e1_nosvd each run)")
+    print(f"Runs per dataset: {n_runs}  (e1 + e8 + e8_ours_inf each run)")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -353,8 +475,9 @@ def main():
                               index=False)
                 tqdm.write(
                     f"  {name}: "
-                    f"1-ens acc={r['e1_acc_mean']:.4f} auc={r['e1_auc_mean']:.4f}  "
-                    f"8-ens acc={r['e8_acc_mean']:.4f} auc={r['e8_auc_mean']:.4f}"
+                    f"e1 acc={r['e1_acc_mean']:.4f}  "
+                    f"e8 acc={r['e8_acc_mean']:.4f}  "
+                    f"e8_ours_inf acc={r['e8_ours_inf_acc_mean']:.4f}"
                 )
             else:
                 tqdm.write(f"  {name}: SKIP (load failed)")
