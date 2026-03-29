@@ -202,11 +202,19 @@ def run_vanilla(clf, ds):
             elif logits.ndim == 3: lo = logits.squeeze(1)
             elif logits.ndim == 4: lo = logits.mean(dim=(1, 2))
             else: continue
+            if lo.ndim != 2 or lo.shape[1] < nc:
+                continue
             lo = lo[:, :nc][:, cp]
-            psum += torch.softmax(lo / SOFTMAX_TEMPERATURE, dim=-1).cpu().numpy()
+            psoft = torch.softmax(lo / SOFTMAX_TEMPERATURE, dim=-1).cpu().numpy()
+            if not np.isfinite(psoft).all():
+                continue  # skip NaN/inf logits (numerical issues)
+            psum += psoft
             ok += 1
-            del X_tr_t, y_tr_t, X_te_t, logits, lo
+            del X_tr_t, y_tr_t, X_te_t, logits, lo, psoft
         except Exception as e:
+            if "OutOfMemory" in type(e).__name__ or "out of memory" in str(e).lower():
+                if vdev == "cuda":
+                    torch.cuda.empty_cache()
             print(f"      [vn it{it}] {type(e).__name__}: {str(e)[:60]}")
     return _metrics(ds["y_test"], psum / ok, nc) if ok > 0 else (float("nan"), float("nan"))
 
@@ -344,6 +352,8 @@ def main():
         vn_results[name] = (acc, auc)
         print(f"  [{i+1:3d}/{len(datasets)}] {name:<35s} [{pool:<5s}] "
               f"acc={acc:.4f} auc={auc:.4f}  ({time.time()-t1:.0f}s)")
+        if vn_dev == "cuda":
+            torch.cuda.empty_cache()
     print(f"  Phase 2 done: {time.time()-t0:.0f}s  (device={vn_dev})")
 
     del clf; gc.collect()
