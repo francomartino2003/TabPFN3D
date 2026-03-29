@@ -179,6 +179,7 @@ _DUMMY_CFG = ClassifierEnsembleConfig(
 )
 
 def run_vanilla(clf, ds):
+    vdev = clf.device if hasattr(clf, "device") else "cpu"
     X_tr, X_te = ds["X_train"], ds["X_test"]
     y_tr, nc, m, T = ds["y_train"], ds["n_classes"], ds["m"], ds["T"]
     rng  = np.random.RandomState(SEED)
@@ -188,9 +189,9 @@ def run_vanilla(clf, ds):
         try:
             Xtrp, Xtep, _, _, ytrp, cp, me, Te = \
                 _iter_preprocess(X_tr, X_te, y_tr, nc, m, T, rng, it)
-            X_tr_t = torch.as_tensor(Xtrp, dtype=torch.float32, device="cpu").unsqueeze(0)
-            y_tr_t = torch.as_tensor(ytrp.astype(np.float32), device="cpu").unsqueeze(0)
-            X_te_t = torch.as_tensor(Xtep, dtype=torch.float32, device="cpu").unsqueeze(0)
+            X_tr_t = torch.as_tensor(Xtrp, dtype=torch.float32, device=vdev).unsqueeze(0)
+            y_tr_t = torch.as_tensor(ytrp.astype(np.float32), device=vdev).unsqueeze(0)
+            X_te_t = torch.as_tensor(Xtep, dtype=torch.float32, device=vdev).unsqueeze(0)
             clf.n_classes_ = nc
             clf.fit_from_preprocessed(
                 [X_tr_t], [y_tr_t], cat_ix=[[[]]], configs=[[_DUMMY_CFG]],
@@ -264,7 +265,7 @@ def main():
     dev = ("cuda" if torch.cuda.is_available()
            else "mps" if (hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
            else "cpu")
-    print(f"  Finetuned device: {dev}  |  Vanilla: cpu")
+    print(f"  Finetuned device: {dev}  |  Vanilla: {dev} (cpu fallback on error)")
 
     print("\nLoading datasets...")
     datasets = load_datasets()
@@ -296,18 +297,26 @@ def main():
 
     del ft_model, ckpt
     gc.collect()
-    if dev == "mps":
+    if dev == "cuda":
+        torch.cuda.empty_cache()
+    elif dev == "mps":
         torch.mps.empty_cache()
 
-    # ── Phase 2: Vanilla TabPFN (CPU) ────────────────────────────────────────
-    print(f"\n── Phase 2: Vanilla TabPFN (CPU) ──")
-    clf = TabPFNClassifier(
-        device="cpu", n_estimators=1,
-        ignore_pretraining_limits=True, fit_mode="batched",
-        differentiable_input=False,
-        inference_config={"FEATURE_SHIFT_METHOD": None},
-    )
-    clf._initialize_model_variables()
+    # ── Phase 2: Vanilla TabPFN (GPU → CPU fallback) ─────────────────────────
+    vn_dev = dev  # try same device as finetuned
+    print(f"\n── Phase 2: Vanilla TabPFN (device={vn_dev}) ──")
+
+    def _make_clf(device):
+        c = TabPFNClassifier(
+            device=device, n_estimators=1,
+            ignore_pretraining_limits=True, fit_mode="batched",
+            differentiable_input=False,
+            inference_config={"FEATURE_SHIFT_METHOD": None},
+        )
+        c._initialize_model_variables()
+        return c
+
+    clf = _make_clf(vn_dev)
 
     vn_results = {}
     t0 = time.time()
@@ -315,11 +324,27 @@ def main():
         name = ds["name"]
         pool = ft_results[name][2]
         t1 = time.time()
-        acc, auc = run_vanilla(clf, ds)
+        try:
+            acc, auc = run_vanilla(clf, ds)
+        except Exception as e:
+            if vn_dev != "cpu":
+                print(f"      [vn {name}] {type(e).__name__} on {vn_dev}, retrying on cpu…")
+                del clf; gc.collect()
+                if vn_dev == "cuda": torch.cuda.empty_cache()
+                vn_dev = "cpu"
+                clf = _make_clf(vn_dev)
+                try:
+                    acc, auc = run_vanilla(clf, ds)
+                except Exception as e2:
+                    print(f"      [vn {name}] cpu also failed: {e2}")
+                    acc, auc = float("nan"), float("nan")
+            else:
+                print(f"      [vn {name}] failed: {e}")
+                acc, auc = float("nan"), float("nan")
         vn_results[name] = (acc, auc)
         print(f"  [{i+1:3d}/{len(datasets)}] {name:<35s} [{pool:<5s}] "
               f"acc={acc:.4f} auc={auc:.4f}  ({time.time()-t1:.0f}s)")
-    print(f"  Phase 2 done: {time.time()-t0:.0f}s")
+    print(f"  Phase 2 done: {time.time()-t0:.0f}s  (device={vn_dev})")
 
     del clf; gc.collect()
 
