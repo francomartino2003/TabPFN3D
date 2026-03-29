@@ -160,12 +160,75 @@ def forward_single_dataset(model, clf, device: str, data: Dict) -> Optional[Dict
 # Ensemble inference (final evaluation)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _soft_clip(x: np.ndarray, B: float = 3.0) -> np.ndarray:
+    return x / np.sqrt(1.0 + (x / B) ** 2)
+
+
+def _temporal_squashing_scaler(
+    X_tr: np.ndarray, X_te: np.ndarray, m: int, T: int,
+    max_abs: float = 3.0, q_low: float = 25.0, q_high: float = 75.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-feature robust scaling (IQR) + soft clip applied to train and test.
+
+    Mirrors TabPFN's SquashingScaler but applied per-channel×timestep.
+    Used on odd ensemble iterations to add diversity.
+    """
+    X_tr, X_te = X_tr.copy(), X_te.copy()
+    for j in range(m):
+        c0, c1 = j * T, j * T + T
+        vals = X_tr[:, c0:c1].ravel()
+        finite = vals[np.isfinite(vals)]
+        if len(finite) == 0:
+            X_tr[:, c0:c1] = 0.0
+            X_te[:, c0:c1] = 0.0
+            continue
+        median = np.median(finite)
+        q_lo = np.percentile(finite, q_low)
+        q_hi = np.percentile(finite, q_high)
+        if q_hi != q_lo:
+            scale = 1.0 / (q_hi - q_lo)
+        else:
+            vmin, vmax = np.min(finite), np.max(finite)
+            if vmax != vmin:
+                scale = 2.0 / (vmax - vmin)
+            else:
+                X_tr[:, c0:c1] = 0.0
+                X_te[:, c0:c1] = 0.0
+                continue
+        X_tr[:, c0:c1] = _soft_clip((X_tr[:, c0:c1] - median) * scale, max_abs)
+        X_te[:, c0:c1] = _soft_clip((X_te[:, c0:c1] - median) * scale, max_abs)
+    return X_tr.astype(np.float32), X_te.astype(np.float32)
+
+
 def _shuffle_features(X_flat: np.ndarray, m: int, T: int, perm: np.ndarray) -> np.ndarray:
     n = X_flat.shape[0]
     return X_flat.reshape(n, m, T)[:, perm, :].reshape(n, m * T)
 
 
-GROUP_SIZE = 8         # non-overlap group size for fpg8 checkpoints
+MAX_M_TIMES_T: int = 2000   # hard cap from PFN filter (m*T ≤ 2000)
+GROUP_SIZE = 8              # non-overlap group size for fpg8 checkpoints
+
+
+def _global_pool(
+    X_flat: np.ndarray, m: int, T: int, K: int = 16, S: int = 8
+) -> Optional[tuple]:
+    """Sliding-window pooling: mean/max/min over windows of size K, stride S.
+
+    Returns (X_pooled, m_new, T_new) where m_new = 3*m and T_new = number of windows,
+    or None if T < K.
+    """
+    from numpy.lib.stride_tricks import sliding_window_view
+    if T < K:
+        return None
+    n = X_flat.shape[0]
+    X_3d = X_flat.reshape(n, m, T)
+    windows = sliding_window_view(X_3d, K, axis=2)[:, :, ::S, :]  # (n, m, T_new, K)
+    T_new = windows.shape[2]
+    mean_ch = windows.mean(axis=3).astype(np.float32)
+    max_ch  = windows.max(axis=3).astype(np.float32)
+    min_ch  = windows.min(axis=3).astype(np.float32)
+    X_out = np.concatenate([mean_ch, max_ch, min_ch], axis=1).reshape(n, 3 * m * T_new)
+    return X_out, 3 * m, T_new
 
 
 def evaluate_ensemble(
@@ -180,13 +243,17 @@ def evaluate_ensemble(
     n_iters: int = 1,
     seed: int = 42,
     use_overlap: bool = True,
+    use_global_pool: bool = True,
 ) -> Optional[np.ndarray]:
     """Multi-iteration ensemble: returns averaged probability matrix or None.
 
     Each iteration applies:
       - Channel permutation
       - Class permutation (undone after logits)
-      - Per-channel normalisation
+      - Odd iterations: robust squashing scaler (IQR + soft clip)
+      - Every other pair of iterations (iters 2,3,6,7,...): global sliding-window
+        pooling (mean/max/min) → triples the channel count, shortens T
+      - Per-channel normalisation (on effective m_eff, T_eff after optional pool)
       - Overlap expansion (if use_overlap) or group-pad (if fpg8 model)
     """
     rng = np.random.RandomState(seed)
@@ -202,21 +269,36 @@ def evaluate_ensemble(
             class_perm = rng.permutation(n_classes)
             y_tr_p = class_perm[y_train]
 
-            X_tr_3d = X_tr_p.reshape(-1, m, T)
-            X_te_3d = X_te_p.reshape(-1, m, T)
+            if it % 2 == 1:
+                X_tr_p, X_te_p = _temporal_squashing_scaler(X_tr_p, X_te_p, m, T)
+
+            m_eff, T_eff = m, T
+            if use_global_pool and ((it // 2) % 2 == 1) and T >= 16:
+                pooled = _global_pool(X_tr_p, m, T)
+                if pooled is not None:
+                    X_tr_pooled, m_new, T_new = pooled
+                    if m_new * T_new <= MAX_M_TIMES_T:
+                        pooled_te = _global_pool(X_te_p, m, T)
+                        if pooled_te is not None:
+                            X_tr_p = X_tr_pooled
+                            X_te_p = pooled_te[0]
+                            m_eff, T_eff = m_new, T_new
+
+            X_tr_3d = X_tr_p.reshape(-1, m_eff, T_eff)
+            X_te_3d = X_te_p.reshape(-1, m_eff, T_eff)
             X_tr_3d_n, X_te_3d_n = per_channel_normalize(X_tr_3d, X_te_3d)
-            X_tr_p = X_tr_3d_n.reshape(-1, m * T)
-            X_te_p = X_te_3d_n.reshape(-1, m * T)
+            X_tr_p = X_tr_3d_n.reshape(-1, m_eff * T_eff)
+            X_te_p = X_te_3d_n.reshape(-1, m_eff * T_eff)
 
             if use_overlap:
-                X_tr_pad, _, n_groups = pad_and_expand_overlap(X_tr_p, m, T)
-                X_te_pad, _, _ = pad_and_expand_overlap(X_te_p, m, T)
+                X_tr_pad, _, n_groups = pad_and_expand_overlap(X_tr_p, m_eff, T_eff)
+                X_te_pad, _, _ = pad_and_expand_overlap(X_te_p, m_eff, T_eff)
                 T_exp = n_groups * WINDOW
-                set_temporal_info(model, m, T_exp, group_size=WINDOW)
+                set_temporal_info(model, m_eff, T_exp, group_size=WINDOW)
             else:
-                X_tr_pad, T_padded = pad_to_group(X_tr_p, m, T, group_size=GROUP_SIZE)
-                X_te_pad, _ = pad_to_group(X_te_p, m, T, group_size=GROUP_SIZE)
-                set_temporal_info(model, m, T_padded, group_size=GROUP_SIZE)
+                X_tr_pad, T_padded = pad_to_group(X_tr_p, m_eff, T_eff, group_size=GROUP_SIZE)
+                X_te_pad, _ = pad_to_group(X_te_p, m_eff, T_eff, group_size=GROUP_SIZE)
+                set_temporal_info(model, m_eff, T_padded, group_size=GROUP_SIZE)
 
             if hasattr(model, "global_conv_encoder"):
                 set_global_input(model, X_tr_3d_n, X_te_3d_n)
