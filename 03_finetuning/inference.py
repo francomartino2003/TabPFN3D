@@ -273,7 +273,7 @@ def evaluate_ensemble(
                 X_tr_p, X_te_p = _temporal_squashing_scaler(X_tr_p, X_te_p, m, T)
 
             m_eff, T_eff = m, T
-            if use_global_pool and ((it // 2) % 2 == 1) and T >= 16:
+            if use_global_pool and ((it // 2) % 2 == 1) and T > 96:
                 pooled = _global_pool(X_tr_p, m, T)
                 if pooled is not None:
                     X_tr_pooled, m_new, T_new = pooled
