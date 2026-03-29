@@ -94,13 +94,21 @@ def _pcn(X_tr_3d, X_te_3d):
     return X_tr_3d.astype(np.float32), X_te_3d.astype(np.float32)
 
 
-def _iter_preprocess(X_tr, X_te, y_tr, n_classes, m, T, rng, it):
-    """Original schedule: shuffle, squash odd, pool {2,3,6,7} if T>96, pcn."""
+def _iter_preprocess(X_tr, X_te, y_tr, n_classes, m, T, rng, it, class_shuffle=True):
+    """Original schedule: shuffle, squash odd, pool {2,3,6,7} if T>96, pcn.
+
+    class_shuffle=False: still advances rng by the same amount (for reproducibility)
+    but returns original labels and identity class permutation.
+    """
     fp = rng.permutation(m)
     X_tr_p = _shuffle(X_tr, m, T, fp)
     X_te_p = _shuffle(X_te, m, T, fp)
-    cp = rng.permutation(n_classes)
-    y_tr_p = cp[y_tr]
+    cp = rng.permutation(n_classes)           # always advance rng
+    if class_shuffle:
+        y_tr_p = cp[y_tr]
+    else:
+        y_tr_p = y_tr
+        cp     = np.arange(n_classes)         # identity → no unshuffling needed
 
     if it % 2 == 1:
         X_tr_p, X_te_p = _squash(X_tr_p, X_te_p, m, T)
@@ -127,10 +135,13 @@ def _iter_preprocess(X_tr, X_te, y_tr, n_classes, m, T, rng, it):
 def _metrics(y_true, proba, n_classes):
     acc = float(accuracy_score(y_true, proba.argmax(1)))
     try:
-        auc = (float(roc_auc_score(y_true, proba[:, 1]))
-               if n_classes == 2
-               else float(roc_auc_score(y_true, proba, multi_class="ovr")))
-    except Exception:
+        if n_classes == 2:
+            auc = float(roc_auc_score(y_true, proba[:, 1]))
+        else:
+            auc = float(roc_auc_score(y_true, proba, multi_class="ovr",
+                                      average="macro", labels=np.arange(n_classes)))
+    except Exception as e:
+        print(f"    [auc err nc={n_classes}] {type(e).__name__}: {e}")
         auc = float("nan")
     return acc, auc
 
@@ -187,8 +198,9 @@ def run_vanilla(clf, ds):
     ok   = 0
     for it in range(8):
         try:
-            Xtrp, Xtep, _, _, ytrp, cp, me, Te = \
-                _iter_preprocess(X_tr, X_te, y_tr, nc, m, T, rng, it)
+            Xtrp, Xtep, _, _, ytrp, _, me, Te = \
+                _iter_preprocess(X_tr, X_te, y_tr, nc, m, T, rng, it,
+                                 class_shuffle=False)
             X_tr_t = torch.as_tensor(Xtrp, dtype=torch.float32, device=vdev).unsqueeze(0)
             y_tr_t = torch.as_tensor(ytrp.astype(np.float32), device=vdev).unsqueeze(0)
             X_te_t = torch.as_tensor(Xtep, dtype=torch.float32, device=vdev).unsqueeze(0)
@@ -204,7 +216,7 @@ def run_vanilla(clf, ds):
             else: continue
             if lo.ndim != 2 or lo.shape[1] < nc:
                 continue
-            lo = lo[:, :nc][:, cp]
+            lo = lo[:, :nc]          # no class-permutation unshuffling for vanilla
             psoft = torch.softmax(lo / SOFTMAX_TEMPERATURE, dim=-1).cpu().numpy()
             if not np.isfinite(psoft).all():
                 continue  # skip NaN/inf logits (numerical issues)
